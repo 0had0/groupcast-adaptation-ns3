@@ -7,8 +7,9 @@ NS-3 / NR sidelink groupcast PHY adaptation experiment.
 ```bash
 git clone <this-repo-url> groupcast-adaptation-ns3
 cd groupcast-adaptation-ns3
-./setup.sh
-./build.sh
+./setup.sh          # clone submodules, apply patches, create symlinks
+./build.sh          # configure + build NS-3
+source env.sh       # activate SUMO/NetAnim PATH + Python venv (do this in every shell session)
 ```
 
 ## Repository layout
