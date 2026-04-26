@@ -26,10 +26,12 @@ namespace ns3
 // to the 3GPP TR 37.885 V2V highway baseline).
 struct SlStackParams
 {
-    uint32_t mu{1};      // numerology: 0 = 15 kHz SCS, 1 = 30 kHz, 2 = 60 kHz
-    uint32_t bwPRBs{50}; // subchannel size W in PRBs (pool parameter)
-    uint32_t mcs{14};    // fixed MCS index for NrSlUeMacSchedulerFixedMcs
-    uint32_t seed{1};    // used for random-stream seeding
+    uint32_t mu{1};       // numerology: 0 = 15 kHz SCS, 1 = 30 kHz, 2 = 60 kHz
+    uint32_t bwPRBs{50};  // subchannel size W in PRBs (pool parameter)
+    uint32_t mcs{14};     // fixed MCS index for NrSlUeMacSchedulerFixedMcs
+    uint32_t seed{1};     // used for random-stream seeding
+    uint8_t  maxNumTx{5};    // slMaxTxTransNumPssch (1..32). 1 = no HARQ retx.
+    uint16_t psfchPeriod{0}; // PSFCH period in slots (0=disabled, 1/2/4=enabled).
 };
 
 // Everything callers need after the stack is built.

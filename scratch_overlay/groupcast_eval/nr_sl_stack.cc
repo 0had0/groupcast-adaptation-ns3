@@ -121,6 +121,9 @@ BuildSlStack(const SlStackParams& p, const NodeContainer& nodes)
     poolFactory->SetSlMaxNumPerReserve(3);
     std::list<uint16_t> rriList = {0, 20, 50, 100}; // ms; must cover all flow RRIs
     poolFactory->SetSlResourceReservePeriodList(rriList);
+    // PSFCH: 0 = disabled (no HARQ feedback). 1/2/4 = period in slots.
+    poolFactory->SetSlPsfchPeriod(p.psfchPeriod);
+    poolFactory->SetSlMinTimeGapPsfch(3); // standard 3-slot gap (T_PSFCH_Min)
 
     LteRrcSap::SlResourcePoolNr slPool = poolFactory->CreatePool();
 
@@ -164,9 +167,9 @@ BuildSlStack(const SlStackParams& p, const NodeContainer& nodes)
     LteRrcSap::SlPreconfigGeneralNr slPreGen;
     slPreGen.slTddConfig = tddCfg;
 
-    // slMaxTxTransNumPssch = 5 → up to 4 HARQ retransmissions.
+    // slMaxTxTransNumPssch ∈ [1..32]: 1 disables retx; default 5 = 1 initial + 4 retx.
     LteRrcSap::SlPsschTxParameters psschParams;
-    psschParams.slMaxTxTransNumPssch = 5;
+    psschParams.slMaxTxTransNumPssch = p.maxNumTx;
     LteRrcSap::SlPsschTxConfigList psschTxList;
     psschTxList.slPsschTxParameters[0] = psschParams;
 

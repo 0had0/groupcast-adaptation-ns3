@@ -20,6 +20,7 @@
 
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace ns3
 {
@@ -30,6 +31,45 @@ struct PktCsv
 {
     std::ofstream out;
     bool open{false};
+};
+
+// SQLite logger for SL HARQ feedback (PSFCH ACK/NACK) and HARQ-process
+// timeouts (TBs that exhausted retries without an ACK). Two row-types share
+// one class because they're tiny and connected at the same point.
+class SlHarqFeedbackStats
+{
+  public:
+    void SetDb(SQLiteOutput* db);
+    void SaveFeedback(double timeSec,
+                      uint32_t rxNodeId,
+                      uint16_t rxRnti,
+                      uint16_t txRnti,
+                      uint32_t dstL2Id,
+                      uint8_t harqId,
+                      const std::string& status);
+    void SaveTimeout(double timeSec, uint32_t txNodeId, uint8_t harqId);
+    void EmptyCache();
+
+  private:
+    SQLiteOutput* m_db{nullptr};
+    struct FbRow
+    {
+        double t;
+        uint32_t nodeId;
+        uint16_t rxRnti;
+        uint16_t txRnti;
+        uint32_t dstL2Id;
+        uint8_t harqId;
+        std::string status;
+    };
+    struct ToRow
+    {
+        double t;
+        uint32_t nodeId;
+        uint8_t harqId;
+    };
+    std::vector<FbRow> m_fbCache;
+    std::vector<ToRow> m_toCache;
 };
 
 // All long-lived trace objects. Lives in main() so it outlasts Simulator::Run.
@@ -58,6 +98,9 @@ struct KpiHooks
 
     // -- Application-layer TX/RX stats (packet seq + timestamp) -------------
     UeToUePktTxRxOutputStats pktTxRx;
+
+    // -- SL HARQ feedback (PSFCH ACK/NACK) + HARQ process timeouts ----------
+    SlHarqFeedbackStats slHarq;
 
     // -- Optional per-packet CSV (human-readable supplement to the DB) -------
     PktCsv pktCsv;

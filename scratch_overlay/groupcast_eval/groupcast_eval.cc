@@ -50,6 +50,8 @@ main(int argc, char* argv[])
     std::string outputDir = "./";
     std::string simTag;
     bool harqEnabled = true;
+    uint32_t maxNumTx = 5;
+    uint32_t psfchPeriod = 0;
     std::string flowsSpec;
 
     CommandLine cmd(__FILE__);
@@ -69,12 +71,25 @@ main(int argc, char* argv[])
     cmd.AddValue("outputDir",     "Directory for KPI SQLite DB",                    outputDir);
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",              simTag);
     cmd.AddValue("harq",          "Enable HARQ globally (per-flow harq=... overrides)", harqEnabled);
+    cmd.AddValue("maxNumTx",      "Max PSSCH transmissions per TB (1..32; 1=no retx)", maxNumTx);
+    cmd.AddValue("psfchPeriod",   "PSFCH period in slots (0=off, 1/2/4=on); HARQ feedback only flows when >0", psfchPeriod);
     cmd.AddValue("flows",
                  "Per-flow spec: comma-separated flows, each `;`-separated "
                  "key=value (label,port,prio,rri_ms,pdb_ms,dynamic,rate_kbps,"
                  "harq,enabled). Empty => 3-flow default.",
                  flowsSpec);
     cmd.Parse(argc, argv);
+
+    if (maxNumTx < 1 || maxNumTx > 32)
+    {
+        std::cerr << "groupcast_eval: --maxNumTx must be in [1, 32]" << std::endl;
+        return 1;
+    }
+    if (psfchPeriod != 0 && psfchPeriod != 1 && psfchPeriod != 2 && psfchPeriod != 4)
+    {
+        std::cerr << "groupcast_eval: --psfchPeriod must be 0, 1, 2, or 4" << std::endl;
+        return 1;
+    }
 
     std::vector<FlowDef> flowDefs;
     try
@@ -118,6 +133,8 @@ main(int argc, char* argv[])
     stackParams.bwPRBs = bwPRBs;
     stackParams.mcs = mcs;
     stackParams.seed = seed;
+    stackParams.maxNumTx = static_cast<uint8_t>(maxNumTx);
+    stackParams.psfchPeriod = static_cast<uint16_t>(psfchPeriod);
 
     SlStackCtx stack = BuildSlStack(stackParams, ueNodes);
 
@@ -171,10 +188,10 @@ main(int argc, char* argv[])
         std::ofstream r(outRunCsv);
         if (r.is_open())
         {
-            r << "runId,seed,numUEs,mu,bwPRBs,mcs,simTime,warmup,harq,kpiDb\n"
+            r << "runId,seed,numUEs,mu,bwPRBs,mcs,simTime,warmup,harq,maxNumTx,psfchPeriod,kpiDb\n"
               << runId << ',' << seed << ',' << numUEs << ',' << mu << ',' << bwPRBs << ','
               << mcs << ',' << simTime << ',' << warmup << ',' << (harqEnabled ? 1 : 0)
-              << ',' << dbBase << ".db\n";
+              << ',' << maxNumTx << ',' << psfchPeriod << ',' << dbBase << ".db\n";
         }
     }
 

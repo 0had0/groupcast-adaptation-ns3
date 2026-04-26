@@ -102,7 +102,8 @@ def format_flows_spec(flows) -> Optional[str]:
 
 def build_ns3_command(scenario: str, condition: str, mu: int, w: int, mcs: int,
                     seed: int, output_dir: Path,
-                    flows=None) -> List[str]:
+                    flows=None, max_num_tx: Optional[int] = None,
+                    psfch_period: Optional[int] = None) -> List[str]:
     """Build NS3 command line for a single run."""
     
     # Determine numUEs based on scenario
@@ -140,14 +141,21 @@ def build_ns3_command(scenario: str, condition: str, mu: int, w: int, mcs: int,
     if flows_spec:
         cmd.append(f"--flows={flows_spec}")
 
+    if max_num_tx is not None:
+        cmd.append(f"--maxNumTx={max_num_tx}")
+
+    if psfch_period is not None:
+        cmd.append(f"--psfchPeriod={psfch_period}")
+
     return cmd
 
 
 def run_single(args: Tuple) -> Tuple[bool, str]:
     """Run a single NS3 simulation."""
-    scenario, condition, mu, w, mcs, seed, output_dir, flows = args
+    scenario, condition, mu, w, mcs, seed, output_dir, flows, max_num_tx, psfch_period = args
 
-    cmd = build_ns3_command(scenario, condition, mu, w, mcs, seed, output_dir, flows=flows)
+    cmd = build_ns3_command(scenario, condition, mu, w, mcs, seed, output_dir,
+                            flows=flows, max_num_tx=max_num_tx, psfch_period=psfch_period)
     if not cmd:
         return False, "No command"
     
@@ -199,6 +207,10 @@ def main():
     parser.add_argument("--flows", default=None,
                         help="Pre-formatted --flows spec passed verbatim to groupcast_eval; "
                              "empty/unset uses the binary's 3-flow default")
+    parser.add_argument("--maxNumTx", type=int, default=None,
+                        help="slMaxTxTransNumPssch (1..32). Unset => binary default (5)")
+    parser.add_argument("--psfchPeriod", type=int, default=None,
+                        help="PSFCH period in slots (0=off, 1/2/4=on). Unset => binary default (0)")
 
     args = parser.parse_args()
     output_dir = Path(args.outDir) if args.outDir else RESULTS_DIR / "raw"
@@ -251,7 +263,9 @@ def main():
     if args.dry_run:
         for run in all_runs[:10]:  # Show first 10
             scen, cond, mu, w, mcs, seed = run
-            cmd = build_ns3_command(scen, cond, mu, w, mcs, seed, output_dir, flows=args.flows)
+            cmd = build_ns3_command(scen, cond, mu, w, mcs, seed, output_dir,
+                                    flows=args.flows, max_num_tx=args.maxNumTx,
+                                    psfch_period=args.psfchPeriod)
             if cmd:
                 print(" ".join(cmd[:5]))  # First 5 args
         print(f" ... ({len(all_runs)} total)")
@@ -263,14 +277,14 @@ def main():
     # Run simulations
     if args.parallel > 1:
         print(f"Running {len(all_runs)} simulations with {args.parallel} workers...")
-        run_args = [r + (output_dir, args.flows) for r in all_runs]
+        run_args = [r + (output_dir, args.flows, args.maxNumTx, args.psfchPeriod) for r in all_runs]
         with mp.Pool(args.parallel) as pool:
             results = pool.map(run_single, run_args)
     else:
         print(f"Running {len(all_runs)} simulations sequentially...")
         results = []
         for run in all_runs:
-            result = run_single(run + (output_dir, args.flows))
+            result = run_single(run + (output_dir, args.flows, args.maxNumTx, args.psfchPeriod))
             results.append(result)
     
     # Report results
