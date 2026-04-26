@@ -136,7 +136,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--tmp",
-        default="/Users/hadih/Documents/groupcast-adaptation-ns3/tmp",
+        default=str(Path(__file__).resolve().parents[3] / "tmp"),
         help="Sweep output directory",
     )
     ap.add_argument(

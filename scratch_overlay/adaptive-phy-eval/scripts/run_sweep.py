@@ -24,12 +24,29 @@ def _gzip_inplace(path: Path) -> None:
         shutil.copyfileobj(fin, fout, length=1 << 20)
     path.unlink()
 
-# Configuration
-NS3_DIR = Path("/Users/hadih/Documents/groupcast-adaptation-ns3/ns-3-dev")
-NS3_BINARY = NS3_DIR / "build" / "scratch" / "groupcast_eval" / "ns3.42-groupcast_eval-default"
+# Configuration — derived from this file's location so it works on any machine.
+# Layout: <repo>/scratch_overlay/adaptive-phy-eval/scripts/run_sweep.py
+#         <repo>/ns-3-dev/  (submodule)
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT   = _SCRIPTS_DIR.parents[2]  # scratch_overlay/adaptive-phy-eval/scripts → repo root
+NS3_DIR      = _REPO_ROOT / "ns-3-dev"
+
+# Binary name differs by platform; find the first matching executable.
+def _find_binary(ns3_dir: Path) -> Path:
+    pattern = "ns3.*-groupcast_eval-default"
+    import fnmatch, os
+    build_scratch = ns3_dir / "build" / "scratch" / "groupcast_eval"
+    if build_scratch.is_dir():
+        for name in sorted(os.listdir(build_scratch)):
+            if fnmatch.fnmatch(name, "ns3*groupcast_eval*"):
+                return build_scratch / name
+    # fallback: let ns3 wrapper handle it
+    return ns3_dir / "ns3"
+
+NS3_BINARY           = _find_binary(NS3_DIR)
 ADAPTIVE_PHY_EVAL_DIR = NS3_DIR / "scratch" / "adaptive-phy-eval"
-SUMO_DIR = ADAPTIVE_PHY_EVAL_DIR / "sumo"
-RESULTS_DIR = ADAPTIVE_PHY_EVAL_DIR / "results"
+SUMO_DIR             = _SCRIPTS_DIR.parents[1] / "sumo"   # scratch_overlay/adaptive-phy-eval/sumo
+RESULTS_DIR          = _SCRIPTS_DIR.parents[1] / "results"
 
 # PHY configuration sweep space
 NUMEROLOGIES = [0, 1, 2]
