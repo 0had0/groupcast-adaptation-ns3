@@ -153,8 +153,14 @@ else
     git clone "$NR_URL" "$NR_DIR"
 fi
 
-# Silence dirty-status noise in ns-3-dev
-EXCLUDE="$ROOT/ns-3-dev/.git/info/exclude"
+# Silence dirty-status noise in ns-3-dev.
+# On a fresh submodule clone, ns-3-dev/.git is a *file* pointing to the parent's
+# .git/modules/ns-3-dev/ — resolve the real git dir with git rev-parse.
+NS3_GIT_DIR="$(git -C "$ROOT/ns-3-dev" rev-parse --git-dir)"
+# git rev-parse returns a relative path when inside a worktree; make it absolute
+[[ "$NS3_GIT_DIR" = /* ]] || NS3_GIT_DIR="$ROOT/ns-3-dev/$NS3_GIT_DIR"
+EXCLUDE="$NS3_GIT_DIR/info/exclude"
+mkdir -p "$(dirname "$EXCLUDE")"
 grep -qF "contrib/nr" "$EXCLUDE" 2>/dev/null || echo "contrib/nr" >> "$EXCLUDE"
 
 # Pin to pinned branch + commit
