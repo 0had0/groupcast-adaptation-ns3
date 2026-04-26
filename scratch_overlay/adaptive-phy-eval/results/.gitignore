@@ -1,0 +1,6 @@
+# Simulation output — not tracked in git; use the remote machine's storage
+raw/
+*.csv
+*.db
+*.db.gz
+_summary.csv

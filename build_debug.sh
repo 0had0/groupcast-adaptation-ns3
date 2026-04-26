@@ -1,0 +1,2 @@
+/Users/hadih/Documents/groupcast-adaptation-ns3/ns-3-dev/ns3 configure -d debug --enable-tests --enable-examples --disable-werror 
+/Users/hadih/Documents/groupcast-adaptation-ns3/ns-3-dev/ns3 build -j 8
