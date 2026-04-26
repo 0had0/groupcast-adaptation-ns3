@@ -1,0 +1,22 @@
+# Build artifacts & caches
+build/
+.venv/
+.ruff_cache/
+__pycache__/
+.cache/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# NS-3 run outputs
+tmp/
+*.log
+*.pcap
+
+# Tool state (local to this machine)
+.claude/
+
+# Submodule dirs are now tracked via .gitmodules — do NOT ignore them.
+# (sumo, netanim, ns-3-dev are intentionally absent from this list)

@@ -1,0 +1,35 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 2071986..ab4aadf 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include "netanim.h"
++#include <QStyleFactory>
+ 
+ int main (int argc, char *argv[])
+ {
+@@ -26,6 +27,22 @@ int main (int argc, char *argv[])
+ 
+ 
+   QApplication app (argc, argv);
++  app.setStyle(QStyleFactory::create("Fusion"));
++  QPalette lightPalette;
++  lightPalette.setColor(QPalette::Window, QColor(240, 240, 240));
++  lightPalette.setColor(QPalette::WindowText, Qt::black);
++  lightPalette.setColor(QPalette::Base, QColor(255, 255, 255));
++  lightPalette.setColor(QPalette::AlternateBase, QColor(245, 245, 245));
++  lightPalette.setColor(QPalette::ToolTipBase, Qt::white);
++  lightPalette.setColor(QPalette::ToolTipText, Qt::black);
++  lightPalette.setColor(QPalette::Text, Qt::black);
++  lightPalette.setColor(QPalette::Button, QColor(240, 240, 240));
++  lightPalette.setColor(QPalette::ButtonText, Qt::black);
++  lightPalette.setColor(QPalette::BrightText, Qt::red);
++  lightPalette.setColor(QPalette::Link, QColor(0, 0, 200));
++  lightPalette.setColor(QPalette::Highlight, QColor(0, 120, 215));
++  lightPalette.setColor(QPalette::HighlightedText, Qt::white);
++  app.setPalette(lightPalette);
+   app.setApplicationName ("NetAnim");
+   app.setWindowIcon (QIcon (":/resources/netanim-logo.png"));
+   netanim::NetAnim netAnim;

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+  <vType id="car" vClass="passenger" accel="2.5" decel="4.5" 
+                maxSpeed="70" sigma="0.5" length="5" width="2" minGap="2.5"/>
+  <route id="route0" edges="hw_rev"/>
+  <vehicle id="tx_0" type="car" route="route0" depart="0" departPos="1000" 
+                departSpeed="27.77777777777778" color="0,1,0">
+    <param key="role" value="tx"/>
+    <param key="group_id" value="group_0"/>
+  </vehicle>
+  <vehicle id="rx_1" type="car" route="route0" depart="0" departPos="980.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="1"/>
+  </vehicle>
+  <vehicle id="rx_2" type="car" route="route0" depart="0" departPos="960.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="2"/>
+  </vehicle>
+  <vehicle id="rx_3" type="car" route="route0" depart="0" departPos="940.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="3"/>
+  </vehicle>
+  <vehicle id="rx_4" type="car" route="route0" depart="0" departPos="920.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="4"/>
+  </vehicle>
+  <vehicle id="rx_5" type="car" route="route0" depart="0" departPos="900.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="5"/>
+  </vehicle>
+  <vehicle id="rx_6" type="car" route="route0" depart="0" departPos="880.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="6"/>
+  </vehicle>
+  <vehicle id="rx_7" type="car" route="route0" depart="0" departPos="860.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="7"/>
+  </vehicle>
+  <vehicle id="rx_8" type="car" route="route0" depart="0" departPos="840.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="8"/>
+  </vehicle>
+  <vehicle id="rx_9" type="car" route="route0" depart="0" departPos="820.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="9"/>
+  </vehicle>
+  <vehicle id="rx_10" type="car" route="route0" depart="0" departPos="800.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="10"/>
+  </vehicle>
+  <vehicle id="rx_11" type="car" route="route0" depart="0" departPos="780.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="11"/>
+  </vehicle>
+  <vehicle id="rx_12" type="car" route="route0" depart="0" departPos="760.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="12"/>
+  </vehicle>
+  <vehicle id="rx_13" type="car" route="route0" depart="0" departPos="740.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="13"/>
+  </vehicle>
+  <vehicle id="rx_14" type="car" route="route0" depart="0" departPos="720.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="14"/>
+  </vehicle>
+  <vehicle id="rx_15" type="car" route="route0" depart="0" departPos="700.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="15"/>
+  </vehicle>
+  <vehicle id="rx_16" type="car" route="route0" depart="0" departPos="680.0" 
+                departSpeed="27.77777777777778" color="0,0.5,1">
+    <param key="role" value="rx"/>
+    <param key="group_id" value="group_0"/>
+    <param key="rx_index" value="16"/>
+  </vehicle>
+</routes>

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# pre-commit hook: auto-regenerate patches before every parent-repo commit.
+# Installed by setup.sh via:  git config core.hooksPath scripts/hooks
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "[pre-commit] Regenerating patches from submodule working trees..."
+bash scripts/regen-patches.sh
+
+# Stage any patch files that changed so they land in this commit.
+if [[ -d patches ]]; then
+    git add patches/
+fi
+
+echo "[pre-commit] Patches up to date."

@@ -1,0 +1,19 @@
+[submodule "ns-3-dev"]
+	path = ns-3-dev
+	url = https://gitlab.com/cttc-lena/ns-3-dev.git
+	# Pinned commit: c90c13b8310a813cf4eaf67a2c90df497bbd1965  (branch v2x-lte-dev)
+	# setup.sh checks out this branch + resets to the pinned SHA.
+
+[submodule "netanim"]
+	path = netanim
+	url = https://gitlab.com/nsnam/netanim.git
+	# Pinned commit: 9f8c0829512ffafe56e5ff424d72c91c10ca4e8f  (branch master)
+
+[submodule "sumo"]
+	path = sumo
+	url = https://github.com/eclipse-sumo/sumo
+	# Pinned commit: 4fc6bb35f499858cb91dde604495a4d3ef4baaef  (branch main)
+
+# NOTE: ns-3-dev/contrib/nr is NOT a git submodule in the parent index
+# (a gitlink at ns-3-dev/ blocks further entries under that path).
+# setup.sh clones it directly, resets to SHA_NR, and applies patches/nr/local.patch.

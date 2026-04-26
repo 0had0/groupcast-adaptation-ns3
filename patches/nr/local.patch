@@ -1,0 +1,37 @@
+diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
+index 18b4e5a3..cb7e1e95 100644
+--- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
++++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
+@@ -733,16 +733,17 @@ NrSlUeMacSchedulerFixedMcs::LogicalChannelPrioritization(
+                 nRemainingLcs++;
+             }
+         }
+-        if (itlcIdsbyPrio->second.size() == 0)
+-        {
+-            itlcIdsbyPrio = std::reverse_iterator(lcIdsbyPrio.erase(--itlcIdsbyPrio.base()));
+-        }
+-
+         if (lowestLcId != std::numeric_limits<uint8_t>::max() && lcIdOfRef == 0)
+         {
+             lcIdOfRef = lowestLcId;
+         }
+     }
++    // Erase priority groups that became empty (deferred from above loop to avoid
++    // reverse-iterator invalidation UB when erasing the begin() entry).
++    for (auto it = lcIdsbyPrio.begin(); it != lcIdsbyPrio.end();)
++    {
++        it = it->second.empty() ? lcIdsbyPrio.erase(it) : std::next(it);
++    }
+     // If SPS, remove all LCs with RRI different than the lcIdOfRef, and assign re-selection
+     // counters
+     if (!dynamicGrant)
+@@ -1547,7 +1548,8 @@ NrSlUeMacSchedulerFixedMcs::FilterTxOpportunities(const SfnSf& sfn,
+                     for (uint16_t i = 0; i <= cResel; i++)
+                     {
+                         SfnSf candidateSfn =
+-                            itTxOppr->sfn.GetFutureSfnSf(i * rri.GetMilliSeconds() * 4);
++                            itTxOppr->sfn.GetFutureSfnSf(i * rri.GetMilliSeconds() *
++                                                          (1u << itTxOppr->sfn.GetNumerology()));
+                         if (itGrantAlloc->sfn < candidateSfn)
+                         {
+                             break;
