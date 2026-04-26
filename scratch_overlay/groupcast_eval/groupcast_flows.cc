@@ -4,7 +4,11 @@
 
 #include "ns3/log.h"
 
+#include <algorithm>
+#include <cctype>
+#include <set>
 #include <sstream>
+#include <stdexcept>
 
 namespace ns3
 {
@@ -12,19 +16,265 @@ namespace ns3
 NS_LOG_COMPONENT_DEFINE("GroupcastEval.GroupcastFlows");
 
 // ---------------------------------------------------------------------------
-// Flow table — the single source of truth for all traffic profiles.
+// Default flow table
 // ---------------------------------------------------------------------------
 
-const FlowDef kFlows[kNumFlows] = {
-    // port  prio  rri                dynamic  pdb                rateKbps  label
-    {8001,   1,    MilliSeconds(20),  true,    MilliSeconds(20),  200.0,    "urllc_cam"},
-    {8002,   2,    MilliSeconds(50),  false,   MilliSeconds(50),  1000.0,   "v2x_video"},
-    {8003,   3,    MilliSeconds(100), false,   MilliSeconds(100), 100.0,    "non_gbr"},
-};
+std::vector<FlowDef>
+DefaultGroupcastFlows()
+{
+    return {
+        // label        port  prio  rri                dynamic  pdb                rate    enabled harq
+        {"urllc_cam",  8001, 1,    MilliSeconds(20),  true,    MilliSeconds(20),  200.0,  true,   -1},
+        {"v2x_video",  8002, 2,    MilliSeconds(50),  false,   MilliSeconds(50),  1000.0, true,   -1},
+        {"non_gbr",    8003, 3,    MilliSeconds(100), false,   MilliSeconds(100), 100.0,  true,   -1},
+    };
+}
+
+// ---------------------------------------------------------------------------
+// CLI parser: --flows="k=v;k=v,...,k=v;k=v"
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+std::string
+Trim(const std::string& s)
+{
+    size_t b = 0;
+    size_t e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b])))
+    {
+        ++b;
+    }
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1])))
+    {
+        --e;
+    }
+    return s.substr(b, e - b);
+}
+
+std::vector<std::string>
+Split(const std::string& s, char sep)
+{
+    std::vector<std::string> out;
+    std::string buf;
+    for (char c : s)
+    {
+        if (c == sep)
+        {
+            out.push_back(buf);
+            buf.clear();
+        }
+        else
+        {
+            buf.push_back(c);
+        }
+    }
+    out.push_back(buf);
+    return out;
+}
+
+bool
+ParseBool(const std::string& v, bool& out)
+{
+    std::string t = Trim(v);
+    if (t == "1" || t == "true" || t == "yes")
+    {
+        out = true;
+        return true;
+    }
+    if (t == "0" || t == "false" || t == "no")
+    {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+std::vector<FlowDef>
+ParseFlowsSpec(const std::string& spec)
+{
+    std::vector<FlowDef> flows;
+    std::set<uint16_t> seenPorts;
+
+    auto specs = Split(spec, ',');
+    for (size_t fi = 0; fi < specs.size(); ++fi)
+    {
+        std::string flowSpec = Trim(specs[fi]);
+        if (flowSpec.empty())
+        {
+            continue;
+        }
+
+        FlowDef fd{};
+        fd.port = 0; // sentinel: auto-assign if still 0 after parse
+        fd.priority = 3;
+        fd.rri = MilliSeconds(100);
+        fd.pdb = Time(0); // sentinel: default to rri after parse
+        fd.dynamic = false;
+        fd.rateKbps = 100.0;
+        fd.enabled = true;
+        fd.harqOverride = -1;
+
+        bool pdbSet = false;
+
+        for (const std::string& kv : Split(flowSpec, ';'))
+        {
+            std::string pair = Trim(kv);
+            if (pair.empty())
+            {
+                continue;
+            }
+            auto eq = pair.find('=');
+            if (eq == std::string::npos)
+            {
+                throw std::runtime_error("flow spec: missing '=' in '" + pair + "'");
+            }
+            std::string key = Trim(pair.substr(0, eq));
+            std::string val = Trim(pair.substr(eq + 1));
+
+            try
+            {
+                if (key == "label")
+                {
+                    fd.label = val;
+                }
+                else if (key == "port")
+                {
+                    int p = std::stoi(val);
+                    if (p <= 0 || p > 65535)
+                    {
+                        throw std::runtime_error("port out of range: " + val);
+                    }
+                    fd.port = static_cast<uint16_t>(p);
+                }
+                else if (key == "prio")
+                {
+                    int p = std::stoi(val);
+                    if (p < 1 || p > 8)
+                    {
+                        throw std::runtime_error("prio must be 1..8: " + val);
+                    }
+                    fd.priority = static_cast<uint8_t>(p);
+                }
+                else if (key == "rri_ms")
+                {
+                    double r = std::stod(val);
+                    if (!(r > 0.0))
+                    {
+                        throw std::runtime_error("rri_ms must be > 0: " + val);
+                    }
+                    fd.rri = MilliSeconds(static_cast<int64_t>(r));
+                }
+                else if (key == "pdb_ms")
+                {
+                    double r = std::stod(val);
+                    if (!(r > 0.0))
+                    {
+                        throw std::runtime_error("pdb_ms must be > 0: " + val);
+                    }
+                    fd.pdb = MilliSeconds(static_cast<int64_t>(r));
+                    pdbSet = true;
+                }
+                else if (key == "dynamic")
+                {
+                    if (!ParseBool(val, fd.dynamic))
+                    {
+                        throw std::runtime_error("dynamic must be 0/1: " + val);
+                    }
+                }
+                else if (key == "rate_kbps")
+                {
+                    double r = std::stod(val);
+                    if (!(r > 0.0))
+                    {
+                        throw std::runtime_error("rate_kbps must be > 0: " + val);
+                    }
+                    fd.rateKbps = r;
+                }
+                else if (key == "harq")
+                {
+                    std::string t = Trim(val);
+                    if (t == "auto")
+                    {
+                        fd.harqOverride = -1;
+                    }
+                    else
+                    {
+                        bool b;
+                        if (!ParseBool(t, b))
+                        {
+                            throw std::runtime_error("harq must be 0/1/auto: " + val);
+                        }
+                        fd.harqOverride = b ? 1 : 0;
+                    }
+                }
+                else if (key == "enabled")
+                {
+                    if (!ParseBool(val, fd.enabled))
+                    {
+                        throw std::runtime_error("enabled must be 0/1: " + val);
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error("unknown key '" + key + "'");
+                }
+            }
+            catch (const std::invalid_argument&)
+            {
+                throw std::runtime_error("bad numeric value for '" + key + "': " + val);
+            }
+            catch (const std::out_of_range&)
+            {
+                throw std::runtime_error("numeric out of range for '" + key + "': " + val);
+            }
+        }
+
+        if (fd.label.empty())
+        {
+            std::ostringstream os;
+            os << "flow " << (fi + 1) << ": missing required key 'label'";
+            throw std::runtime_error(os.str());
+        }
+        if (fd.port == 0)
+        {
+            fd.port = static_cast<uint16_t>(8000 + flows.size() + 1);
+        }
+        if (!pdbSet)
+        {
+            fd.pdb = fd.rri;
+        }
+        if (!seenPorts.insert(fd.port).second)
+        {
+            throw std::runtime_error("duplicate port in --flows: " +
+                                     std::to_string(fd.port));
+        }
+
+        flows.push_back(std::move(fd));
+    }
+
+    bool anyEnabled = false;
+    for (const auto& f : flows)
+    {
+        if (f.enabled)
+        {
+            anyEnabled = true;
+            break;
+        }
+    }
+    if (!anyEnabled)
+    {
+        throw std::runtime_error("--flows: no enabled flows after parsing");
+    }
+
+    return flows;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: bytes to fill one packet at (rateKbps, rri).
-// Copied verbatim from sl-multi-lc-example.cc:995.
 // ---------------------------------------------------------------------------
 static uint32_t
 PacketSize(double rateKbps, Time rri)
@@ -39,33 +289,31 @@ PacketSize(double rateKbps, Time rri)
 FlowResult
 InstallGroupcastFlows(const NodeContainer& nodes,
                       const SlStackCtx& ctx,
+                      const std::vector<FlowDef>& flows,
                       double simTime,
-                      bool harqEnabled,
+                      bool harqEnabledDefault,
                       int64_t& stream)
 {
     const uint32_t dstL2Id = 254; // groupcast destination L2 ID per 3GPP TS 38.321
     Ipv4Address groupAddr("225.63.63.1");
     const Time bearerActivation = Seconds(2.0);
 
-    // Small per-UE TX start jitter to avoid simultaneous first-packet bursts
-    // (matches nr-v2x-west-to-east-highway.cc:1069-1072).
     Ptr<UniformRandomVariable> jitterRv = CreateObject<UniformRandomVariable>();
     jitterRv->SetStream(stream++);
     jitterRv->SetAttribute("Min", DoubleValue(0.0));
-    jitterRv->SetAttribute("Max", DoubleValue(0.05)); // up to 50 ms jitter
+    jitterRv->SetAttribute("Max", DoubleValue(0.05));
 
     FlowResult result;
-
-    for (int f = 0; f < kNumFlows; ++f)
+    for (const auto& fd : flows)
     {
-        const FlowDef& fd = kFlows[f];
+        if (!fd.enabled)
+        {
+            continue;
+        }
 
-        // -------------------------------------------------------------------
-        // Sidelink bearer: one SidelinkInfo + one BIDIRECTIONAL LteSlTft per
-        // flow. All three flows share the same dstL2Id (groupcast) and
-        // multicast IP but are distinguished by port number.
-        // Pattern: sl-multi-lc-example.cc:573-739
-        // -------------------------------------------------------------------
+        const bool harqEnabled =
+            (fd.harqOverride < 0) ? harqEnabledDefault : (fd.harqOverride == 1);
+
         SidelinkInfo slInfo;
         slInfo.m_castType = SidelinkInfo::CastType::Groupcast;
         slInfo.m_dstL2Id = dstL2Id;
@@ -81,12 +329,6 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                                              slInfo);
         ctx.sl->ActivateNrSlBearer(bearerActivation, ctx.ueNetDev, tft);
 
-        // -------------------------------------------------------------------
-        // Applications: OnOff (TX) + PacketSink (RX) on every UE.
-        // Packet size is derived from (rate, RRI) so that one packet per RRI
-        // saturates the bearer at exactly the requested rate.
-        // Pattern: sl-multi-lc-example.cc:749-821
-        // -------------------------------------------------------------------
         const uint32_t pktSize = PacketSize(fd.rateKbps, fd.rri);
         const std::string rateStr = std::to_string(fd.rateKbps) + "kb/s";
 
@@ -98,9 +340,13 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                               InetSocketAddress(Ipv4Address::GetAny(), fd.port));
         sink.SetAttribute("EnableSeqTsSizeHeader", BooleanValue(true));
 
+        ApplicationContainer flowClients;
+        ApplicationContainer flowServers;
+        double earliestStart = 0.0;
+        double latestStop = 0.0;
+
         for (uint32_t i = 0; i < nodes.GetN(); ++i)
         {
-            // TX app
             ApplicationContainer c = client.Install(nodes.Get(i));
             const double jitter = jitterRv->GetValue();
             c.Get(0)->SetStartTime(bearerActivation + Seconds(jitter));
@@ -111,22 +357,29 @@ InstallGroupcastFlows(const NodeContainer& nodes,
             const double appStop = appStart + simTime;
             c.Get(0)->SetStopTime(Seconds(appStop));
 
-            result.appStart[f] = std::max(result.appStart[f], appStart);
-            result.appStop[f] = std::max(result.appStop[f], appStop);
-            result.clients[f].Add(c);
+            earliestStart = std::max(earliestStart, appStart);
+            latestStop = std::max(latestStop, appStop);
+            flowClients.Add(c);
 
-            // RX app (starts early so it is ready before the first packet arrives)
             ApplicationContainer s = sink.Install(nodes.Get(i));
             s.Get(0)->SetStartTime(Seconds(0.0));
-            result.servers[f].Add(s);
+            flowServers.Add(s);
         }
 
-        NS_LOG_INFO("Flow " << f + 1 << " (" << fd.label << "): port=" << fd.port
-                             << " prio=" << +fd.priority
-                             << " rri=" << fd.rri.GetMilliSeconds() << "ms"
-                             << " pktSize=" << pktSize << "B"
-                             << " rate=" << rateStr
-                             << (fd.dynamic ? " DG" : " SPS"));
+        result.defs.push_back(fd);
+        result.clients.push_back(flowClients);
+        result.servers.push_back(flowServers);
+        result.appStart.push_back(earliestStart);
+        result.appStop.push_back(latestStop);
+
+        NS_LOG_INFO("Flow " << result.defs.size() << " (" << fd.label << "): port=" << fd.port
+                            << " prio=" << +fd.priority
+                            << " rri=" << fd.rri.GetMilliSeconds() << "ms"
+                            << " pdb=" << fd.pdb.GetMilliSeconds() << "ms"
+                            << " pktSize=" << pktSize << "B"
+                            << " rate=" << rateStr
+                            << (fd.dynamic ? " DG" : " SPS")
+                            << " harq=" << (harqEnabled ? 1 : 0));
     }
 
     return result;

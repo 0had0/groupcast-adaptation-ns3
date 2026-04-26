@@ -170,9 +170,9 @@ ConnectPhyMacTraces(KpiHooks& h)
 void
 ConnectAppTraces(KpiHooks& h, const FlowResult& flows)
 {
-    for (int f = 0; f < kNumFlows; ++f)
+    for (size_t f = 0; f < flows.defs.size(); ++f)
     {
-        const uint16_t flowId = kFlows[f].port;
+        const uint16_t flowId = flows.defs[f].port;
 
         // TX (OnOff) apps
         for (uint32_t a = 0; a < flows.clients[f].GetN(); ++a)

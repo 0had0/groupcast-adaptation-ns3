@@ -91,8 +91,18 @@ def get_sumo_config(scenario: str, condition: str) -> Optional[Path]:
     return None
 
 
+def format_flows_spec(flows) -> Optional[str]:
+    """Format a flow list/string into the --flows= CLI value, or None if empty."""
+    if not flows:
+        return None
+    if isinstance(flows, str):
+        return flows
+    return ",".join(";".join(f"{k}={v}" for k, v in f.items()) for f in flows)
+
+
 def build_ns3_command(scenario: str, condition: str, mu: int, w: int, mcs: int,
-                    seed: int, output_dir: Path) -> List[str]:
+                    seed: int, output_dir: Path,
+                    flows=None) -> List[str]:
     """Build NS3 command line for a single run."""
     
     # Determine numUEs based on scenario
@@ -125,15 +135,19 @@ def build_ns3_command(scenario: str, condition: str, mu: int, w: int, mcs: int,
     sumo_cfg = get_sumo_config(scenario, condition)
     if sumo_cfg and sumo_cfg.exists():
         cmd.append(f"--sumoCfg={sumo_cfg}")
-    
+
+    flows_spec = format_flows_spec(flows)
+    if flows_spec:
+        cmd.append(f"--flows={flows_spec}")
+
     return cmd
 
 
 def run_single(args: Tuple) -> Tuple[bool, str]:
     """Run a single NS3 simulation."""
-    scenario, condition, mu, w, mcs, seed, output_dir = args
-    
-    cmd = build_ns3_command(scenario, condition, mu, w, mcs, seed, output_dir)
+    scenario, condition, mu, w, mcs, seed, output_dir, flows = args
+
+    cmd = build_ns3_command(scenario, condition, mu, w, mcs, seed, output_dir, flows=flows)
     if not cmd:
         return False, "No command"
     
@@ -182,6 +196,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print commands only")
     parser.add_argument("--outDir", default=None, help="Output directory (default: adaptive-phy-eval/results/raw)")
     parser.add_argument("--skip-existing", action="store_true", help="Skip runs whose _run.csv already exists in outDir")
+    parser.add_argument("--flows", default=None,
+                        help="Pre-formatted --flows spec passed verbatim to groupcast_eval; "
+                             "empty/unset uses the binary's 3-flow default")
 
     args = parser.parse_args()
     output_dir = Path(args.outDir) if args.outDir else RESULTS_DIR / "raw"
@@ -234,26 +251,26 @@ def main():
     if args.dry_run:
         for run in all_runs[:10]:  # Show first 10
             scen, cond, mu, w, mcs, seed = run
-            cmd = build_ns3_command(scen, cond, mu, w, mcs, seed, output_dir)
+            cmd = build_ns3_command(scen, cond, mu, w, mcs, seed, output_dir, flows=args.flows)
             if cmd:
                 print(" ".join(cmd[:5]))  # First 5 args
         print(f" ... ({len(all_runs)} total)")
         return
-    
+
     # Create output directory
     (output_dir).mkdir(parents=True, exist_ok=True)
-    
+
     # Run simulations
     if args.parallel > 1:
         print(f"Running {len(all_runs)} simulations with {args.parallel} workers...")
-        run_args = [r + (output_dir,) for r in all_runs]
+        run_args = [r + (output_dir, args.flows) for r in all_runs]
         with mp.Pool(args.parallel) as pool:
             results = pool.map(run_single, run_args)
     else:
         print(f"Running {len(all_runs)} simulations sequentially...")
         results = []
         for run in all_runs:
-            result = run_single(run + (output_dir,))
+            result = run_single(run + (output_dir, args.flows))
             results.append(result)
     
     # Report results

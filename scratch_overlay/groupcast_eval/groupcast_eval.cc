@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
+#include <stdexcept>
 
 using namespace ns3;
 
@@ -48,6 +50,7 @@ main(int argc, char* argv[])
     std::string outputDir = "./";
     std::string simTag;
     bool harqEnabled = true;
+    std::string flowsSpec;
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("runId",         "Unique run identifier",                          runId);
@@ -65,8 +68,25 @@ main(int argc, char* argv[])
     cmd.AddValue("sumoSync",      "SUMO sync interval (s)",                         sumoSync);
     cmd.AddValue("outputDir",     "Directory for KPI SQLite DB",                    outputDir);
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",              simTag);
-    cmd.AddValue("harq",          "Enable HARQ for all three flows",                harqEnabled);
+    cmd.AddValue("harq",          "Enable HARQ globally (per-flow harq=... overrides)", harqEnabled);
+    cmd.AddValue("flows",
+                 "Per-flow spec: comma-separated flows, each `;`-separated "
+                 "key=value (label,port,prio,rri_ms,pdb_ms,dynamic,rate_kbps,"
+                 "harq,enabled). Empty => 3-flow default.",
+                 flowsSpec);
     cmd.Parse(argc, argv);
+
+    std::vector<FlowDef> flowDefs;
+    try
+    {
+        flowDefs = flowsSpec.empty() ? DefaultGroupcastFlows()
+                                     : ParseFlowsSpec(flowsSpec);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "groupcast_eval: --flows parse error: " << e.what() << std::endl;
+        return 1;
+    }
 
     if (simTag.empty())
     {
@@ -104,7 +124,8 @@ main(int argc, char* argv[])
     // -----------------------------------------------------------------------
     // 3. Groupcast bearer activation + OnOff/PacketSink apps (3 flows)
     // -----------------------------------------------------------------------
-    FlowResult flows = InstallGroupcastFlows(ueNodes, stack, simTime, harqEnabled, stack.stream);
+    FlowResult flows = InstallGroupcastFlows(ueNodes, stack, flowDefs, simTime,
+                                             harqEnabled, stack.stream);
 
     // -----------------------------------------------------------------------
     // 4. Trace hooks: PHY/MAC → SQLite DB + app-layer → DB + CSV
@@ -115,7 +136,7 @@ main(int argc, char* argv[])
     // Set V2xKpi app duration before connecting traces so it is ready when
     // the first packet event fires.
     double txAppDuration = 0.0;
-    for (int f = 0; f < kNumFlows; ++f)
+    for (size_t f = 0; f < flows.defs.size(); ++f)
     {
         txAppDuration = std::max(txAppDuration, flows.appStop[f] - flows.appStart[f]);
     }
@@ -130,7 +151,7 @@ main(int argc, char* argv[])
     // 5. Run
     // -----------------------------------------------------------------------
     double simStop = 0.0;
-    for (int f = 0; f < kNumFlows; ++f)
+    for (size_t f = 0; f < flows.defs.size(); ++f)
     {
         simStop = std::max(simStop, flows.appStart[f] + simTime + 0.5);
     }
