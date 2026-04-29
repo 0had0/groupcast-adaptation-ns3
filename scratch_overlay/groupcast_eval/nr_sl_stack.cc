@@ -48,8 +48,8 @@ BuildSlStack(const SlStackParams& p, const NodeContainer& nodes)
     ctx.nr->SetEpcHelper(ctx.epc);
     ctx.epc->SetAttribute("S1uLinkDelay", TimeValue(MilliSeconds(0)));
 
-    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(0)));
-    ctx.nr->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(0)));
+    Config::SetDefault("ns3::ThreeGppChannelModel::UpdatePeriod", TimeValue(MilliSeconds(1)));
+    ctx.nr->SetChannelConditionModelAttribute("UpdatePeriod", TimeValue(MilliSeconds(1)));
     ctx.nr->SetPathlossAttribute("ShadowingEnabled", BooleanValue(false));
     ctx.nr->InitializeOperationBand(&bandSl);
     BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({bandSl});
