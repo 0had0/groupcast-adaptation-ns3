@@ -14,6 +14,15 @@
 //   1   │ urllc_cam   │ 8001 │  1   │ 20 ms  │  DG   │ 20 ms  │ 200 kb/s
 //   2   │ v2x_video   │ 8002 │  2   │ 50 ms  │  SPS  │ 50 ms  │ 1000 kb/s
 //   3   │ non_gbr     │ 8003 │  3   │ 100 ms │  SPS  │ 100 ms │ 100 kb/s
+//
+// Optional per-flow keys in --flows:
+//   tx_nodes=<id>[:<id>...]  colon-separated list of UE node indices that run
+//                            the OnOff TX app for this flow. Missing/empty =>
+//                            every UE transmits (today's behaviour). PacketSink
+//                            is always installed on every UE so all UEs receive.
+//   start_ms=<ms>            absolute simulation-time onset (in milliseconds)
+//                            for this flow's OnOff app. Missing => default
+//                            bearerActivation (2000 ms) + small jitter.
 
 #include "nr_sl_stack.h"
 
@@ -30,15 +39,17 @@ namespace ns3
 // Runtime traffic-profile descriptor for one flow.
 struct FlowDef
 {
-    std::string label;        // human-readable tag (also used as flow key in logs)
-    uint16_t port;            // UDP destination port (also used as flow identifier in CSV)
-    uint8_t priority;         // SL logical-channel priority (1 = highest, 8 = lowest)
-    Time rri;                 // Resource Reservation Interval
-    bool dynamic;             // true = DG (dynamic grant), false = SPS (semi-persistent)
-    Time pdb;                 // Packet Delay Budget
-    double rateKbps;          // OnOff application data rate
-    bool enabled;             // false = parsed but skipped at install time
-    int8_t harqOverride;      // -1 = use global --harq; 0/1 = per-flow override
+    std::string label;             // human-readable tag (also used as flow key in logs)
+    uint16_t port;                 // UDP destination port (also used as flow identifier in CSV)
+    uint8_t priority;              // SL logical-channel priority (1 = highest, 8 = lowest)
+    Time rri;                      // Resource Reservation Interval
+    bool dynamic;                  // true = DG (dynamic grant), false = SPS (semi-persistent)
+    Time pdb;                      // Packet Delay Budget
+    double rateKbps;               // OnOff application data rate
+    bool enabled;                  // false = parsed but skipped at install time
+    int8_t harqOverride;           // -1 = use global --harq; 0/1 = per-flow override
+    std::vector<uint32_t> txNodes; // empty = every UE transmits this flow
+    Time startTime;                // Time(0) sentinel = use bearerActivation default
 };
 
 // Returns the canonical 3-flow mix used when --flows is empty.

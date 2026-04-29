@@ -23,10 +23,10 @@ std::vector<FlowDef>
 DefaultGroupcastFlows()
 {
     return {
-        // label        port  prio  rri                dynamic  pdb                rate    enabled harq
-        {"urllc_cam",  8001, 1,    MilliSeconds(20),  true,    MilliSeconds(20),  200.0,  true,   -1},
-        {"v2x_video",  8002, 2,    MilliSeconds(50),  false,   MilliSeconds(50),  1000.0, true,   -1},
-        {"non_gbr",    8003, 3,    MilliSeconds(100), false,   MilliSeconds(100), 100.0,  true,   -1},
+        // label        port  prio  rri                dynamic  pdb                rate    enabled harq  txNodes startTime
+        {"urllc_cam",  8001, 1,    MilliSeconds(20),  true,    MilliSeconds(20),  200.0,  true,   -1,   {},     Time(0)},
+        {"v2x_video",  8002, 2,    MilliSeconds(50),  false,   MilliSeconds(50),  1000.0, true,   -1,   {},     Time(0)},
+        {"non_gbr",    8003, 3,    MilliSeconds(100), false,   MilliSeconds(100), 100.0,  true,   -1,   {},     Time(0)},
     };
 }
 
@@ -117,6 +117,7 @@ ParseFlowsSpec(const std::string& spec)
         fd.rateKbps = 100.0;
         fd.enabled = true;
         fd.harqOverride = -1;
+        fd.startTime = Time(0); // sentinel: use bearerActivation default
 
         bool pdbSet = false;
 
@@ -217,6 +218,33 @@ ParseFlowsSpec(const std::string& spec)
                     {
                         throw std::runtime_error("enabled must be 0/1: " + val);
                     }
+                }
+                else if (key == "tx_nodes")
+                {
+                    fd.txNodes.clear();
+                    for (const std::string& tok : Split(val, ':'))
+                    {
+                        std::string t = Trim(tok);
+                        if (t.empty())
+                        {
+                            continue;
+                        }
+                        int id = std::stoi(t);
+                        if (id < 0)
+                        {
+                            throw std::runtime_error("tx_nodes id must be >= 0: " + t);
+                        }
+                        fd.txNodes.push_back(static_cast<uint32_t>(id));
+                    }
+                }
+                else if (key == "start_ms")
+                {
+                    double s = std::stod(val);
+                    if (!(s >= 0.0))
+                    {
+                        throw std::runtime_error("start_ms must be >= 0: " + val);
+                    }
+                    fd.startTime = MilliSeconds(static_cast<int64_t>(s));
                 }
                 else
                 {
@@ -329,6 +357,33 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                                              slInfo);
         ctx.sl->ActivateNrSlBearer(bearerActivation, ctx.ueNetDev, tft);
 
+        // Validate tx_nodes IDs against the actual node container.
+        for (uint32_t id : fd.txNodes)
+        {
+            if (id >= nodes.GetN())
+            {
+                std::ostringstream os;
+                os << "flow '" << fd.label << "': tx_nodes id " << id
+                   << " >= numUEs (" << nodes.GetN() << ")";
+                throw std::runtime_error(os.str());
+            }
+        }
+        const std::set<uint32_t> txSet(fd.txNodes.begin(), fd.txNodes.end());
+        const bool allTx = txSet.empty();
+
+        // Validate start_ms (must be >= bearerActivation) and resolve it.
+        if (fd.startTime > Time(0) && fd.startTime < bearerActivation)
+        {
+            std::ostringstream os;
+            os << "flow '" << fd.label << "': start_ms ("
+               << fd.startTime.GetMilliSeconds()
+               << ") must be >= bearerActivation ("
+               << bearerActivation.GetMilliSeconds() << ")";
+            throw std::runtime_error(os.str());
+        }
+        const Time effectiveStart =
+            (fd.startTime > Time(0)) ? fd.startTime : bearerActivation;
+
         const uint32_t pktSize = PacketSize(fd.rateKbps, fd.rri);
         const std::string rateStr = std::to_string(fd.rateKbps) + "kb/s";
 
@@ -347,20 +402,25 @@ InstallGroupcastFlows(const NodeContainer& nodes,
 
         for (uint32_t i = 0; i < nodes.GetN(); ++i)
         {
-            ApplicationContainer c = client.Install(nodes.Get(i));
-            const double jitter = jitterRv->GetValue();
-            c.Get(0)->SetStartTime(bearerActivation + Seconds(jitter));
+            // OnOff TX app: only on UEs in txNodes (or all if list is empty).
+            if (allTx || txSet.count(i))
+            {
+                ApplicationContainer c = client.Install(nodes.Get(i));
+                const double jitter = jitterRv->GetValue();
+                c.Get(0)->SetStartTime(effectiveStart + Seconds(jitter));
 
-            const double firstPktDelay =
-                static_cast<double>(pktSize) * 8.0 / DataRate(rateStr).GetBitRate();
-            const double appStart = bearerActivation.GetSeconds() + jitter + firstPktDelay;
-            const double appStop = appStart + simTime;
-            c.Get(0)->SetStopTime(Seconds(appStop));
+                const double firstPktDelay =
+                    static_cast<double>(pktSize) * 8.0 / DataRate(rateStr).GetBitRate();
+                const double appStart = effectiveStart.GetSeconds() + jitter + firstPktDelay;
+                const double appStop = appStart + simTime;
+                c.Get(0)->SetStopTime(Seconds(appStop));
 
-            earliestStart = std::max(earliestStart, appStart);
-            latestStop = std::max(latestStop, appStop);
-            flowClients.Add(c);
+                earliestStart = std::max(earliestStart, appStart);
+                latestStop = std::max(latestStop, appStop);
+                flowClients.Add(c);
+            }
 
+            // PacketSink RX app: always on every UE so all nodes receive.
             ApplicationContainer s = sink.Install(nodes.Get(i));
             s.Get(0)->SetStartTime(Seconds(0.0));
             flowServers.Add(s);
