@@ -108,6 +108,36 @@ def extract_kpis(db_path_gz: Path, n_ues: int):
         prrs = [p for p in prrs if p is not None]
         kpis["prr_group"] = min(prrs) if prrs else None
 
+        # HARQ feedback: ACK/NACK counts from slHarqFeedback, timeouts from slHarqTimeout
+        try:
+            ack = nack = 0
+            for status, cnt in con.execute(
+                "SELECT status, COUNT(*) FROM slHarqFeedback GROUP BY status"
+            ).fetchall():
+                s = str(status).strip().upper()
+                if s == "ACK":
+                    ack += cnt
+                elif s == "NACK":
+                    nack += cnt
+            kpis["harq_ack"] = ack
+            kpis["harq_nack"] = nack
+            denom = ack + nack
+            kpis["harq_ack_rate"] = (ack / denom) if denom > 0 else None
+            kpis["harq_nack_rate"] = (nack / denom) if denom > 0 else None
+        except sqlite3.OperationalError:
+            kpis["harq_ack"] = 0
+            kpis["harq_nack"] = 0
+            kpis["harq_ack_rate"] = None
+            kpis["harq_nack_rate"] = None
+
+        try:
+            r = con.execute("SELECT COUNT(*) FROM slHarqTimeout").fetchone()
+            kpis["harq_timeout"] = r[0] if r else 0
+        except sqlite3.OperationalError:
+            kpis["harq_timeout"] = 0
+        tx_total = kpis.get("total_tx") or 0
+        kpis["harq_to_per_tx"] = (kpis["harq_timeout"] / tx_total) if tx_total > 0 else None
+
         # SINR mean (linear → dB)
         try:
             r = con.execute("SELECT AVG(avrgSinr) FROM psschRxUePhy").fetchone()
@@ -190,6 +220,8 @@ def main():
         "prr_group", "prr_cam", "prr_vid", "prr_bg",
         "tx_cam", "tx_vid", "tx_bg",
         "total_tx", "pssch_rx_count",
+        "harq_ack", "harq_nack", "harq_timeout",
+        "harq_ack_rate", "harq_nack_rate", "harq_to_per_tx",
     ]
     rows = []
     failures = 0
@@ -262,7 +294,8 @@ def main():
         }
 
     for key in ["prr_group", "prr_cam", "prr_vid", "prr_bg",
-                "coll_rate", "pssch_bler", "sinr_mean_db"]:
+                "coll_rate", "pssch_bler", "sinr_mean_db",
+                "harq_ack_rate", "harq_nack_rate", "harq_to_per_tx"]:
         q = quartiles([r.get(key) for r in rows])
         if q is None:
             print(f"  {key:>14}: no data")
