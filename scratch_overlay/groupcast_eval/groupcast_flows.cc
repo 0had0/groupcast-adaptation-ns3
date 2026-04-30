@@ -118,6 +118,7 @@ ParseFlowsSpec(const std::string& spec)
         fd.enabled = true;
         fd.harqOverride = -1;
         fd.startTime = Time(0); // sentinel: use bearerActivation default
+        fd.stopTime = Time(0);  // sentinel: appStart + simTime
 
         bool pdbSet = false;
 
@@ -245,6 +246,15 @@ ParseFlowsSpec(const std::string& spec)
                         throw std::runtime_error("start_ms must be >= 0: " + val);
                     }
                     fd.startTime = MilliSeconds(static_cast<int64_t>(s));
+                }
+                else if (key == "stop_ms")
+                {
+                    double s = std::stod(val);
+                    if (!(s > 0.0))
+                    {
+                        throw std::runtime_error("stop_ms must be > 0: " + val);
+                    }
+                    fd.stopTime = MilliSeconds(static_cast<int64_t>(s));
                 }
                 else
                 {
@@ -384,6 +394,17 @@ InstallGroupcastFlows(const NodeContainer& nodes,
         const Time effectiveStart =
             (fd.startTime > Time(0)) ? fd.startTime : bearerActivation;
 
+        // Validate stop_ms vs start_ms.
+        if (fd.stopTime > Time(0) && fd.stopTime <= effectiveStart)
+        {
+            std::ostringstream os;
+            os << "flow '" << fd.label << "': stop_ms ("
+               << fd.stopTime.GetMilliSeconds()
+               << ") must be > effective start ("
+               << effectiveStart.GetMilliSeconds() << " ms)";
+            throw std::runtime_error(os.str());
+        }
+
         const uint32_t pktSize = PacketSize(fd.rateKbps, fd.rri);
         const std::string rateStr = std::to_string(fd.rateKbps) + "kb/s";
 
@@ -412,7 +433,9 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                 const double firstPktDelay =
                     static_cast<double>(pktSize) * 8.0 / DataRate(rateStr).GetBitRate();
                 const double appStart = effectiveStart.GetSeconds() + jitter + firstPktDelay;
-                const double appStop = appStart + simTime;
+                const double appStop = (fd.stopTime > Time(0))
+                                           ? fd.stopTime.GetSeconds()
+                                           : (appStart + simTime);
                 c.Get(0)->SetStopTime(Seconds(appStop));
 
                 earliestStart = std::max(earliestStart, appStart);

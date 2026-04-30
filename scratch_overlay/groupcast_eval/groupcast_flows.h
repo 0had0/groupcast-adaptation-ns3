@@ -23,6 +23,10 @@
 //   start_ms=<ms>            absolute simulation-time onset (in milliseconds)
 //                            for this flow's OnOff app. Missing => default
 //                            bearerActivation (2000 ms) + small jitter.
+//   stop_ms=<ms>             absolute simulation-time stop (in milliseconds) for
+//                            this flow's OnOff app. Must be > start_ms when both
+//                            are set. Missing => app stops at start + simTime
+//                            (today's behaviour).
 
 #include "nr_sl_stack.h"
 
@@ -50,6 +54,7 @@ struct FlowDef
     int8_t harqOverride;           // -1 = use global --harq; 0/1 = per-flow override
     std::vector<uint32_t> txNodes; // empty = every UE transmits this flow
     Time startTime;                // Time(0) sentinel = use bearerActivation default
+    Time stopTime;                 // Time(0) sentinel = appStart + simTime (default)
 };
 
 // Returns the canonical 3-flow mix used when --flows is empty.
