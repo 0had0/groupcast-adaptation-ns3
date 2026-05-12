@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 NS3_ROOT="${REPO_ROOT}/ns-3-dev"
 BINARY="${NS3_ROOT}/build/scratch/csi_groupcast_eval/ns3.42-csi_groupcast_eval-optimized"
-TRACE_CSV="/Users/hadih/Documents/groupcast-adaptation-ns3/experiment_adaptive_mcs/traces/intersection_nlosv.mob.csv"
+TRACE_CSV="${SCRIPT_DIR}/traces/intersection_nlosv.mob.csv"
 OUT_ROOT="${SCRIPT_DIR}/results_intersect_nlosv"
 
 N_SEEDS=30
