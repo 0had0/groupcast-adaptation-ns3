@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file   value="intersection_nlosv.net.xml"/>
+        <route-files value="vehicles.rou.xml"/>
+    </input>
+
+    <time>
+        <begin       value="0"/>
+        <!-- tx_0 needs ~2s to reach int1, ~22s on e_vertical, ~36s on e_exit;
+             rx_8 finishes ~14s later → padded end gives clean teardown. -->
+        <end         value="120"/>
+        <step-length value="0.1"/>
+    </time>
+
+    <processing>
+        <!-- Never teleport stuck vehicles (avoids silent position jumps). -->
+        <time-to-teleport value="-1"/>
+    </processing>
+
+    <report>
+        <verbose value="false"/>
+        <no-step-log value="true"/>
+    </report>
+
+</configuration>

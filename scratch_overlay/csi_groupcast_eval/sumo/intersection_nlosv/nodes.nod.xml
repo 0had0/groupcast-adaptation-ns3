@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  intersection_nlosv — node definitions
+  ======================================
+  Layout (SUMO coordinates, x=east, y=north):
+
+      (-400,0)          (0,0)               (0,300)        (500,300)
+       n_west ——approach——> n_int1 ——vertical——> n_int2 ——exit——> n_east
+                              |                    |
+                           n_int1_e            n_int2_n
+                           (100,0)             (0,400)
+                          [dummy east]        [dummy north]
+
+  n_int1 : platoon turns LEFT  (east→north)
+  n_int2 : platoon turns RIGHT (north→east)
+
+  radius=10 m at both junctions → corner speed ≈ 15–18 km/h (≈4.5 m/s),
+  creating a 3–4× IVD compression relative to the 50 km/h cruise speed.
+-->
+<nodes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/nodes_file.xsd">
+
+    <!-- Approach start (west dead-end) -->
+    <node id="n_west"    x="-400" y="0"   type="dead_end"/>
+
+    <!-- First intersection: platoon turns LEFT (east→north) -->
+    <node id="n_int1"    x="0"    y="0"   type="priority" radius="10"/>
+    <!-- Dummy east arm — gives the junction a 3rd arm so SUMO treats it as
+         a proper junction rather than a simple bend. Not used by the platoon. -->
+    <node id="n_int1_e"  x="100"  y="0"   type="dead_end"/>
+
+    <!-- Second intersection: platoon turns RIGHT (north→east) -->
+    <node id="n_int2"    x="0"    y="300" type="priority" radius="10"/>
+    <!-- Dummy north arm -->
+    <node id="n_int2_n"  x="0"    y="400" type="dead_end"/>
+
+    <!-- Exit (east dead-end): 1500 m gives ≥108 s travel time at 50 km/h,
+         ensuring no vehicle leaves the network within the 120 s NS-3 run. -->
+    <node id="n_east"    x="1500" y="300" type="dead_end"/>
+
+</nodes>

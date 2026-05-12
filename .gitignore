@@ -20,3 +20,8 @@ tmp/
 
 # Submodule dirs are now tracked via .gitmodules — do NOT ignore them.
 # (sumo, netanim, ns-3-dev are intentionally absent from this list)
+*.db
+*.csv
+*.png
+*.tex
+*.drawio
