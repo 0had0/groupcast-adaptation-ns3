@@ -17,6 +17,8 @@
 #include "nr-sl-adaptive-mcs-controller.h"
 #include "nr-sl-adaptive-mcs-scheduler.h"
 #include "nr_sl_stack.h"
+#include "v2x-kpi.h"
+#include <sqlite3.h>
 
 #include "ns3/core-module.h"
 #include "ns3/log.h"
@@ -79,6 +81,7 @@ main(int argc, char* argv[])
     uint32_t    bwPRBs       = 50;
     uint32_t    mcs          = 14;
     bool        adaptiveMcs  = false;
+    bool        perFlowAdapt = false;  // Enable per-flow MCS adaptation (default: per-destination)
     std::string adaptMode    = "nackRate";  // nackRate | raApcA | raApcB
     std::string etpVariant   = "avg";       // avg | strict
     double      adaptDownThr = 0.15;   // NACK rate → step down
@@ -122,6 +125,7 @@ main(int argc, char* argv[])
     cmd.AddValue("bwPRBs",        "Subchannel size W in PRBs",                      bwPRBs);
     cmd.AddValue("mcs",           "Fixed MCS index (initial MCS when adaptiveMcs=true)", mcs);
     cmd.AddValue("adaptiveMcs",   "Enable per-RX NACK-driven MCS adaptation",       adaptiveMcs);
+    cmd.AddValue("perFlowAdapt",  "Enable per-flow MCS adaptation (default: per-destination)", perFlowAdapt);
     cmd.AddValue("adaptMode",     "Adaptation algorithm: nackRate | raApcA | raApcB", adaptMode);
     cmd.AddValue("etpVariant",    "Group-ETP objective: avg | strict",              etpVariant);
     cmd.AddValue("raApcPayloadBytes", "RA-APC payload size (0 = auto from flows)",  raApcPayloadBytes);
@@ -306,6 +310,17 @@ main(int argc, char* argv[])
         adaptCtrl->SetDownThreshold(adaptDownThr);
         adaptCtrl->SetUpThreshold(adaptUpThr);
         adaptCtrl->SetUpHysteresis(5);
+        adaptCtrl->SetPerFlowAdaptation(perFlowAdapt);
+
+        // Connect to scheduler's HarqAllocation trace to track LC IDs
+        // This enables per-flow adaptation by linking HARQ feedback to specific flows
+        if (perFlowAdapt)
+        {
+            // Use a static callback wrapper to capture the controller pointer
+            adaptSched->TraceConnectWithoutContext(
+                "HarqAllocation",
+                MakeCallback(&NrSlAdaptiveMcsController::AddHarqLcMapping, adaptCtrl));
+        }
 
         // Select adaptation mode and ladder.
         using Mode = NrSlAdaptiveMcsController::Mode;
@@ -332,12 +347,12 @@ main(int argc, char* argv[])
         if (mode == Mode::NackRate)
         {
             // Legacy ladder used in the static-vs-adaptive comparison.
-            adaptCtrl->SetMcsCandidates({14, 10, 7});
+            adaptCtrl->SetMcsCandidates({28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 7, 6, 5, 4, 3, 2, 1, 0});
         }
         else
         {
             // RA-APC explores the full ladder; the ETP search clamps by group demand.
-            adaptCtrl->SetMcsCandidates({28, 24, 21, 17, 14, 10, 7});
+            adaptCtrl->SetMcsCandidates({28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 7, 6, 5, 4, 3, 2, 1, 0});
 
             // Auto-derive payload + pool size from existing config if not given.
             // The "+50 byte" margin covers PDCP/RLC/MAC headers (~20 B) and the
@@ -376,7 +391,15 @@ main(int argc, char* argv[])
             "/ComponentCarrierMapUe/*/NrUeMac/$ns3::NrSlUeMac"
             "/NrSlUeMacHarq/RxHarqFeedback",
             MakeCallback(&NrSlAdaptiveMcsController::OnHarqFeedback, adaptCtrl));
-
+        // Set up adaptation logging callback to record each evaluation
+        adaptCtrl->SetAdaptLogCb([&hooks](double timeMs, double metric, uint8_t prevMcs, uint8_t newMcs,
+                                           const std::string& decision,
+                                           uint32_t ackCount, uint32_t nackCount,
+                                           double windowStartMs, double windowEndMs)
+        {
+            hooks.WriteAdaptLog(timeMs, metric, prevMcs, newMcs, decision,
+                               ackCount, nackCount, windowStartMs, windowEndMs);
+        });
         adaptCtrl->Start();
     }
 

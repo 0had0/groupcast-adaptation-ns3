@@ -212,6 +212,10 @@ V2xKpi::SaveAvrgPir()
                 continue;
             }
             // NS_LOG_UNCOND ("Avrg PIR " << avrgPir);
+            if (it2.second.empty())
+            {
+                continue;
+            }
             PktTxRxData data = it2.second.at(0);
             sqlite3_stmt* stmt;
             std::string cmd = "INSERT INTO " + tableName + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
@@ -249,6 +253,8 @@ V2xKpi::SaveAvrgPir()
 double
 V2xKpi::ComputeAvrgPir(std::string ipTx, std::vector<PktTxRxData> data)
 {
+    if (data.empty())
+        return -1.0;
     uint64_t pirCounter = 0;
     double lastPktRxTime = 0.0;
     double pir = 0.0;
@@ -368,6 +374,11 @@ double
 V2xKpi::ComputeAvrgPrr(std::map<uint32_t, std::vector<PktTxRxData>>::const_iterator& txIt,
                        uint32_t& numNeib)
 {
+    // Check if the vector is empty
+    if (txIt->second.empty())
+    {
+        return -1.0;
+    }
     std::string txIp = txIt->second.at(0).ipAddrs;
     auto txIpPosIt = m_posPerIp.find(txIp);
     Vector txIpPos = txIpPosIt->second;
@@ -377,8 +388,19 @@ V2xKpi::ComputeAvrgPrr(std::map<uint32_t, std::vector<PktTxRxData>>::const_itera
 
     for (const auto& it : m_rxDataMap)
     {
+        // Check if the outer map is empty
+        if (it.second.empty())
+        {
+            continue;
+        }
         // we can read the RX IP from any PktTxRxData of any TX
-        std::string rxIp = it.second.begin()->second.at(0).ipAddrs;
+        auto beginIt = it.second.begin();
+        // Check if the inner vector is empty
+        if (beginIt->second.empty())
+        {
+            continue;
+        }
+        std::string rxIp = beginIt->second.at(0).ipAddrs;
         auto rxIpPosIt = m_posPerIp.find(rxIp);
         Vector rxIpPos = rxIpPosIt->second;
         double txRxDist = CalculateDistance(rxIpPos, txIpPos);

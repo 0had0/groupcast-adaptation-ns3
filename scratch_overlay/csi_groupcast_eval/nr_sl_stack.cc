@@ -16,6 +16,7 @@
 #include "ns3/ipv4-static-routing-helper.h"
 #include "ns3/log.h"
 #include "ns3/lte-ue-rrc.h"
+#include "ns3/nr-amc.h"
 #include "ns3/pointer.h"
 
 namespace ns3
@@ -76,7 +77,6 @@ BuildSlStack(const SlStackParams& p,
 
     BandwidthPartInfoPtrVector allBwps = CcBwpCreator::GetAllBwps({bandSl});
 
-    Packet::EnableChecking();
     Packet::EnablePrinting();
 
     // -----------------------------------------------------------------------
@@ -122,14 +122,38 @@ BuildSlStack(const SlStackParams& p,
     ctx.sl->SetEpcHelper(ctx.epc);
     ctx.sl->SetSlErrorModel("ns3::NrEesmIrT1");
     ctx.sl->SetUeSlAmcAttribute("AmcModel", EnumValue(NrAmc::ErrorModel));
-    // NrSlAdaptiveMcsScheduler is a drop-in replacement: identical to
-    // NrSlUeMacSchedulerFixedMcs but exposes SetCurrentMcs() so the
-    // adaptive controller can update the MCS at runtime via the protected
-    // DoNrSlAllocation override (no contrib modifications needed).
-    ctx.sl->SetNrSlSchedulerTypeId(NrSlAdaptiveMcsScheduler::GetTypeId());
+    // Set default scheduler for all nodes: NrSlUeMacSchedulerFixedMcs
+    ctx.sl->SetNrSlSchedulerTypeId(NrSlUeMacSchedulerFixedMcs::GetTypeId());
     ctx.sl->SetUeSlSchedulerAttribute("Mcs", UintegerValue(p.mcs));
     ctx.sl->PrepareUeForSidelink(ctx.ueNetDev, bwpIdContainer);
     ctx.stream += ctx.sl->AssignStreams(ctx.ueNetDev, ctx.stream);
+
+    // -----------------------------------------------------------------------
+    // 6b. (Optional) Replace scheduler on TX node (node 0) with adaptive scheduler.
+    // -----------------------------------------------------------------------
+    // Skipped when p.adaptiveMcs == false so that fixed-MCS sweeps honour --mcs.
+    if (p.adaptiveMcs)
+    {
+    Ptr<Node> txNode = nodes.Get(0);
+    auto txDev = txNode->GetDevice(0)->GetObject<NrUeNetDevice>();
+    if (txDev)
+    {
+        auto nrSlMac = txDev->GetMac(0)->GetObject<NrSlUeMac>();
+        if (nrSlMac)
+        {
+            // Create adaptive scheduler instance
+            Ptr<NrSlAdaptiveMcsScheduler> adaptSched = CreateObject<NrSlAdaptiveMcsScheduler>();
+            adaptSched->SetNrSlUeMac(nrSlMac);  // Wire m_ueMac so GetMacHarq() works
+            Ptr<NrAmc> slAmc = CreateObject<NrAmc>();
+            slAmc->SetAttribute("AmcModel", EnumValue(NrAmc::ErrorModel));
+            adaptSched->InstallAmc(slAmc); // Wire AMC so CalculateTbSize() works
+            adaptSched->SetAttribute("Mcs", UintegerValue(p.mcs));
+            // Replace the scheduler in the MAC
+            nrSlMac->SetAttribute("NrSlUeMacScheduler", PointerValue(adaptSched));
+            NS_LOG_INFO("Replaced scheduler on TX node 0 with NrSlAdaptiveMcsScheduler");
+        }
+    }
+    } // end if (p.adaptiveMcs)
 
     // -----------------------------------------------------------------------
     // 7. Resource pool: slBitmap "111111000111" (9/12 subframes for SL).
@@ -143,7 +167,30 @@ BuildSlStack(const SlStackParams& p,
     poolFactory->SetSlFreqResourcePscch(10);
     poolFactory->SetSlSubchannelSize(p.bwPRBs);
     poolFactory->SetSlMaxNumPerReserve(3);
-    std::list<uint16_t> rriList = {0, 20, 50, 100};
+    // Build the allowed-RRI list.
+    // The ns-3 NrSlCommResourcePoolFactory switch only recognises:
+    //   0 (DG sentinel)
+    //   10, 20, ..., 100 ms  (multiples of 10)
+    //   150, 200, ..., 1000 ms  (multiples of 50)
+    // Any other value triggers NS_FATAL_ERROR at runtime.
+    // Default = advertise the complete supported set so every flow RRI is valid.
+    // Callers may supply a smaller override via SlStackParams::rriList.
+    std::list<uint16_t> rriList;
+    if (!p.rriList.empty())
+    {
+        rriList = p.rriList;
+    }
+    else
+    {
+        rriList.push_back(0);            // dynamic-grant sentinel
+        for (uint16_t r = 10; r <= 100; r += 10)
+            rriList.push_back(r);        // 10, 20, ..., 100
+        for (uint16_t r = 150; r <= 1000; r += 50)
+        {
+            if (r == 250) continue;      // LteRrcSap::GetSlResoResvPrdValue missing MS250
+            rriList.push_back(r);        // 150, 200, 300, ..., 1000
+        }
+    }
     poolFactory->SetSlResourceReservePeriodList(rriList);
     poolFactory->SetSlPsfchPeriod(p.psfchPeriod);
     poolFactory->SetSlMinTimeGapPsfch(3);

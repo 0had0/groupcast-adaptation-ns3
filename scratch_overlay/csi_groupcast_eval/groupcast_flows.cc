@@ -97,6 +97,21 @@ ParseBool(const std::string& v, bool& out)
 
 } // namespace
 
+Time
+DefaultRriForTrafficClass(TrafficClass tc)
+{
+    switch (tc)
+    {
+        case TrafficClass::Periodic1:  return MilliSeconds(50);
+        case TrafficClass::Periodic2:  return MilliSeconds(10); // 5ms unsupported by pool-factory enum
+        case TrafficClass::Periodic3:  return MilliSeconds(10);
+        case TrafficClass::Aperiodic1: return MilliSeconds(0);
+        case TrafficClass::Aperiodic2: return MilliSeconds(0);
+        case TrafficClass::OnOffConstant:
+        default:                       return MilliSeconds(100);
+    }
+}
+
 std::vector<FlowDef>
 ParseFlowsSpec(const std::string& spec)
 {
@@ -115,7 +130,7 @@ ParseFlowsSpec(const std::string& spec)
         FlowDef fd{};
         fd.port = 0; // sentinel: auto-assign if still 0 after parse
         fd.priority = 3;
-        fd.rri = MilliSeconds(100);
+        fd.rri = MilliSeconds(100); // fallback; overridden by traffic= default or explicit rri_ms
         fd.pdb = Time(0); // sentinel: default to rri after parse
         fd.dynamic = false;
         fd.rateKbps = 100.0;
@@ -124,7 +139,8 @@ ParseFlowsSpec(const std::string& spec)
         fd.startTime = Time(0); // sentinel: use bearerActivation default
         fd.stopTime = Time(0);  // sentinel: appStart + simTime
 
-        bool pdbSet = false;
+        bool pdbSet      = false;
+        bool rriExplicit = false;  // true once rri_ms=<n> appears in the spec
 
         for (const std::string& kv : Split(flowSpec, ';'))
         {
@@ -167,12 +183,22 @@ ParseFlowsSpec(const std::string& spec)
                 }
                 else if (key == "rri_ms")
                 {
-                    double r = std::stod(val);
-                    if (!(r > 0.0))
+                    auto r = static_cast<uint32_t>(std::stoul(val));
+                    // 0 = DG sentinel; otherwise must be in the set that
+                    // NrSlCommResourcePoolFactory accepts:
+                    //   multiples of 10 in [10,100] or multiples of 50 in [150,1000].
+                    // 250ms excluded: LteRrcSap::GetSlResoResvPrdValue has no MS250 case.
+                    bool ok = (r == 0) ||
+                              (r >= 10  && r <= 100  && r % 10 == 0) ||
+                              (r >= 150 && r <= 1000 && r % 50 == 0 && r != 250);
+                    if (!ok)
                     {
-                        throw std::runtime_error("rri_ms must be > 0: " + val);
+                        throw std::runtime_error(
+                            "rri_ms must be 0, a multiple of 10 in [10,100], "
+                            "or a multiple of 50 in [150,1000] (250 excluded): " + val);
                     }
-                    fd.rri = MilliSeconds(static_cast<int64_t>(r));
+                    fd.rri      = MilliSeconds(static_cast<int64_t>(r));
+                    rriExplicit = true;
                 }
                 else if (key == "pdb_ms")
                 {
@@ -304,9 +330,16 @@ ParseFlowsSpec(const std::string& spec)
         {
             fd.port = static_cast<uint16_t>(8000 + flows.size() + 1);
         }
+        // RRI precedence: explicit rri_ms> per-class default> 100 ms fallback.
+        if (!rriExplicit && fd.trafficClass != TrafficClass::OnOffConstant)
+        {
+            fd.rri = DefaultRriForTrafficClass(fd.trafficClass);
+        }
         if (!pdbSet)
         {
-            fd.pdb = fd.rri;
+            // pdb defaults to rri, but rri=0 (dynamic) would crash V2xKpi /
+            // delay-budget logic — fall back to the historical 100 ms.
+            fd.pdb = (fd.rri > Time(0)) ? fd.rri : MilliSeconds(100);
         }
         if (!seenPorts.insert(fd.port).second)
         {
@@ -355,7 +388,9 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                       bool harqEnabledDefault,
                       int64_t& stream)
 {
-    const uint32_t dstL2Id = 254; // groupcast destination L2 ID per 3GPP TS 38.321
+    // groupcast destination L2 ID per 3GPP TS 38.321 (default 254). Each
+    // FlowDef may override this via fd.dstL2Id to create independent groupcast
+    // links from the same TX UE — see scratch_overlay/dual_groupcast_eval/.
     Ipv4Address groupAddr("225.63.63.1");
     const Time bearerActivation = Seconds(2.0);
 
@@ -376,8 +411,8 @@ InstallGroupcastFlows(const NodeContainer& nodes,
             (fd.harqOverride < 0) ? harqEnabledDefault : (fd.harqOverride == 1);
 
         SidelinkInfo slInfo;
-        slInfo.m_castType = SidelinkInfo::CastType::Groupcast;
-        slInfo.m_dstL2Id = dstL2Id;
+        slInfo.m_castType = (harqEnabled) ? SidelinkInfo::CastType::Groupcast : SidelinkInfo::CastType::Broadcast;
+        slInfo.m_dstL2Id = fd.dstL2Id;
         slInfo.m_rri = fd.rri;
         slInfo.m_dynamic = fd.dynamic;
         slInfo.m_pdb = fd.pdb;
@@ -403,6 +438,21 @@ InstallGroupcastFlows(const NodeContainer& nodes,
         }
         const std::set<uint32_t> txSet(fd.txNodes.begin(), fd.txNodes.end());
         const bool allTx = txSet.empty();
+
+        // Validate rx_nodes IDs and build receive-set. Empty rxNodes preserves
+        // today's behaviour (PacketSink on every UE so all nodes receive).
+        for (uint32_t id : fd.rxNodes)
+        {
+            if (id >= nodes.GetN())
+            {
+                std::ostringstream os;
+                os << "flow '" << fd.label << "': rx_nodes id " << id
+                   << " >= numUEs (" << nodes.GetN() << ")";
+                throw std::runtime_error(os.str());
+            }
+        }
+        const std::set<uint32_t> rxSet(fd.rxNodes.begin(), fd.rxNodes.end());
+        const bool allRx = rxSet.empty();
 
         // Validate start_ms (must be >= bearerActivation) and resolve it.
         if (fd.startTime > Time(0) && fd.startTime < bearerActivation)
@@ -437,20 +487,20 @@ InstallGroupcastFlows(const NodeContainer& nodes,
         // CustomTrafficHelper drives one of five 3GPP-V2X-style traffic modes
         // (periodic1..3, aperiodic1..2) — packet size and inter-arrival are
         // determined by the mode, so rateKbps / rri_ms become informational.
-        std::unique_ptr<ApplicationHelper> client;
+        ApplicationHelper* client = nullptr;
         if (isOnOff)
         {
-            auto h = std::make_unique<OnOffHelper>("ns3::UdpSocketFactory", dest);
+            OnOffHelper* h = new OnOffHelper("ns3::UdpSocketFactory", dest);
             h->SetAttribute("EnableSeqTsSizeHeader", BooleanValue(true));
             h->SetConstantRate(DataRate(rateStr), pktSize);
-            client = std::move(h);
+            client = h;
         }
         else
         {
-            auto h = std::make_unique<CustomTrafficHelper>("ns3::UdpSocketFactory", dest);
+            CustomTrafficHelper* h = new CustomTrafficHelper("ns3::UdpSocketFactory", dest);
             // TrafficClass enum values 1..5 map to CustomTrafficApplication modes 0..4.
             h->SetTrafficMode(static_cast<int>(fd.trafficClass) - 1);
-            client = std::move(h);
+            client = h;
             NS_LOG_INFO("Flow '" << fd.label << "' uses CustomTraffic mode "
                         << (static_cast<int>(fd.trafficClass) - 1)
                         << " — rate_kbps/rri_ms are informational (ignored)");
@@ -491,10 +541,15 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                 flowClients.Add(c);
             }
 
-            // PacketSink RX app: always on every UE so all nodes receive.
-            ApplicationContainer s = sink.Install(nodes.Get(i));
-            s.Get(0)->SetStartTime(Seconds(0.0));
-            flowServers.Add(s);
+            // PacketSink RX app: by default on every UE so all nodes receive.
+            // When fd.rxNodes is non-empty (split groupcast), only those nodes
+            // get a sink — partitioning the application-layer receiver set.
+            if (allRx || rxSet.count(i))
+            {
+                ApplicationContainer s = sink.Install(nodes.Get(i));
+                s.Get(0)->SetStartTime(Seconds(0.0));
+                flowServers.Add(s);
+            }
         }
 
         result.defs.push_back(fd);
@@ -513,14 +568,31 @@ InstallGroupcastFlows(const NodeContainer& nodes,
             case TrafficClass::Aperiodic2: tcName = "aperiodic2"; break;
             default: break;
         }
+        std::ostringstream rxNodesStr;
+        if (allRx)
+        {
+            rxNodesStr << "all";
+        }
+        else
+        {
+            bool first = true;
+            for (uint32_t id : fd.rxNodes)
+            {
+                if (!first) rxNodesStr << ":";
+                rxNodesStr << id;
+                first = false;
+            }
+        }
         NS_LOG_INFO("Flow " << result.defs.size() << " (" << fd.label << "): port=" << fd.port
+                            << " dstL2Id=" << fd.dstL2Id
                             << " prio=" << +fd.priority
                             << " rri=" << fd.rri.GetMilliSeconds() << "ms"
                             << " pdb=" << fd.pdb.GetMilliSeconds() << "ms"
                             << " traffic=" << tcName
                             << (isOnOff ? std::string(" pktSize=") + std::to_string(pktSize) + "B rate=" + rateStr : "")
                             << (fd.dynamic ? " DG" : " SPS")
-                            << " harq=" << (harqEnabled ? 1 : 0));
+                            << " harq=" << (harqEnabled ? 1 : 0)
+                            << " rxNodes=" << rxNodesStr.str());
     }
 
     return result;

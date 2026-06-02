@@ -16,6 +16,7 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <cctype>
 
 namespace ns3
 {
@@ -53,13 +54,26 @@ InstallMobilityFromTrace(const MobConfig& cfg)
     }
 
     std::string line;
-    std::getline(f, line); // skip header
 
     uint32_t rows = 0;
     while (std::getline(f, line))
     {
         if (line.empty() || line[0] == '#')
             continue;
+
+        // skip header rows (first non-comment line may be a header like
+        // "time,node_id,x,y,speed") — detect by checking the first
+        // non-space character and ensuring it looks numeric.
+        auto pos = line.find_first_not_of(" \t");
+        if (pos == std::string::npos)
+            continue;
+        char c = line[pos];
+        if (!(std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '.'))
+        {
+            NS_LOG_WARN("mobility trace: skipping header or malformed row: " << line);
+            continue;
+        }
+
         std::istringstream ss(line);
         std::string field;
         double t; uint32_t nid; double x, y, spd;

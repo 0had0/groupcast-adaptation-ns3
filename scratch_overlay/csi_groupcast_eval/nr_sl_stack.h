@@ -18,6 +18,7 @@
 #include "ns3/point-to-point-epc-helper.h"
 
 #include <cstdint>
+#include <list>
 
 namespace ns3
 {
@@ -32,6 +33,12 @@ struct SlStackParams
     uint16_t psfchPeriod{0};
     bool     shadowingEnabled{true};
     BandwidthPartInfo::Scenario scenario{BandwidthPartInfo::V2V_Urban};
+    // When true (default), TX node 0 gets NrSlAdaptiveMcsScheduler.
+    // Set false for fixed-MCS experiments so --mcs is honoured on the TX node.
+    bool adaptiveMcs{true};
+    // Allowed RRI values (ms) advertised in the resource pool.
+    // Empty = use the full NR-V2X set: {0} ∪ {1..99} ∪ {100,200,...,1000}.
+    std::list<uint16_t> rriList{};
 };
 
 struct SlStackCtx

@@ -20,10 +20,15 @@
 // Per-RX p_i(m) is estimated from a sigmoid around the 10%-BLER SINR threshold
 // for MCS m, using the P5 (worst-slot) SINR from the per-RX SINR window.
 //
+// Per-flow MCS adaptation:
+//   The controller can now track and adapt MCS per flow (identified by LC ID)
+//   instead of just per destination. This allows different flows to have
+//   different MCS values based on their individual feedback.
+//
 // Scheduler interaction (timing-correct):
-//   SetCurrentMcs() on the scheduler now eagerly pushes the new MCS into
-//   every dstInfo it has ever seen — so the next LCP sizing loop picks the
-//   right N_subch for the new MCS.
+//   SetFlowMcs() on the scheduler now sets MCS for a specific flow (dstL2Id, lcId).
+//   SetCurrentMcs() is still available for backward compatibility (sets MCS for
+//   all flows of a destination).
 
 #include "nr-sl-adaptive-mcs-scheduler.h"
 
@@ -35,6 +40,7 @@
 #include <cmath>
 #include <deque>
 #include <map>
+#include <unordered_set>
 #include <vector>
 
 namespace ns3
@@ -94,12 +100,50 @@ class NrSlAdaptiveMcsController : public Object
     // BLER soft-decision steepness around threshold (1/dB). Default 1.0.
     void SetBlerSlope(double s)      { m_blerSlope = s; }
 
+    // Per-flow adaptation configuration
+    // Enable per-flow MCS adaptation (default: false for backward compatibility)
+    void SetPerFlowAdaptation(bool enable) { m_perFlow = enable; }
+
     // ── Runtime ──────────────────────────────────────────────────────────
+
+    // Add a mapping from HARQ process ID to LC ID
+    // This is called by the scheduler's HarqAllocation trace
+    void AddHarqLcMapping(uint8_t harqId, uint32_t dstL2Id, const std::unordered_set<uint8_t>& lcIds)
+    {
+        for (uint8_t lcId : lcIds)
+        {
+            m_harqProcessLcMap[harqId].insert(lcId);
+        }
+    }
 
     void OnHarqFeedback(std::string /*context*/, const SlHarqInfo& info)
     {
         double nowMs = Simulator::Now().GetMilliSeconds();
-        m_wins[info.m_rnti].push({nowMs, info.IsReceivedOk()});
+
+        // If per-flow adaptation is enabled, track feedback per flow (LC ID)
+        if (m_perFlow)
+        {
+            // Look up the LC IDs associated with this HARQ process ID
+            auto it = m_harqProcessLcMap.find(info.m_harqProcessId);
+            if (it != m_harqProcessLcMap.end())
+            {
+                // Track feedback for each LC ID in this HARQ process
+                for (uint8_t lcId : it->second)
+                {
+                    m_winsPerFlow[info.m_rnti][lcId].push({nowMs, info.IsReceivedOk()});
+                }
+            }
+            else
+            {
+                // Fallback: track per destination if LC mapping not found
+                m_wins[info.m_rnti].push({nowMs, info.IsReceivedOk()});
+            }
+        }
+        else
+        {
+            // Legacy per-destination adaptation
+            m_wins[info.m_rnti].push({nowMs, info.IsReceivedOk()});
+        }
     }
 
     // Fed from kpi_hooks PSSCH-RX callback. sinrLin is the linear average
@@ -109,6 +153,10 @@ class NrSlAdaptiveMcsController : public Object
         double nowMs = Simulator::Now().GetMilliSeconds();
         m_sinrWins[rnti].push({nowMs, sinrDb});
     }
+
+    // Callback for logging adaptation decisions: timeMs, metric, prevMcs, newMcs, decision, ackCount, nackCount, windowStartMs, windowEndMs
+    using AdaptLogCb = std::function<void(double, double, uint8_t, uint8_t, const std::string&, uint32_t, uint32_t, double, double)>;
+    void SetAdaptLogCb(AdaptLogCb cb) { m_adaptLogCb = cb; }
 
     void Start()
     {
@@ -254,45 +302,110 @@ class NrSlAdaptiveMcsController : public Object
     {
         double nowMs = Simulator::Now().GetMilliSeconds();
 
-        double sum   = 0.0;
-        int    count = 0;
-        for (auto& [rnti, w] : m_wins)
+        if (m_perFlow)
         {
-            w.trim(nowMs, m_windowMs);
-            uint32_t a{0}, n{0};
-            for (auto& f : w.q) (f.ack ? a : n) += 1;
-            if (a + n == 0) continue;
-            sum   += double(n) / (a + n);
-            count += 1;
-        }
-        if (count == 0) return;
-        double metric = sum / count;
-
-        uint8_t prev = m_currentMcs;
-        if (metric > m_downThr)
-        {
-            int idx = mcsIdx(m_currentMcs);
-            if (idx + 1 < (int)m_mcs.size())
-                m_currentMcs = m_mcs[idx + 1];
-            m_upCount = 0;
-        }
-        else if (metric < m_upThr)
-        {
-            if (++m_upCount >= m_upHyst)
+            // Per-flow adaptation: evaluate each flow separately
+            for (auto& [rnti, lcMap] : m_winsPerFlow)
             {
-                int idx = mcsIdx(m_currentMcs);
-                if (idx > 0)
-                    m_currentMcs = m_mcs[idx - 1];
-                m_upCount = 0;
+                for (auto& [lcId, w] : lcMap)
+                {
+                    w.trim(nowMs, m_windowMs);
+                    uint32_t a{0}, n{0};
+                    for (auto& f : w.q) (f.ack ? a : n) += 1;
+                    if (a + n == 0) continue;
+
+                    double metric = double(n) / (a + n);
+                    uint8_t prev = m_currentMcs; // TODO: track per-flow MCS state
+                    uint8_t flowMcs = m_currentMcs;
+
+                    if (metric > m_downThr)
+                    {
+                        int idx = mcsIdx(flowMcs);
+                        if (idx + 1 < (int)m_mcs.size())
+                            flowMcs = m_mcs[idx + 1];
+                    }
+                    else if (metric < m_upThr)
+                    {
+                        int idx = mcsIdx(flowMcs);
+                        if (idx > 0)
+                            flowMcs = m_mcs[idx - 1];
+                    }
+
+                    if (flowMcs != prev && m_sched)
+                    {
+                        // Set per-flow MCS (dstL2Id=254 for groupcast)
+                        m_sched->SetFlowMcs(254, lcId, flowMcs);
+                    }
+
+                    // Log the adaptation decision
+                    if (m_adaptLogCb)
+                    {
+                        // NS_LOG_INFO("adaptLogCb: EvaluateNackRate per-flow callback at " << nowMs << "ms lcId=" << +lcId << " metric=" << metric << " prev=" << prev << " new=" << flowMcs);
+                        double windowStart = nowMs - m_windowMs;
+                        std::string decision = flowMcs > prev ? "up" : (flowMcs < prev ? "down" : "same");
+                        m_adaptLogCb(nowMs, metric, prev, flowMcs, decision, a, n, windowStart, nowMs);
+                    }
+                }
             }
         }
         else
         {
-            m_upCount = 0;
-        }
+            // Legacy per-destination adaptation
+            double sum   = 0.0;
+            int    count = 0;
+            for (auto& [rnti, w] : m_wins)
+            {
+                w.trim(nowMs, m_windowMs);
+                uint32_t a{0}, n{0};
+                for (auto& f : w.q) (f.ack ? a : n) += 1;
+                if (a + n == 0) continue;
+                sum   += double(n) / (a + n);
+                count += 1;
+            }
+            if (count == 0) return;
+            double metric = sum / count;
 
-        if (m_currentMcs != prev && m_sched)
-            m_sched->SetCurrentMcs(m_currentMcs);
+            uint8_t prev = m_currentMcs;
+            if (metric > m_downThr)
+            {
+                int idx = mcsIdx(m_currentMcs);
+                if (idx + 1 < (int)m_mcs.size())
+                    m_currentMcs = m_mcs[idx + 1];
+                m_upCount = 0;
+            }
+            else if (metric < m_upThr)
+            {
+                if (++m_upCount >= m_upHyst)
+                {
+                    int idx = mcsIdx(m_currentMcs);
+                    if (idx > 0)
+                        m_currentMcs = m_mcs[idx - 1];
+                    m_upCount = 0;
+                }
+            }
+            else
+            {
+                m_upCount = 0;
+            }
+
+            if (m_currentMcs != prev && m_sched)
+                m_sched->SetCurrentMcs(m_currentMcs);
+
+            // Log the adaptation decision
+            if (m_adaptLogCb)
+            {
+                // NS_LOG_INFO("adaptLogCb: EvaluateNackRate callback at " << nowMs << "ms metric=" << metric << " prev=" << prev << " new=" << m_currentMcs);
+                double windowStart = nowMs - m_windowMs;
+                uint32_t ackCount = 0, nackCount = 0;
+                for (auto& [rnti, w] : m_wins)
+                {
+                    for (auto& f : w.q)
+                        (f.ack ? ackCount : nackCount)++;
+                }
+                std::string decision = m_currentMcs > prev ? "up" : (m_currentMcs < prev ? "down" : "same");
+                m_adaptLogCb(nowMs, metric, prev, m_currentMcs, decision, ackCount, nackCount, windowStart, nowMs);
+            }
+        }
     }
 
     void EvaluateRaApc()
@@ -370,10 +483,20 @@ class NrSlAdaptiveMcsController : public Object
 
         if (bestMcs < 0) return;
         const uint8_t newMcs = static_cast<uint8_t>(bestMcs);
+        uint8_t prev = m_currentMcs;
         if (newMcs != m_currentMcs && m_sched)
         {
             m_currentMcs = newMcs;
             m_sched->SetCurrentMcs(m_currentMcs);
+        }
+
+        // Log the adaptation decision
+        if (m_adaptLogCb)
+        {
+            // NS_LOG_INFO("adaptLogCb: EvaluateRaApc callback at " << nowMs << "ms metric=" << bestEtp << " prev=" << prev << " new=" << m_currentMcs);
+            double windowStart = nowMs - m_windowMs;
+            std::string decision = m_currentMcs > prev ? "up" : (m_currentMcs < prev ? "down" : "same");
+            m_adaptLogCb(nowMs, bestEtp, prev, m_currentMcs, decision, 0, 0, windowStart, nowMs);
         }
     }
 
@@ -398,9 +521,19 @@ class NrSlAdaptiveMcsController : public Object
     uint32_t                      m_bwPrbs{10};
     double                        m_blerSlope{1.0};
 
+    // Per-flow adaptation
+    bool                          m_perFlow{false};
+
+    // HARQ process to LC ID mapping for per-flow adaptation
+    std::map<uint8_t, std::unordered_set<uint8_t>> m_harqProcessLcMap;
+
+    // Feedback windows
     std::map<uint16_t, Win<Fb>>   m_wins;
     std::map<uint16_t, Win<Sin>>  m_sinrWins;
+    // Per-flow feedback: RNTI → LC ID → window
+    std::map<uint16_t, std::map<uint8_t, Win<Fb>>> m_winsPerFlow;
+
     mutable std::map<uint8_t, uint32_t> m_rbLenCache;
-};
+    AdaptLogCb m_adaptLogCb{nullptr};};
 
 } // namespace ns3

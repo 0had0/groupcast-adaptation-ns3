@@ -72,6 +72,19 @@ struct FlowDef
     Time startTime;                // Time(0) sentinel = use bearerActivation default
     Time stopTime;                 // Time(0) sentinel = appStart + simTime (default)
     TrafficClass trafficClass{TrafficClass::OnOffConstant};
+
+    // -- Split-groupcast extensions --
+    //   dstL2Id : NR-SL groupcast L2 destination ID. Default 254 preserves
+    //             today's single-groupcast behaviour. Use different values
+    //             (e.g. 254 / 255) for multiple parallel groupcasts from the
+    //             same TX UE — see scratch_overlay/dual_groupcast_eval/.
+    //   rxNodes : list of UE node IDs that install the PacketSink RX app
+    //             for this flow. Empty (default) preserves today's behaviour
+    //             of installing the sink on every UE so all nodes receive.
+    //             When non-empty, only the listed nodes report RX packets in
+    //             pktTxRx, effectively partitioning the receiver set per flow.
+    uint32_t              dstL2Id{254};
+    std::vector<uint32_t> rxNodes{};
 };
 
 // Returns the canonical 3-flow mix used when --flows is empty.
@@ -79,7 +92,20 @@ std::vector<FlowDef> DefaultGroupcastFlows();
 
 // Parses the --flows CLI string into a validated vector. Throws
 // std::runtime_error with a descriptive message on malformed input.
+//
+// RRI precedence inside a single flow:
+//   1. explicit rri_ms=<n>            (always wins)
+//   2. DefaultRriForTrafficClass(tc)  (applied when traffic=<tc> is set
+//                                      and rri_ms was not explicit)
+//   3. 100 ms                         (fallback when neither is set)
 std::vector<FlowDef> ParseFlowsSpec(const std::string& spec);
+
+// Per-TrafficClass default Resource Reservation Interval. Returns Time(0)
+// for traffic classes that should use dynamic-grant scheduling (i.e. no
+// periodic reservation). The 100 ms fallback for OnOffConstant matches the
+// historical behaviour. Callers that pick a sentinel of 0 ms with SPS
+// scheduling must explicitly flip the flow to dynamic mode.
+Time DefaultRriForTrafficClass(TrafficClass tc);
 
 // Per-flow timing/handle information returned after installation.
 struct FlowResult
