@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nodes>
+    <node id="hw_start"  x="0.0"     y="0.0" type="priority"/>
+    <node id="ramp1_jct" x="1500.0"  y="0.0" type="priority"/>
+    <node id="ramp2_jct" x="4000.0"  y="0.0" type="priority"/>
+    <node id="ramp3_jct" x="7000.0"  y="0.0" type="priority"/>
+    <node id="ramp4_jct" x="10500.0" y="0.0" type="priority"/>
+    <node id="ramp5_jct" x="14000.0" y="0.0" type="priority"/>
+    <node id="hw_end"    x="18000.0" y="0.0" type="priority"/>
+</nodes>

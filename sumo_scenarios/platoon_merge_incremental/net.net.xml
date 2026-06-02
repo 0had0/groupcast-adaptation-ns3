@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-06-02T13:00:14.570014+01:00 by Eclipse SUMO netconvert v1_26_0+1305-4fc6bb35f49
+<netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+
+    <input>
+        <node-files value="nodes.nod.xml"/>
+        <edge-files value="edges.edg.xml"/>
+    </input>
+
+    <output>
+        <output-file value="net.net.xml"/>
+    </output>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+    </junctions>
+
+</netconvertConfiguration>
+-->
+
+<net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+
+    <location netOffset="0.00,0.00" convBoundary="0.00,0.00,18000.00,0.00" origBoundary="0.00,0.00,18000.00,0.00" projParameter="!"/>
+
+    <edge id=":ramp1_jct_0" function="internal">
+        <lane id=":ramp1_jct_0_0" index="0" speed="40.00" length="0.10" shape="1500.00,-1.60 1500.00,-1.60"/>
+    </edge>
+    <edge id=":ramp2_jct_0" function="internal">
+        <lane id=":ramp2_jct_0_0" index="0" speed="40.00" length="0.10" shape="4000.00,-1.60 4000.00,-1.60"/>
+    </edge>
+    <edge id=":ramp3_jct_0" function="internal">
+        <lane id=":ramp3_jct_0_0" index="0" speed="40.00" length="0.10" shape="7000.00,-1.60 7000.00,-1.60"/>
+    </edge>
+    <edge id=":ramp4_jct_0" function="internal">
+        <lane id=":ramp4_jct_0_0" index="0" speed="40.00" length="0.10" shape="10500.00,-1.60 10500.00,-1.60"/>
+    </edge>
+    <edge id=":ramp5_jct_0" function="internal">
+        <lane id=":ramp5_jct_0_0" index="0" speed="40.00" length="0.10" shape="14000.00,-1.60 14000.00,-1.60"/>
+    </edge>
+
+    <edge id="hw_0_1" from="hw_start" to="ramp1_jct" priority="1">
+        <lane id="hw_0_1_0" index="0" speed="40.00" length="1500.00" shape="0.00,-1.60 1500.00,-1.60"/>
+    </edge>
+    <edge id="hw_1_2" from="ramp1_jct" to="ramp2_jct" priority="1">
+        <lane id="hw_1_2_0" index="0" speed="40.00" length="2500.00" shape="1500.00,-1.60 4000.00,-1.60"/>
+    </edge>
+    <edge id="hw_2_3" from="ramp2_jct" to="ramp3_jct" priority="1">
+        <lane id="hw_2_3_0" index="0" speed="40.00" length="3000.00" shape="4000.00,-1.60 7000.00,-1.60"/>
+    </edge>
+    <edge id="hw_3_4" from="ramp3_jct" to="ramp4_jct" priority="1">
+        <lane id="hw_3_4_0" index="0" speed="40.00" length="3500.00" shape="7000.00,-1.60 10500.00,-1.60"/>
+    </edge>
+    <edge id="hw_4_5" from="ramp4_jct" to="ramp5_jct" priority="1">
+        <lane id="hw_4_5_0" index="0" speed="40.00" length="3500.00" shape="10500.00,-1.60 14000.00,-1.60"/>
+    </edge>
+    <edge id="hw_5_e" from="ramp5_jct" to="hw_end" priority="1">
+        <lane id="hw_5_e_0" index="0" speed="40.00" length="4000.00" shape="14000.00,-1.60 18000.00,-1.60"/>
+    </edge>
+
+    <junction id="hw_end" type="dead_end" x="18000.00" y="0.00" incLanes="hw_5_e_0" intLanes="" shape="18000.00,-3.20 18000.00,0.00"/>
+    <junction id="hw_start" type="dead_end" x="0.00" y="0.00" incLanes="" intLanes="" shape="0.00,0.00 0.00,-3.20"/>
+    <junction id="ramp1_jct" type="priority" x="1500.00" y="0.00" incLanes="hw_0_1_0" intLanes=":ramp1_jct_0_0" shape="1500.00,0.00 1500.00,-3.20 1500.00,0.00">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+    <junction id="ramp2_jct" type="priority" x="4000.00" y="0.00" incLanes="hw_1_2_0" intLanes=":ramp2_jct_0_0" shape="4000.00,0.00 4000.00,-3.20 4000.00,0.00">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+    <junction id="ramp3_jct" type="priority" x="7000.00" y="0.00" incLanes="hw_2_3_0" intLanes=":ramp3_jct_0_0" shape="7000.00,0.00 7000.00,-3.20 7000.00,0.00">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+    <junction id="ramp4_jct" type="priority" x="10500.00" y="0.00" incLanes="hw_3_4_0" intLanes=":ramp4_jct_0_0" shape="10500.00,0.00 10500.00,-3.20 10500.00,0.00">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+    <junction id="ramp5_jct" type="priority" x="14000.00" y="0.00" incLanes="hw_4_5_0" intLanes=":ramp5_jct_0_0" shape="14000.00,0.00 14000.00,-3.20 14000.00,0.00">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+
+    <connection from="hw_0_1" to="hw_1_2" fromLane="0" toLane="0" via=":ramp1_jct_0_0" dir="s" state="M"/>
+    <connection from="hw_1_2" to="hw_2_3" fromLane="0" toLane="0" via=":ramp2_jct_0_0" dir="s" state="M"/>
+    <connection from="hw_2_3" to="hw_3_4" fromLane="0" toLane="0" via=":ramp3_jct_0_0" dir="s" state="M"/>
+    <connection from="hw_3_4" to="hw_4_5" fromLane="0" toLane="0" via=":ramp4_jct_0_0" dir="s" state="M"/>
+    <connection from="hw_4_5" to="hw_5_e" fromLane="0" toLane="0" via=":ramp5_jct_0_0" dir="s" state="M"/>
+
+    <connection from=":ramp1_jct_0" to="hw_1_2" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ramp2_jct_0" to="hw_2_3" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ramp3_jct_0" to="hw_3_4" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ramp4_jct_0" to="hw_4_5" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ramp5_jct_0" to="hw_5_e" fromLane="0" toLane="0" dir="s" state="M"/>
+
+</net>

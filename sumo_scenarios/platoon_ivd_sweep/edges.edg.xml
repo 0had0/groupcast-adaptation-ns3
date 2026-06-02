@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edges>
+    <edge id="hw_fwd" from="start" to="end" numLanes="1" speed="40.0" priority="1"/>
+</edges>

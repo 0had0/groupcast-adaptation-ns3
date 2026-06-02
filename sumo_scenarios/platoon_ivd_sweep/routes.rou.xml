@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+    <vType id="car" accel="3.0" decel="6.0" sigma="0.0" length="4.5"
+           width="1.8" minGap="0.5" maxSpeed="40.0" guiShape="passenger"
+           color="0.2,0.6,1.0"/>
+
+    <route id="hw_route" edges="hw_fwd"/>
+
+    <!-- Leader -->
+    <vehicle id="v0" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="500.0" departSpeed="33.333"
+             insertionChecks="none" color="1.0,0.0,0.0"/>
+    <!-- Followers: initial IVD=2m, vehicle length=4.5m → spacing=6.5m -->
+    <vehicle id="v1" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="493.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v2" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="487.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v3" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="480.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v4" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="474.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v5" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="467.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v6" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="461.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v7" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="454.5" departSpeed="33.333"
+             insertionChecks="none"/>
+</routes>

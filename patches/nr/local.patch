@@ -1,37 +1,34 @@
-diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-index 18b4e5a3..cb7e1e95 100644
---- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-+++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-@@ -733,16 +733,17 @@ NrSlUeMacSchedulerFixedMcs::LogicalChannelPrioritization(
-                 nRemainingLcs++;
-             }
-         }
--        if (itlcIdsbyPrio->second.size() == 0)
--        {
--            itlcIdsbyPrio = std::reverse_iterator(lcIdsbyPrio.erase(--itlcIdsbyPrio.base()));
--        }
--
-         if (lowestLcId != std::numeric_limits<uint8_t>::max() && lcIdOfRef == 0)
-         {
-             lcIdOfRef = lowestLcId;
-         }
+diff --git a/model/nr-sl-ue-mac-harq.cc b/model/nr-sl-ue-mac-harq.cc
+index b3ab5262..d1bbf8a9 100644
+--- a/model/nr-sl-ue-mac-harq.cc
++++ b/model/nr-sl-ue-mac-harq.cc
+@@ -197,13 +197,23 @@ NrSlUeMacHarq::AddPacket(uint32_t dstL2Id, uint8_t lcId, uint8_t harqId, Ptr<Pac
+                                    << "; instead belongs to: " << m_pktBuffer.at(harqId).dstL2Id);
+     NS_ASSERT_MSG(m_pktBuffer.at(harqId).pktBurst != nullptr,
+                   " Packet burst not initialized for HARQ id " << +harqId);
+-    if (m_pktBuffer.at(harqId).multiplePdu && m_pktBuffer.at(harqId).pktBurst->GetNPackets() &&
+-        (m_pktBuffer.at(harqId).numTx == m_pktBuffer.at(harqId).maxNumTx))
++    // Flush condition 1: SPS grant exhausted max retransmissions with no HARQ ACK.
++    // Flush condition 2: RLC segmentation produced a second MAC PDU from the same
++    //   LCID for this HARQ process.  The lcidList is a std::set, so inserting the
++    //   same lcId twice would not grow the set while pktBurst would grow — causing
++    //   the size-mismatch assertion below.  Flushing here drops the stale RLC
++    //   segment (already unacknowledged) and starts fresh with the new PDU.
++    bool lcidAlreadyPresent = (m_pktBuffer.at(harqId).pktBurst->GetNPackets() > 0) &&
++                              (m_pktBuffer.at(harqId).lcidList.count(lcId) > 0);
++    if ((m_pktBuffer.at(harqId).multiplePdu && m_pktBuffer.at(harqId).pktBurst->GetNPackets() &&
++         (m_pktBuffer.at(harqId).numTx == m_pktBuffer.at(harqId).maxNumTx)) ||
++        lcidAlreadyPresent)
+     {
+-        // If there is an SPS grant and no HARQ feedback, there is no way
+-        // to clear out the previous TB, so flush it here.
+-        NS_LOG_INFO("Flushing buffer for for dstL2Id " << dstL2Id << " LC ID " << +lcId
+-                                                       << " HARQ ID " << +harqId);
++        NS_LOG_INFO("Flushing buffer for dstL2Id " << dstL2Id << " LC ID " << +lcId
++                                                   << " HARQ ID " << +harqId
++                                                   << (lcidAlreadyPresent
++                                                           ? " (duplicate LCID — RLC segment)"
++                                                           : " (maxNumTx reached)"));
+         FlushHarqBuffer(harqId);
      }
-+    // Erase priority groups that became empty (deferred from above loop to avoid
-+    // reverse-iterator invalidation UB when erasing the begin() entry).
-+    for (auto it = lcIdsbyPrio.begin(); it != lcIdsbyPrio.end();)
-+    {
-+        it = it->second.empty() ? lcIdsbyPrio.erase(it) : std::next(it);
-+    }
-     // If SPS, remove all LCs with RRI different than the lcIdOfRef, and assign re-selection
-     // counters
-     if (!dynamicGrant)
-@@ -1547,7 +1548,8 @@ NrSlUeMacSchedulerFixedMcs::FilterTxOpportunities(const SfnSf& sfn,
-                     for (uint16_t i = 0; i <= cResel; i++)
-                     {
-                         SfnSf candidateSfn =
--                            itTxOppr->sfn.GetFutureSfnSf(i * rri.GetMilliSeconds() * 4);
-+                            itTxOppr->sfn.GetFutureSfnSf(i * rri.GetMilliSeconds() *
-+                                                          (1u << itTxOppr->sfn.GetNumerology()));
-                         if (itGrantAlloc->sfn < candidateSfn)
-                         {
-                             break;
+     NS_LOG_INFO("Adding packet for dstL2Id " << dstL2Id << " LC ID " << +lcId << " HARQ ID "

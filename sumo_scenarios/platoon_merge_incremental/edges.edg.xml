@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edges>
+    <edge id="hw_0_1" from="hw_start"  to="ramp1_jct" numLanes="1" speed="40.0" priority="1"/>
+    <edge id="hw_1_2" from="ramp1_jct" to="ramp2_jct" numLanes="1" speed="40.0" priority="1"/>
+    <edge id="hw_2_3" from="ramp2_jct" to="ramp3_jct" numLanes="1" speed="40.0" priority="1"/>
+    <edge id="hw_3_4" from="ramp3_jct" to="ramp4_jct" numLanes="1" speed="40.0" priority="1"/>
+    <edge id="hw_4_5" from="ramp4_jct" to="ramp5_jct" numLanes="1" speed="40.0" priority="1"/>
+    <edge id="hw_5_e" from="ramp5_jct" to="hw_end"    numLanes="1" speed="40.0" priority="1"/>
+</edges>

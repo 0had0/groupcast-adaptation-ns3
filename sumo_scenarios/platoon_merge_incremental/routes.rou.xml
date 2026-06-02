@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+    <vType id="car" accel="3.0" decel="6.0" sigma="0.0" length="4.5"
+           width="1.8" minGap="0.5" maxSpeed="40.0" guiShape="passenger"
+           color="0.2,0.6,1.0"/>
+    <vType id="joiner" accel="3.0" decel="6.0" sigma="0.0" length="4.5"
+           width="1.8" minGap="0.5" maxSpeed="40.0" guiShape="passenger"
+           color="1.0,0.5,0.0"/>
+
+    <!-- Full highway route (used both by platoon and dynamically-added joiners) -->
+    <route id="hw_route"
+           edges="hw_0_1 hw_1_2 hw_2_3 hw_3_4 hw_4_5 hw_5_e"/>
+
+    <!-- Initial platoon: leader + 7 members, IVD=5m, spacing=9.5m -->
+    <vehicle id="v0" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="300.0" departSpeed="33.333"
+             insertionChecks="none" color="1.0,0.0,0.0"/>
+    <vehicle id="v1" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="290.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v2" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="281.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v3" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="271.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v4" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="262.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v5" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="252.5" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v6" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="243.0" departSpeed="33.333"
+             insertionChecks="none"/>
+    <vehicle id="v7" type="car" route="hw_route"
+             depart="0" departLane="0" departPos="233.5" departSpeed="33.333"
+             insertionChecks="none"/>
+</routes>
