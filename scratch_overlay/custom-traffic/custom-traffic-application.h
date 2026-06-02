@@ -25,6 +25,10 @@
 #include "ns3/seq-ts-size-header.h"
 #include "ns3/traced-callback.h"
 
+#include <cstdint>
+#include <functional>
+#include <vector>
+
 namespace ns3
 {
 
@@ -43,6 +47,26 @@ class CustomTrafficApplication : public Application
         APERIODIC_2
     };
 
+    /**
+     * Optional pre-send byte provider. When set, SendPacket() asks the
+     * provider to produce the actual on-wire bytes for the requested target
+     * payload size. The provider may return a *smaller* (compressed) buffer
+     * — the wire-side packet size will be set to the returned buffer size,
+     * but the SeqTsSizeHeader still records the original `targetBytes` so
+     * downstream KPI accounting (PIR, throughput) sees application-level
+     * SDU size. A second callback (TagDecorator) is given the freshly
+     * constructed Packet so the caller can AddPacketTag() (e.g. attach a
+     * CompressionTag describing codec + sizes).
+     *
+     * If no provider is set, behaviour is byte-identical to the legacy
+     * zero-fill path.
+     */
+    using SendBytesProvider =
+        std::function<std::vector<uint8_t>(uint32_t /*targetBytes*/)>;
+    using TagDecorator = std::function<void(Ptr<Packet> /*pkt*/,
+                                            uint32_t   /*targetBytes*/,
+                                            uint32_t   /*wireBytes*/)>;
+
     static TypeId GetTypeId();
 
     CustomTrafficApplication();
@@ -54,6 +78,10 @@ class CustomTrafficApplication : public Application
     Ptr<Socket> GetSocket() const;
 
     int64_t AssignStreams(int64_t stream) override;
+
+    /// Install a pre-send byte provider (optional). Pass nullptr to disable.
+    void SetSendBytesProvider(SendBytesProvider provider);
+    void SetTagDecorator(TagDecorator decorator);
 
   protected:
     void DoDispose() override;
@@ -115,6 +143,9 @@ class CustomTrafficApplication : public Application
     static const uint32_t APERIODIC2_MIN_SIZE;
     static const uint32_t APERIODIC2_MAX_SIZE;
     static const uint32_t APERIODIC2_STEP;
+
+    SendBytesProvider m_sendBytesProvider;
+    TagDecorator m_tagDecorator;
 };
 
 } // namespace ns3

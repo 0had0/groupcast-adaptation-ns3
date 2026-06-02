@@ -1,0 +1,218 @@
+{
+  "n_rows": 43320,
+  "confusion_soft_rownorm": {
+    "LOS": {
+      "LOS": 0.545,
+      "NLOSv": 0.4775,
+      "NLOS": 0.0
+    },
+    "NLOSv": {
+      "LOS": 0.2737,
+      "NLOSv": 0.2051,
+      "NLOS": 0.0
+    },
+    "NLOS": {
+      "LOS": 0.1813,
+      "NLOSv": 0.3173,
+      "NLOS": 0.0
+    }
+  },
+  "confusion_hard_counts": {
+    "LOS": {
+      "LOS": 5739,
+      "NLOSv": 18249,
+      "NLOS": 0
+    },
+    "NLOSv": {
+      "LOS": 372,
+      "NLOSv": 2816,
+      "NLOS": 0
+    },
+    "NLOS": {
+      "LOS": 2064,
+      "NLOSv": 14080,
+      "NLOS": 0
+    }
+  },
+  "detection": {
+    "tp": 2816,
+    "fp": 372,
+    "fn": 32329,
+    "tn": 7803,
+    "recall": 0.08012519561815336,
+    "false_alarm": 0.045504587155963304,
+    "miss": 0.9198748043818467,
+    "precision": 0.8833124215809285,
+    "f1": 0.14692301672188454,
+    "soft_recall": 0.205145966709347,
+    "soft_false_alarm": 0.2737230581039755
+  },
+  "misclassification_hard": 0.8025161588180979,
+  "misclassification_soft": 0.7307222068328716,
+  "brier_binary": 0.5432392262927055,
+  "brier_multiclass": 1.0200206371306555,
+  "ece": 0.5932008079409049,
+  "calibration": [
+    {
+      "bin": "0.0-0.1",
+      "count": 8728,
+      "mean_pred": 0.023254983959670024,
+      "obs_freq": 0.8590742438130156
+    },
+    {
+      "bin": "0.1-0.2",
+      "count": 10161,
+      "mean_pred": 0.15646496407833876,
+      "obs_freq": 0.9428205885247515
+    },
+    {
+      "bin": "0.2-0.3",
+      "count": 12833,
+      "mean_pred": 0.25217034208680744,
+      "obs_freq": 0.7927998129821554
+    },
+    {
+      "bin": "0.3-0.4",
+      "count": 8059,
+      "mean_pred": 0.3536283037597716,
+      "obs_freq": 0.6645985854324358
+    },
+    {
+      "bin": "0.4-0.5",
+      "count": 3523,
+      "mean_pred": 0.44299801305705366,
+      "obs_freq": 0.7158671586715867
+    },
+    {
+      "bin": "0.5-0.6",
+      "count": 16,
+      "mean_pred": 0.50353125,
+      "obs_freq": 0.9375
+    },
+    {
+      "bin": "0.6-0.7",
+      "count": 0,
+      "mean_pred": NaN,
+      "obs_freq": NaN
+    },
+    {
+      "bin": "0.7-0.8",
+      "count": 0,
+      "mean_pred": NaN,
+      "obs_freq": NaN
+    },
+    {
+      "bin": "0.8-0.9",
+      "count": 0,
+      "mean_pred": NaN,
+      "obs_freq": NaN
+    },
+    {
+      "bin": "0.9-1.0",
+      "count": 0,
+      "mean_pred": NaN,
+      "obs_freq": NaN
+    }
+  ],
+  "pathloss_error_db": {
+    "mae": 7.287194399463868,
+    "rmse": 9.045728119690532,
+    "bias": 2.4967192465587997,
+    "p95_abs": 17.26104999999997
+  },
+  "by_distance": {
+    "0-50": {
+      "n": 11355,
+      "geo_nlosv_frac": 0.5468956406869221,
+      "recall": 0.007246376811594203,
+      "false_alarm": 0.011273080660835762,
+      "mae_db": 6.062088071890797
+    },
+    "50-100": {
+      "n": 9870,
+      "geo_nlosv_frac": 0.9027355623100304,
+      "recall": 0.31099887766554435,
+      "false_alarm": 0.32708333333333334,
+      "mae_db": 4.4166394555657345
+    },
+    "100-150": {
+      "n": 9180,
+      "geo_nlosv_frac": 0.8202614379084967,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "mae_db": 8.225097850802833
+    },
+    "150-200": {
+      "n": 8490,
+      "geo_nlosv_frac": 0.950530035335689,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "mae_db": 10.085732014518257
+    },
+    "200-300": {
+      "n": 4425,
+      "geo_nlosv_frac": 1.0,
+      "recall": 0.0,
+      "false_alarm": NaN,
+      "mae_db": 9.518589113760678
+    }
+  },
+  "by_group": {
+    "V2V_Highway/HIGH": {
+      "n": 4840,
+      "geo_nlosv_frac": 0.9152892561983471,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "brier": 0.6710415385847107,
+      "mae_db": 5.944687584373968
+    },
+    "V2V_Highway/LOW": {
+      "n": 4840,
+      "geo_nlosv_frac": 0.9152892561983471,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "brier": 0.8156708238636364,
+      "mae_db": 6.76490219511157
+    },
+    "V2V_Highway/MEDIUM": {
+      "n": 4840,
+      "geo_nlosv_frac": 0.9152892561983471,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "brier": 0.7329439163739669,
+      "mae_db": 6.140687298047728
+    },
+    "V2V_Urban/HIGH": {
+      "n": 9600,
+      "geo_nlosv_frac": 0.7588541666666667,
+      "recall": 0.30679478380233355,
+      "false_alarm": 0.1408207343412527,
+      "brier": 0.38206995111979164,
+      "mae_db": 8.954423608336562
+    },
+    "V2V_Urban/LOW": {
+      "n": 9600,
+      "geo_nlosv_frac": 0.7588541666666667,
+      "recall": 0.0,
+      "false_alarm": 0.0,
+      "brier": 0.505319258515625,
+      "mae_db": 6.153950896738541
+    },
+    "V2V_Urban/MEDIUM": {
+      "n": 9600,
+      "geo_nlosv_frac": 0.7588541666666667,
+      "recall": 0.07975291695264242,
+      "false_alarm": 0.019870410367170625,
+      "brier": 0.44490109177083337,
+      "mae_db": 8.271408862582584
+    }
+  },
+  "mc_emp_vs_cf_mae": 0.006471144472530008,
+  "conclusion": [
+    "Across 43320 TX-RX link-samples, the geometric (position-exact) model finds 81.1% to be NLOSv. The density-based probabilistic model, choosing its most-likely class, recovers only 8.0% of those (miss rate 92.0%) and raises false NLOSv alarms on 4.6% of the genuinely clear links.",
+    "It misclassifies 80.3% of links outright (hard) and a draw disagrees with the geometric truth 73.1% of the time (soft). Its P(NLOSv) is poorly calibrated against the actual geometry: Brier score 0.543, ECE 0.593.",
+    "This costs 7.3 dB mean absolute pathloss error (bias +2.5 dB, p95 17.3 dB) versus the position-exact model.",
+    "Because NLOSv blockage is governed by where the platoon vehicles actually are -- not by a global density tier -- no single density setting reproduces the per-link geometric verdict. For V2X groupcast adaptation, which depends on accurate per-link CSI, position-exact geometric NLOSv determination is the correct choice."
+  ],
+  "geo_nlosv_fraction": 0.8112880886426593
+}

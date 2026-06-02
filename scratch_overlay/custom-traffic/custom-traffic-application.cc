@@ -186,6 +186,18 @@ CustomTrafficApplication::AssignStreams(int64_t stream)
 }
 
 void
+CustomTrafficApplication::SetSendBytesProvider(SendBytesProvider provider)
+{
+    m_sendBytesProvider = std::move(provider);
+}
+
+void
+CustomTrafficApplication::SetTagDecorator(TagDecorator decorator)
+{
+    m_tagDecorator = std::move(decorator);
+}
+
+void
 CustomTrafficApplication::DoDispose()
 {
     NS_LOG_FUNCTION(this);
@@ -271,17 +283,64 @@ CustomTrafficApplication::SendPacket(uint32_t packetSize)
         // Reserve room for the SeqTsSizeHeader so total wire size stays at
         // packetSize. Header carries (seq, timestamp, size).
         const uint32_t headerSize = SeqTsSizeHeader().GetSerializedSize();
-        const uint32_t payloadSize = (packetSize > headerSize)
-                                         ? (packetSize - headerSize)
-                                         : 0;
+        const uint32_t targetPayload = (packetSize > headerSize)
+                                           ? (packetSize - headerSize)
+                                           : 0;
         header.SetSeq(m_seq++);
-        header.SetSize(packetSize);
-        packet = Create<Packet>(payloadSize);
+
+        uint32_t wireBytes = targetPayload;
+        if (m_sendBytesProvider)
+        {
+            std::vector<uint8_t> bytes = m_sendBytesProvider(targetPayload);
+            if (!bytes.empty())
+            {
+                wireBytes = static_cast<uint32_t>(bytes.size());
+                packet = Create<Packet>(bytes.data(), bytes.size());
+            }
+            else
+            {
+                packet = Create<Packet>(targetPayload);
+            }
+        }
+        else
+        {
+            packet = Create<Packet>(targetPayload);
+        }
+        // header.SetSize() MUST equal the actual on-wire packet size
+        // (payload + header), because PacketSink uses it as a stream-
+        // reassembly threshold: bytes are buffered until GetSize() arrive,
+        // then RxWithSeqTsSize fires. If we set it to the original SDU
+        // size while sending only compressed bytes, PacketSink waits
+        // forever and the trace never fires.
+        header.SetSize(wireBytes + headerSize);
+        if (m_tagDecorator)
+        {
+            m_tagDecorator(packet, targetPayload, wireBytes);
+        }
         packet->AddHeader(header);
     }
     else
     {
-        packet = Create<Packet>(packetSize);
+        if (m_sendBytesProvider)
+        {
+            std::vector<uint8_t> bytes = m_sendBytesProvider(packetSize);
+            if (!bytes.empty())
+            {
+                packet = Create<Packet>(bytes.data(), bytes.size());
+            }
+            else
+            {
+                packet = Create<Packet>(packetSize);
+            }
+        }
+        else
+        {
+            packet = Create<Packet>(packetSize);
+        }
+        if (m_tagDecorator)
+        {
+            m_tagDecorator(packet, packetSize, packet->GetSize());
+        }
     }
 
     Address from;
