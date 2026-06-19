@@ -11,10 +11,11 @@
 //
 // Driven by scratch/adaptive-phy-eval/scripts/run_sweep.py.
 
-#include "groupcast_flows.h"
-#include "kpi_hooks.h"
-#include "mobility.h"
-#include "nr_sl_stack.h"
+#include "common/channel/geometric_channel.h"
+#include "common/flows/groupcast_flows.h"
+#include "common/kpi/kpi_hooks.h"
+#include "common/mobility/mobility.h"
+#include "common/stack/nr_sl_stack.h"
 
 #include "ns3/core-module.h"
 #include "ns3/log.h"
@@ -123,7 +124,8 @@ main(int argc, char* argv[])
     mobCfg.sumoBinary = sumoBinary;
     mobCfg.sumoSyncInterval = sumoSync;
 
-    NodeContainer ueNodes = InstallMobility(mobCfg);
+    MobResult mob = InstallMobility(mobCfg);
+    NodeContainer& ueNodes = mob.ueNodes;
 
     // -----------------------------------------------------------------------
     // 2. NR + sidelink stack (helpers, BWP, pool, preconfig, IP)
@@ -135,8 +137,20 @@ main(int argc, char* argv[])
     stackParams.seed = seed;
     stackParams.maxNumTx = static_cast<uint8_t>(maxNumTx);
     stackParams.psfchPeriod = static_cast<uint16_t>(psfchPeriod);
+    stackParams.adaptiveMcs = false;  // groupcast_eval uses fixed MCS
 
-    SlStackCtx stack = BuildSlStack(stackParams, ueNodes);
+    // Geometric channel with no blocker geometry (baseline, no NLOSv from vehicles).
+    GeomChannelCfg geomCfg;
+    if (mob.traci)
+    {
+        geomCfg.traci = mob.traci;
+    }
+    else
+    {
+        geomCfg.blockerNodes = ueNodes;  // static-platoon mode: all nodes are potential blockers
+    }
+
+    SlStackCtx stack = BuildSlStack(stackParams, geomCfg, ueNodes);
 
     // -----------------------------------------------------------------------
     // 3. Groupcast bearer activation + OnOff/PacketSink apps (3 flows)

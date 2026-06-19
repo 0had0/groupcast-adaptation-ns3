@@ -1,0 +1,5 @@
+NrDlMacStats.txt
+NrUlMacStats.txt
+results_platoon_baseline/
+__pycache__/
+*.pyc

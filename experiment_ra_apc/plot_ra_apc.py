@@ -1,597 +1,614 @@
 #!/usr/bin/env python3
-"""
-plot_ra_apc.py — RA-APC-Groupcast comparison plots.
+"""Unified plotting script for all RA-APC campaign results.
 
-Reads results_ra_apc/{scheme}/*.db across all seeds and produces:
-  campaign_results/ra_apc_prr_vs_time.png         group PRR vs sim time, per scheme
-  campaign_results/ra_apc_per_rx_prr.png          bar chart, scheme groups × per-RX bars
-  campaign_results/ra_apc_multiplex_vs_time.png   δ(t) = TOTAL_PRBs / rbLen
-  campaign_results/ra_apc_etp_vs_time.png         empirical Group-ETP = δ · PRR
-  campaign_results/ra_apc_mcs_trace.png           chosen TX MCS over time (RA-APC only)
-  campaign_results/ra_apc_overview.png            combined 4-panel figure
+Usage:
+    python3 plot_ra_apc.py --results results_intersect_nlosv_multi_flow
+    python3 plot_ra_apc.py --results results_intersect_nlosv_multi_flow --plot mcs_evolution
+    python3 plot_ra_apc.py --results results_intersect_nlosv_multi_flow --plot all
+
+All plots saved to: results_intersect_nlosv_multi_flow/plots/
 """
 
-import glob
+import argparse
 import sqlite3
-from collections import defaultdict
-from pathlib import Path
-
-import numpy as np
-
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
+import numpy as np
+from pathlib import Path
+from collections import defaultdict
 
-SCRIPT_DIR    = Path(__file__).parent
-OUT_DIR       = SCRIPT_DIR / "campaign_results"
-SCHEMES       = ["yan_broadcast", "yan_groupcast", "ra_apc_A", "ra_apc_B", "nack_rate"]
-SCHEME_COLOR  = {
-    "yan_broadcast": "#9E9E9E",
-    "yan_groupcast": "#1976D2",
-    "ra_apc_A":      "#F57C00",
-    "ra_apc_B":      "#2E7D32",
-    "nack_rate":     "#FF57FF",
-}
-SCHEME_LABEL = {
-    "yan_broadcast": "Yan broadcast (MCS=14, no HARQ)",
-    "yan_groupcast": "Yan groupcast (MCS=14, HARQ+PSFCH)",
-    "ra_apc_A":      "RA-APC Strategy A (worst-case)",
-    "ra_apc_B":      "RA-APC Strategy B (P5, proposed)",
-    "nack_rate":     "Nack Rate (adaptive MCS)",
+METHODS = ["ra_apc_A", "ra_apc_B", "nack_rate", "yan_broadcast", "yan_groupcast"]
+METHOD_CONFIG = {
+    "ra_apc_A": {"window_ms": 500, "eval_ms": 200},
+    "ra_apc_B": {"window_ms": 500, "eval_ms": 200},
+    "nack_rate": {"window_ms": 300, "eval_ms": 150, "down_thr": 0.15, "up_thr": 0.08},
 }
 
-# Time-bin config
-WARMUP_S    = 2.0
-SIM_END_S   = 60.0
-BIN_S       = 1.0
-EDGES       = np.arange(WARMUP_S, SIM_END_S + BIN_S, BIN_S)
-CENTERS     = EDGES[:-1] + BIN_S / 2
-N_BINS      = len(CENTERS)
-
-# Multiplexing constants matching the campaign config.
-BW_PRBS     = 10
-TOTAL_PRBS  = 100   # default --raApcPoolPrbs (numUEs * bwPRBs = 9 * 10 ≈ 100)
-INTERSECT_T = 30.0  # second at which the platoon enters the intersection
-
-
-# ── DB helpers ───────────────────────────────────────────────────────────────
+# ── Time binning helpers (from intersect_nlosv) ─────────────────────
+EDGES = (0, 60)
+BIN_S = 1
+N_BINS = int((EDGES[1] - EDGES[0]) / BIN_S)
 
 def _bin(t):
     idx = int((t - EDGES[0]) / BIN_S)
     return max(0, min(idx, N_BINS - 1))
 
 
+# ── Data collection functions ─────────────────────────────────────────
 def per_seed_prr_vs_time(db_path):
-    """PRR per receiver, per 1-second bin, averaged across receivers."""
     con = sqlite3.connect(db_path)
-    tx = con.execute(
-        "SELECT timeSec, pktSeqNum FROM pktTxRx WHERE txRx='tx' "
-        "AND timeSec >= ? AND timeSec < ?", (WARMUP_S, SIM_END_S)).fetchall()
-    rx = con.execute(
-        "SELECT timeSec, nodeId, pktSeqNum FROM pktTxRx WHERE txRx='rx' "
-        "AND timeSec >= ? AND timeSec < ?", (WARMUP_S, SIM_END_S)).fetchall()
+    cur = con.cursor()
+    cur.execute("SELECT (timeMs / 1000.0) as t, avrgPrr FROM avrgPrr WHERE txRx='rx' ORDER BY t")
+    rows = cur.fetchall()
     con.close()
-    if not tx:
-        return np.full(N_BINS, np.nan)
-    # TX count per bin
-    tx_count   = np.zeros(N_BINS)
-    tx_seqs_in = defaultdict(set)
-    for t, sq in tx:
-        b = _bin(t); tx_count[b] += 1; tx_seqs_in[b].add(sq)
-    # RX count per bin per node
-    rx_count = defaultdict(lambda: np.zeros(N_BINS))
-    for t, nid, sq in rx:
-        b = _bin(t)
-        if sq in tx_seqs_in[b]:
-            rx_count[int(nid)][b] += 1
-    if not rx_count:
-        return np.full(N_BINS, np.nan)
-    per_rx_prr = np.vstack([np.where(tx_count > 0, v / tx_count, np.nan)
-                            for v in rx_count.values()])
-    return np.nanmean(per_rx_prr, axis=0)
+    result = defaultdict(list)
+    for t, prr in rows:
+        result[_bin(t)].append(prr)
+    return {k: np.median(v) for k, v in result.items()}
 
 
 def per_seed_per_rx_prr(db_path):
-    """Per-RX PRR computed from pktTxRx (one value per receiver node)."""
     con = sqlite3.connect(db_path)
-    tx = con.execute(
-        "SELECT pktSeqNum FROM pktTxRx WHERE txRx='tx' "
-        "AND timeSec >= ? AND timeSec < ?", (WARMUP_S, SIM_END_S)).fetchall()
-    rx = con.execute(
-        "SELECT nodeId, pktSeqNum FROM pktTxRx WHERE txRx='rx' "
-        "AND timeSec >= ? AND timeSec < ?", (WARMUP_S, SIM_END_S)).fetchall()
+    cur = con.cursor()
+    cur.execute("SELECT avrgPrr FROM avrgPrr WHERE txRx='rx'")
+    rows = cur.fetchall()
     con.close()
-    tx_set = {r[0] for r in tx}
-    if not tx_set:
-        return {}
-    rx_by_node = defaultdict(set)
-    for nid, sq in rx:
-        if sq in tx_set:
-            rx_by_node[int(nid)].add(sq)
-    return {nid: len(seqs) / len(tx_set) for nid, seqs in rx_by_node.items()}
+    return [r[0] for r in rows]
 
 
 def per_seed_mux_vs_time(db_path):
-    """Multiplexing capacity δ(t) = TOTAL_PRBs / rbLen averaged per 1-s bin."""
     con = sqlite3.connect(db_path)
-    rows = con.execute(
-        "SELECT timeMs, rbLen FROM psschTxUeMac WHERE timeMs/1000.0 >= ? "
-        "AND timeMs/1000.0 < ?", (WARMUP_S, SIM_END_S)).fetchall()
+    cur = con.cursor()
+    cur.execute("SELECT (timeMs / 1000.0) as t, AVG(rbLen) as rb FROM psschTxUeMac GROUP BY ROUND(timeMs/1000.0, 0) ORDER BY t")
+    rows = cur.fetchall()
     con.close()
-    if not rows:
-        return np.full(N_BINS, np.nan)
-    deltas = np.full(N_BINS, np.nan)
-    by_bin = defaultdict(list)
-    for tms, rb in rows:
-        if rb > 0:
-            by_bin[_bin(tms / 1000.0)].append(TOTAL_PRBS / rb)
-    for b, vals in by_bin.items():
-        deltas[b] = float(np.mean(vals))
-    return deltas
-
-
-def per_seed_harq_vs_time(db_path):
-    """Per-bin NACK rate, retx ratio, and PHY error rate."""
-    con = sqlite3.connect(db_path)
-
-    # NACK rate per bin: #NACK / (#ACK + #NACK)
-    fb = con.execute(
-        "SELECT timeSec, status FROM slHarqFeedback "
-        "WHERE timeSec >= ? AND timeSec < ?", (WARMUP_S, SIM_END_S)
-    ).fetchall()
-    ack_bins  = np.zeros(N_BINS)
-    nack_bins = np.zeros(N_BINS)
-    for t, st in fb:
-        b = _bin(t)
-        if st == "ACK":
-            ack_bins[b] += 1
-        else:
-            nack_bins[b] += 1
-    total_fb  = ack_bins + nack_bins
-    nack_rate = np.where(total_fb > 0, nack_bins / total_fb, np.nan)
-
-    # Retransmission ratio per bin: #ndi=0 / (#ndi=0 + #ndi=1)
-    tx_rows = con.execute(
-        "SELECT timeMs, ndi FROM psschTxUeMac "
-        "WHERE timeMs/1000.0 >= ? AND timeMs/1000.0 < ?", (WARMUP_S, SIM_END_S)
-    ).fetchall()
-    init_bins = np.zeros(N_BINS)
-    retx_bins = np.zeros(N_BINS)
-    for tms, ndi in tx_rows:
-        b = _bin(tms / 1000.0)
-        if ndi == 1:
-            init_bins[b] += 1
-        else:
-            retx_bins[b] += 1
-    total_tx   = init_bins + retx_bins
-    retx_ratio = np.where(total_tx > 0, retx_bins / total_tx, np.nan)
-
-    # PHY corruption rate per bin
-    phy_rows = con.execute(
-        "SELECT timeMs, psschCorrupt FROM psschRxUePhy "
-        "WHERE timeMs/1000.0 >= ? AND timeMs/1000.0 < ?", (WARMUP_S, SIM_END_S)
-    ).fetchall()
-    ok_bins  = np.zeros(N_BINS)
-    err_bins = np.zeros(N_BINS)
-    for tms, corrupt in phy_rows:
-        b = _bin(tms / 1000.0)
-        if corrupt:
-            err_bins[b] += 1
-        else:
-            ok_bins[b] += 1
-    total_phy = ok_bins + err_bins
-    phy_err   = np.where(total_phy > 0, err_bins / total_phy, np.nan)
-
-    con.close()
-    return {"nack_rate": nack_rate, "retx_ratio": retx_ratio, "phy_err": phy_err}
+    result = defaultdict(list)
+    for t, rb in rows:
+        if rb:
+            result[_bin(t)].append(rb)
+    return {k: np.median(v) for k, v in result.items()}
 
 
 def per_seed_mcs_vs_time(db_path):
-    """Median TX MCS per 1-s bin (RA-APC schemes vary; baselines are constant)."""
     con = sqlite3.connect(db_path)
-    # psschRxUePhy stores m_mcs of received TBs; use as a proxy of TX MCS.
-    rows = con.execute(
-        "SELECT timeMs, psschMcs FROM psschRxUePhy WHERE timeMs/1000.0 >= ? "
-        "AND timeMs/1000.0 < ?", (WARMUP_S, SIM_END_S)).fetchall()
+    cur = con.cursor()
+    cur.execute("SELECT (timeMs / 1000.0) as t, psschMcs, COUNT(*) as cnt FROM psschRxUePhy GROUP BY ROUND(timeMs/1000.0, 0), psschMcs ORDER BY t")
+    rows = cur.fetchall()
     con.close()
-    by_bin = defaultdict(list)
-    for tms, mcs in rows:
-        by_bin[_bin(tms / 1000.0)].append(mcs)
-    out = np.full(N_BINS, np.nan)
-    for b, vals in by_bin.items():
-        out[b] = float(np.median(vals))
-    return out
+    result = defaultdict(lambda: defaultdict(int))
+    for t, mcs, cnt in rows:
+        result[_bin(t)][mcs] += cnt
+    return {k: max(v.keys(), key=lambda m: v[m]) for k, v in result.items() if v}
 
 
 def per_seed_pir_vs_time(db_path):
-    """Per-bin PIR statistics (ms) computed from consecutive RX timestamps per node.
-
-    For each 1-s bin b:
-      - Collect all RX timestamps in [b_start, b_end) per receiver node.
-      - Compute inter-arrival gaps within the bin (plus the gap bridging the
-        previous bin boundary using the last RX time before bin start).
-      - Return median and P95 across all gaps and all nodes in that bin.
-    """
     con = sqlite3.connect(db_path)
-    rows = con.execute(
-        "SELECT timeSec, nodeId FROM pktTxRx WHERE txRx='rx' "
-        "AND timeSec >= ? AND timeSec < ? ORDER BY nodeId, timeSec",
-        (WARMUP_S, SIM_END_S)
-    ).fetchall()
+    cur = con.cursor()
+    cur.execute("SELECT (timeMs / 1000.0) as t, avrgPirSec * 1000.0 as pir_ms FROM avrgPir WHERE txRx='rx' ORDER BY t")
+    rows = cur.fetchall()
     con.close()
-
-    # Build per-node RX time list
-    by_node = defaultdict(list)
-    for t, nid in rows:
-        by_node[int(nid)].append(t)
-
-    # Compute all inter-arrival gaps with their midpoint time
-    gap_by_bin_median = defaultdict(list)   # bin → list of gaps (ms)
-    gap_by_bin_p95    = defaultdict(list)
-
-    for nid, times in by_node.items():
-        if len(times) < 2:
-            continue
-        for i in range(1, len(times)):
-            gap_ms  = (times[i] - times[i - 1]) * 1000.0
-            mid_t   = (times[i] + times[i - 1]) / 2.0
-            b       = _bin(mid_t)
-            gap_by_bin_median[b].append(gap_ms)
-            gap_by_bin_p95[b].append(gap_ms)
-
-    pir_median = np.full(N_BINS, np.nan)
-    pir_p95    = np.full(N_BINS, np.nan)
-    for b, gaps in gap_by_bin_median.items():
-        pir_median[b] = float(np.median(gaps))
-        pir_p95[b]    = float(np.percentile(gaps, 95))
-
-    return {"median": pir_median, "p95": pir_p95}
+    result = defaultdict(list)
+    for t, pir in rows:
+        result[_bin(t)].append(pir)
+    return {k: np.median(v) for k, v in result.items()}
 
 
-# ── aggregation ──────────────────────────────────────────────────────────────
-
-def collect(scheme, fn):
-    dbs = sorted(glob.glob(str(SCRIPT_DIR / "results_ra_apc" / scheme / "*.db")))
-    series = []
-    for db in dbs:
-        arr = fn(db)
-        if isinstance(arr, dict):
-            series.append(arr)
+def per_seed_harq_vs_time(db_path):
+    con = sqlite3.connect(db_path)
+    cur = con.cursor()
+    cur.execute("SELECT (timeSec) as t, status, COUNT(*) as cnt FROM slHarqFeedback GROUP BY ROUND(timeSec, 0), status ORDER BY t")
+    rows = cur.fetchall()
+    con.close()
+    ack, nack = defaultdict(int), defaultdict(int)
+    for t, status, cnt in rows:
+        idx = _bin(t)
+        if status == "ACK":
+            ack[idx] += cnt
         else:
-            series.append(arr)
-    return series
+            nack[idx] += cnt
+    return {"ack": ack, "nack": nack}
+
+
+# ── Aggregation helpers ─────────────────────────────────────────────
+def collect(scheme, fn, **kwargs):
+    import glob
+    results = {}
+    dbs = glob.glob(str(RESULTS_DIR / scheme / "*.db"))
+    for db in dbs:
+        seed_key = Path(db).stem
+        try:
+            data = fn(db, **kwargs)
+            results[seed_key] = data
+        except Exception as e:
+            print(f"  skip {seed_key}: {e}")
+    return results
 
 
 def stack_median(series):
-    if not series:
-        return np.full(N_BINS, np.nan)
-    return np.nanmedian(np.vstack(series), axis=0)
+    all_bins = set()
+    for s in series.values():
+        all_bins.update(s.keys())
+    result = {}
+    for b in sorted(all_bins):
+        vals = [s.get(b, np.nan) for s in series.values()]
+        result[b] = np.nanmedian(vals)
+    return result
 
 
 def stack_p5(series):
-    if not series:
-        return np.full(N_BINS, np.nan)
-    return np.nanpercentile(np.vstack(series), 5, axis=0)
+    all_bins = set()
+    for s in series.values():
+        all_bins.update(s.keys())
+    result = {}
+    for b in sorted(all_bins):
+        vals = [s.get(b, np.nan) for s in series.values()]
+        result[b] = np.nanpercentile(vals, 5)
+    return result
 
 
-# ── plots ────────────────────────────────────────────────────────────────────
-
-def plot_prr_vs_time(prr_by_scheme, out_path):
-    fig, ax = plt.subplots(figsize=(12, 4.5))
-    for s in SCHEMES:
-        med = stack_median(prr_by_scheme[s])
-        p5  = stack_p5(prr_by_scheme[s])
-        ax.plot(CENTERS, med, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-        ax.fill_between(CENTERS, p5, med, color=SCHEME_COLOR[s], alpha=0.12)
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7,
-               label=f"intersection entry (t={INTERSECT_T:.0f} s)")
-    ax.set_xlabel("Simulation time (s)")
-    ax.set_ylabel("Group PRR (median across seeds, shaded = P5–median)")
-    ax.set_title("Group PRR vs time — RA-APC-Groupcast comparison")
-    ax.legend(fontsize=8, loc="lower left")
-    ax.set_ylim(0.5, 1.005)
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+# ── Get functions for adaptive plots ─────────────────────────────────────────
+def get_adapt_log(db_path):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT timeMs, metric, prevMcs, newMcs, decision, ackCount, nackCount, windowStartMs, windowEndMs FROM adaptLog ORDER BY timeMs")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
-def plot_per_rx_prr(per_rx_by_scheme, out_path):
+def get_mcs_changes(db_path):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT ROUND(timeMs/1000.0, 0) as t, psschMcs, COUNT(*) FROM psschRxUePhy GROUP BY ROUND(timeMs/1000.0, 0), psschMcs ORDER BY t")
+    rows = cur.fetchall()
+    conn.close()
+    mcs_by_time, count_by_time = {}, {}
+    for t, mcs, cnt in rows:
+        t = int(t)
+        mcs_by_time[t] = mcs_by_time.get(t, 0) + mcs * cnt
+        count_by_time[t] = count_by_time.get(t, 0) + cnt
+    return {t: mcs_by_time[t] / count_by_time[t] for t in mcs_by_time}
+
+
+def get_ack_nack(db_path):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT ROUND(timeSec, 0) as t, status, COUNT(*) FROM slHarqFeedback GROUP BY ROUND(timeSec, 0), status ORDER BY t")
+    rows = cur.fetchall()
+    conn.close()
+    ack, nack = {}, {}
+    for t, status, cnt in rows:
+        t = int(t)
+        if status == "ACK":
+            ack[t] = cnt
+        else:
+            nack[t] = cnt
+    all_times = sorted(set(ack.keys()) | set(nack.keys()))
+    return {"ack": [ack.get(t, 0) for t in all_times], "nack": [nack.get(t, 0) for t in all_times], "time": all_times}
+
+
+# ── Plot functions ─────────────────────────────────────────────────
+def plot_prr_vs_time(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_prr_vs_time)
+        if seeds:
+            data_by_scheme[scheme] = stack_median(seeds)
+    if not data_by_scheme:
+        print("  No PRR data")
+        return
     fig, ax = plt.subplots(figsize=(12, 5))
-    width = 0.2
-    rx_ids = sorted({nid for s in SCHEMES for d in per_rx_by_scheme[s] for nid in d})
-    rx_ids = [r for r in rx_ids if r != 0]  # skip TX node 0
-    x = np.arange(len(rx_ids))
-
-    smallest_value = 0.5  # for better y-axis scaling when some RXs have 0 PRR
-    for i, s in enumerate(SCHEMES):
-        means = []
-        for nid in rx_ids:
-            vals = [d.get(nid, float("nan")) for d in per_rx_by_scheme[s]]
-            vals = [v for v in vals if not np.isnan(v)]
-            means.append(np.mean(vals) if vals else float("nan"))
-        smallest_value = max(smallest_value, min(means) - 0.1)
-        ax.bar(x + (i - 1.5) * width, means, width,
-               color=SCHEME_COLOR[s], label=SCHEME_LABEL[s])
-    ax.set_xticks(x); ax.set_xticklabels([f"RX {r}" for r in rx_ids])
-    ax.set_ylabel("Group PRR (mean across seeds)")
-    ax.set_title("Per-receiver PRR — full simulation")
-    ax.legend(fontsize=8, loc="lower right")
-    ax.set_ylim(smallest_value, 1.005); ax.grid(True, axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
-
-
-def plot_mux_vs_time(mux_by_scheme, out_path):
-    fig, ax = plt.subplots(figsize=(12, 4))
-    for s in SCHEMES:
-        med = stack_median(mux_by_scheme[s])
-        ax.plot(CENTERS, med, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7)
-    ax.set_xlabel("Simulation time (s)")
-    ax.set_ylabel(f"Multiplexing level δ(t) = {TOTAL_PRBS} PRBs / rbLen")
-    ax.set_title("Multiplexing capacity vs time")
-    ax.legend(fontsize=8, loc="best")
+    for scheme, data in data_by_scheme.items():
+        times = sorted(data.keys())
+        ax.plot(times, [data.get(t, np.nan) for t in times], '-o', markersize=4, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("PRR")
+    ax.set_title("PRR vs Time")
+    ax.legend()
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+    plt.tight_layout()
+    plt.savefig(plots_dir / "prr_vs_time.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'prr_vs_time.png'}")
 
 
-def plot_etp_vs_time(prr_by_scheme, mux_by_scheme, out_path):
-    fig, ax = plt.subplots(figsize=(12, 4))
-    for s in SCHEMES:
-        prr = stack_median(prr_by_scheme[s])
-        mux = stack_median(mux_by_scheme[s])
-        etp = prr * mux
-        ax.plot(CENTERS, etp, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7)
-    ax.set_xlabel("Simulation time (s)")
-    ax.set_ylabel("Empirical Group-ETP  =  δ(t) · group PRR(t)")
-    ax.set_title("Empirical Group Effective Throughput")
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+def plot_per_rx_prr(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_per_rx_prr)
+        if seeds:
+            data = []
+            for s in seeds.values():
+                data.extend(s)
+            if data:
+                data_by_scheme[scheme] = data
+    if not data_by_scheme:
+        print("  No per-RX PRR data")
+        return
+    fig, ax = plt.subplots(figsize=(10, 6))
+    box_data = [data_by_scheme[s] for s in methods if s in data_by_scheme]
+    labels = [s for s in methods if s in data_by_scheme]
+    ax.boxplot(box_data, labels=labels, patch_artist=True)
+    ax.set_ylabel("PRR")
+    ax.set_title("Per-Receiver PRR")
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(plots_dir / "per_rx_prr_full.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'per_rx_prr_full.png'}")
 
 
-def plot_mcs_trace(mcs_by_scheme, out_path):
-    fig, ax = plt.subplots(figsize=(12, 4))
-    for s in SCHEMES:
-        med = stack_median(mcs_by_scheme[s])
-        ax.plot(CENTERS, med, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7)
-    ax.set_xlabel("Simulation time (s)")
-    ax.set_ylabel("TX MCS (median across seeds)")
-    ax.set_title("Chosen TX MCS over time")
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
-
-
-def plot_pir_vs_time(pir_by_scheme, out_path):
-    """Two-panel PIR plot: median PIR and P95 PIR per scheme vs time."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 4.5), sharey=False)
-
-    for s in SCHEMES:
-        series_med = [d["median"] for d in pir_by_scheme[s] if isinstance(d, dict)]
-        series_p95 = [d["p95"]    for d in pir_by_scheme[s] if isinstance(d, dict)]
-        if not series_med:
-            continue
-        mat_med = np.vstack(series_med)
-        mat_p95 = np.vstack(series_p95)
-        med_med = np.nanmedian(mat_med, axis=0)
-        p5_med  = np.nanpercentile(mat_med, 5,  axis=0)
-        p95_med = np.nanpercentile(mat_med, 95, axis=0)
-        med_p95 = np.nanmedian(mat_p95, axis=0)
-
-        ax1.plot(CENTERS, med_med, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-        ax1.fill_between(CENTERS, p5_med, p95_med,
-                         color=SCHEME_COLOR[s], alpha=0.12)
-        ax2.plot(CENTERS, med_p95, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-
-    for ax in (ax1, ax2):
-        ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7,
-                   label=f"intersection entry (t={INTERSECT_T:.0f} s)")
-        ax.axhline(20, color="gray", ls=":", lw=1, alpha=0.6, label="RRI = 20 ms")
-        ax.set_xlabel("Simulation time (s)")
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=7, loc="upper left")
-
-    ax1.set_ylabel("PIR median (ms)  [shaded = seed P5–P95]")
-    ax1.set_title("Median PIR vs time")
-    ax2.set_ylabel("PIR P95 (ms)  [worst-case latency]")
-    ax2.set_title("P95 PIR vs time  (tail latency)")
-
-    fig.suptitle("Packet Inter-Reception time — RA-APC-Groupcast comparison",
-                 fontsize=13)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
-
-
-def plot_harq_overview(harq_by_scheme, out_path):
-    """Three-panel HARQ statistics: NACK rate / ReTx ratio / PHY error vs time."""
-    metrics = [
-        ("nack_rate", "NACK rate  (#NACK / #FB)", (0.0, 0.35)),
-        ("retx_ratio", "Retx ratio  (#retx / #TX)", (0.0, 0.35)),
-        ("phy_err",   "PHY corruption rate", (0.0, 0.25)),
-    ]
-    fig, axes = plt.subplots(1, 3, figsize=(18, 4.5), sharey=False)
-    for ax, (key, ylabel, ylim) in zip(axes, metrics):
-        for s in SCHEMES:
-            series = [d[key] for d in harq_by_scheme[s] if isinstance(d, dict)]
-            if not series:
-                continue
-            med = np.nanmedian(np.vstack(series), axis=0)
-            p5  = np.nanpercentile(np.vstack(series), 5,  axis=0)
-            p95 = np.nanpercentile(np.vstack(series), 95, axis=0)
-            ax.plot(CENTERS, med, color=SCHEME_COLOR[s], lw=2, label=SCHEME_LABEL[s])
-            ax.fill_between(CENTERS, p5, p95, color=SCHEME_COLOR[s], alpha=0.12)
-        ax.axvline(INTERSECT_T, color="black", ls="--", lw=1.2, alpha=0.7)
-        ax.set_xlabel("Simulation time (s)")
-        ax.set_ylabel(ylabel)
-        ax.set_ylim(*ylim)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=7, loc="upper left")
-    axes[0].set_title("NACK rate vs time")
-    axes[1].set_title("Retransmission ratio vs time")
-    axes[2].set_title("PHY corruption rate vs time")
-    fig.suptitle("HARQ statistics — RA-APC-Groupcast comparison", fontsize=13)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
-
-
-def plot_harq_bar(harq_by_scheme, out_path):
-    """Bar chart of aggregate NACK rate, ReTx ratio, PHY error per scheme."""
-    metrics = [
-        ("nack_rate",  "NACK rate"),
-        ("retx_ratio", "ReTx ratio"),
-        ("phy_err",    "PHY corruption"),
-    ]
-    x     = np.arange(len(SCHEMES))
-    width = 0.25
+def plot_mux_vs_time(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_mux_vs_time)
+        if seeds:
+            data_by_scheme[scheme] = stack_median(seeds)
+    if not data_by_scheme:
+        print("  No mux data")
+        return
     fig, ax = plt.subplots(figsize=(12, 5))
-    for i, (key, label) in enumerate(metrics):
-        means = []
-        errs  = []
-        for s in SCHEMES:
-            vals = []
-            for d in harq_by_scheme[s]:
-                if isinstance(d, dict):
-                    arr = d[key]
-                    vals.append(float(np.nanmean(arr)))
-            if vals:
-                a = np.array(vals)
-                means.append(float(np.mean(a)))
-                errs.append(1.96 * float(a.std(ddof=1) / np.sqrt(len(a))) if len(a) > 1 else 0.0)
-            else:
-                means.append(float("nan"))
-                errs.append(0.0)
-        ax.bar(x + (i - 1) * width, means, width, yerr=errs,
-               label=label, capsize=4, alpha=0.85)
+    for scheme, data in data_by_scheme.items():
+        times = sorted(data.keys())
+        ax.plot(times, [data.get(t, np.nan) for t in times], '-o', markersize=3, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Avg RB Len")
+    ax.set_title("Multiplexing vs Time")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(plots_dir / "multiplex_vs_time.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'multiplex_vs_time.png'}")
+
+
+def plot_etp_vs_time(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        prr_seeds = collect(scheme, per_seed_prr_vs_time)
+        mux_seeds = collect(scheme, per_seed_mux_vs_time)
+        if prr_seeds and mux_seeds:
+            combined = {}
+            for seed in prr_seeds:
+                if seed in mux_seeds:
+                    prr = prr_seeds[seed]
+                    mux = mux_seeds[seed]
+                    combined[seed] = {k: prr.get(k, np.nan) * mux.get(k, np.nan) for k in set(prr.keys()) | set(mux.keys())}
+            if combined:
+                data_by_scheme[scheme] = stack_median(combined)
+    if not data_by_scheme:
+        print("  No ETP data")
+        return
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for scheme, data in data_by_scheme.items():
+        times = sorted(data.keys())
+        ax.plot(times, [data.get(t, np.nan) for t in times], '-o', markersize=3, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("ETP (PRR × mux)")
+    ax.set_title("Expected Throughput per Slot vs Time")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(plots_dir / "etp_vs_time.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'etp_vs_time.png'}")
+
+
+def plot_mcs_trace(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_mcs_vs_time)
+        if seeds:
+            data_by_scheme[scheme] = stack_median(seeds)
+    if not data_by_scheme:
+        print("  No MCS data")
+        return
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for scheme, data in data_by_scheme.items():
+        times = sorted(data.keys())
+        ax.plot(times, [data.get(t, np.nan) for t in times], '-o', markersize=3, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("MCS")
+    ax.set_title("MCS Trace")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(plots_dir / "mcs_trace.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'mcs_trace.png'}")
+
+
+def plot_pir_vs_time(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_pir_vs_time)
+        if seeds:
+            data_by_scheme[scheme] = stack_median(seeds)
+    if not data_by_scheme:
+        print("  No PIR data")
+        return
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for scheme, data in data_by_scheme.items():
+        times = sorted(data.keys())
+        ax.plot(times, [data.get(t, np.nan) for t in times], '-o', markersize=3, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("PIR (ms)")
+    ax.set_title("Packet Information Rate vs Time")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(plots_dir / "pir_vs_time.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'pir_vs_time.png'}")
+
+
+def plot_harq_overview(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_harq_vs_time)
+        if seeds:
+            ack_all, nack_all = defaultdict(int), defaultdict(int)
+            for s in seeds.values():
+                for k, v in s["ack"].items():
+                    ack_all[k] += v
+                for k, v in s["nack"].items():
+                    nack_all[k] += v
+            data_by_scheme[scheme] = {"ack": dict(ack_all), "nack": dict(nack_all)}
+    if not data_by_scheme:
+        print("  No HARQ data")
+        return
+    fig, axes = plt.subplots(len(data_by_scheme), 1, figsize=(12, 3 * len(data_by_scheme)), sharex=True)
+    if len(data_by_scheme) == 1:
+        axes = [axes]
+    for idx, (scheme, data) in enumerate(data_by_scheme.items()):
+        ax = axes[idx]
+        times = sorted(set(data["ack"].keys()) | set(data["nack"].keys()))
+        ack = [data["ack"].get(t, 0) for t in times]
+        nack = [data["nack"].get(t, 0) for t in times]
+        ax.bar(times, ack, label="ACK", color="green", alpha=0.7)
+        ax.bar(times, nack, bottom=ack, label="NACK", color="red", alpha=0.7)
+        ax.set_ylabel("Count")
+        ax.set_title(scheme)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    axes[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
+    plt.savefig(plots_dir / "harq_vs_time.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'harq_vs_time.png'}")
+
+
+def plot_harq_bar(results_dir, methods, plots_dir):
+    data_by_scheme = {}
+    for scheme in methods:
+        seeds = collect(scheme, per_seed_harq_vs_time)
+        if seeds:
+            total_ack, total_nack = 0, 0
+            for s in seeds.values():
+                total_ack += sum(s["ack"].values())
+                total_nack += sum(s["nack"].values())
+            data_by_scheme[scheme] = {"ack": total_ack, "nack": total_nack}
+    if not data_by_scheme:
+        print("  No HARQ data for bar plot")
+        return
+    fig, ax = plt.subplots(figsize=(10, 6))
+    labels = list(data_by_scheme.keys())
+    ack_vals = [data_by_scheme[s]["ack"] for s in labels]
+    nack_vals = [data_by_scheme[s]["nack"] for s in labels]
+    x = np.arange(len(labels))
+    width = 0.35
+    ax.bar(x - width/2, ack_vals, width, label="ACK", color="green", alpha=0.7)
+    ax.bar(x + width/2, nack_vals, width, label="NACK", color="red", alpha=0.7)
     ax.set_xticks(x)
-    ax.set_xticklabels([SCHEME_LABEL[s] for s in SCHEMES], rotation=15, ha="right", fontsize=9)
-    ax.set_ylabel("Rate (fraction)")
-    ax.set_title("Aggregate HARQ statistics per scheme (mean ± 95% CI across seeds)")
-    ax.legend(fontsize=9)
-    ax.grid(True, axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Count")
+    ax.set_title("HARQ Feedback Summary")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    plt.savefig(plots_dir / "harq_bar.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'harq_bar.png'}")
 
 
-def plot_overview(prr, perrx, mux, mcs, etp, out_path):
-    fig = plt.figure(figsize=(18, 12))
-    gs  = GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.25)
-
-    # 1. PRR vs time
+def plot_overview(results_dir, methods, plots_dir):
+    """Combined overview plot."""
+    data = {}
+    for scheme in methods:
+        prr = collect(scheme, per_seed_prr_vs_time)
+        mux = collect(scheme, per_seed_mux_vs_time)
+        mcs = collect(scheme, per_seed_mcs_vs_time)
+        harq = collect(scheme, per_seed_harq_vs_time)
+        if prr or mux or harq:
+            data[scheme] = {"prr": stack_median(prr) if prr else {}, 
+                         "mux": stack_median(mux) if mux else {},
+                         "mcs": stack_median(mcs) if mcs else {},
+                         "harq": harq}
+    
+    if not data:
+        print("  No data for overview")
+        return
+    
+    fig = plt.figure(figsize=(15, 10))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+    
+    # PRR
     ax = fig.add_subplot(gs[0, 0])
-    for s in SCHEMES:
-        ax.plot(CENTERS, stack_median(prr[s]),
-                color=SCHEME_COLOR[s], lw=1.8, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1, alpha=0.7)
-    ax.set_title("Group PRR vs time"); ax.set_ylim(0.5, 1.005)
-    ax.set_xlabel("time (s)"); ax.set_ylabel("PRR")
-    ax.grid(True, alpha=0.3); ax.legend(fontsize=7, loc="lower left")
-
-    # 2. MUX vs time
+    for scheme, d in data.items():
+        if d["prr"]:
+            times = sorted(d["prr"].keys())
+            ax.plot(times, [d["prr"].get(t, np.nan) for t in times], "-o", markersize=3, label=scheme)
+    ax.set_ylabel("PRR")
+    ax.set_title("PRR vs Time")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    
+    # Multiplexing
     ax = fig.add_subplot(gs[0, 1])
-    for s in SCHEMES:
-        ax.plot(CENTERS, stack_median(mux[s]),
-                color=SCHEME_COLOR[s], lw=1.8, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1, alpha=0.7)
-    ax.set_title(f"Multiplexing capacity δ = {TOTAL_PRBS}/rbLen")
-    ax.set_xlabel("time (s)"); ax.set_ylabel("δ")
-    ax.grid(True, alpha=0.3); ax.legend(fontsize=7)
-
-    # 3. ETP vs time
+    for scheme, d in data.items():
+        if d["mux"]:
+            times = sorted(d["mux"].keys())
+            ax.plot(times, [d["mux"].get(t, np.nan) for t in times], "-o", markersize=3, label=scheme)
+    ax.set_ylabel("Avg RB Len")
+    ax.set_title("Multiplexing vs Time")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    
+    # MCS
     ax = fig.add_subplot(gs[1, 0])
-    for s in SCHEMES:
-        ax.plot(CENTERS, stack_median(etp[s]),
-                color=SCHEME_COLOR[s], lw=1.8, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1, alpha=0.7)
-    ax.set_title("Empirical Group-ETP = δ · PRR")
-    ax.set_xlabel("time (s)"); ax.set_ylabel("Group-ETP")
-    ax.grid(True, alpha=0.3); ax.legend(fontsize=7)
-
-    # 4. MCS over time
+    for scheme, d in data.items():
+        if d["mcs"]:
+            times = sorted(d["mcs"].keys())
+            ax.plot(times, [d["mcs"].get(t, np.nan) for t in times], "-o", markersize=3, label=scheme)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("MCS")
+    ax.set_title("MCS Trace")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    
+    # Summary text
     ax = fig.add_subplot(gs[1, 1])
-    for s in SCHEMES:
-        ax.plot(CENTERS, stack_median(mcs[s]),
-                color=SCHEME_COLOR[s], lw=1.8, label=SCHEME_LABEL[s])
-    ax.axvline(INTERSECT_T, color="black", ls="--", lw=1, alpha=0.7)
-    ax.set_title("TX MCS over time"); ax.set_xlabel("time (s)")
-    ax.set_ylabel("MCS"); ax.grid(True, alpha=0.3); ax.legend(fontsize=7)
-
-    # 5. Per-RX PRR bars
-    ax = fig.add_subplot(gs[2, :])
-    width = 0.2
-    rx_ids = sorted({nid for s in SCHEMES for d in perrx[s] for nid in d})
-    rx_ids = [r for r in rx_ids if r != 0]
-    x = np.arange(len(rx_ids))
-    for i, s in enumerate(SCHEMES):
-        means = []
-        for nid in rx_ids:
-            vals = [d.get(nid, float("nan")) for d in perrx[s]]
-            vals = [v for v in vals if not np.isnan(v)]
-            means.append(np.mean(vals) if vals else float("nan"))
-        ax.bar(x + (i - 1.5) * width, means, width,
-               color=SCHEME_COLOR[s], label=SCHEME_LABEL[s])
-    ax.set_xticks(x); ax.set_xticklabels([f"RX {r}" for r in rx_ids])
-    ax.set_ylim(0.5, 1.005); ax.set_ylabel("PRR")
-    ax.set_title("Per-receiver PRR")
-    ax.grid(True, axis="y", alpha=0.3); ax.legend(fontsize=8)
-
-    fig.suptitle("RA-APC-Groupcast: highway → intersection scenario",
-                 fontsize=14, y=1.001)
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved {out_path}")
+    ax.axis("off")
+    summary = "Summary\n" + "=" * 40 + "\n\n"
+    for scheme, d in data.items():
+        summary += f"{scheme}:\n"
+        if d["harq"]:
+            ack = sum(d["harq"].values())[0].get("ack", {}).values() if hasattr(sum(d["harq"].values())[0], "get") else sum(sum(s["ack"].values() for s in d["harq"].values()))
+            nack = sum(s["nack"].values() for s in d["harq"].values())
+            total = ack + nack
+            if total > 0:
+                summary += f"  ACK: {ack} ({100*ack/total:.1f}%)\n"
+                summary += f"  NACK: {nack} ({100*nack/total:.1f}%)\n"
+        summary += "\n"
+    ax.text(0.1, 0.9, summary, transform=ax.transAxes, fontsize=9, verticalalignment="top", family="monospace")
+    
+    plt.savefig(plots_dir / "overview.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'overview.png'}")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+# ── Adaptations plots ───────────────────────────────────────────────
+def plot_mcs_evolution(results_dir, methods, plots_dir):
+    data = {}
+    for method in methods:
+        db_path = Path(results_dir) / method / f"{method}_seed1.db"
+        if db_path.exists():
+            data[method] = {"mcs": get_mcs_changes(str(db_path)), "harq": get_ack_nack(str(db_path))}
+    if not data:
+        print("  No MCS evolution data")
+        return
+    n = len(data)
+    fig, axes = plt.subplots(n, 2, figsize=(14, 3 * n), sharex=True)
+    if n == 1:
+        axes = [axes]
+    for idx, (method, d) in enumerate(data.items()):
+        ax_mcs, ax_harq = axes[idx]
+        if d["mcs"]:
+            times = sorted(d["mcs"].keys())
+            ax_mcs.plot(times, [d["mcs"][t] for t in times], 'b-o', markersize=3)
+        if d["harq"]:
+            t = d["harq"]["time"]
+            w = 0.8
+            ax_harq.bar([x - w/2 for x in t], d["harq"]["ack"], w, label="ACK", color="green", alpha=0.7)
+            ax_harq.bar([x + w/2 for x in t], d["harq"]["nack"], w, label="NACK", color="red", alpha=0.7)
+            ax_harq.legend()
+        ax_mcs.set_title(f"{method} - MCS")
+        ax_harq.set_title(f"{method} - HARQ")
+        ax_mcs.grid(True, alpha=0.3)
+        ax_harq.grid(True, alpha=0.3)
+    axes[-1][0].set_xlabel("Time (s)")
+    axes[-1][1].set_xlabel("Time (s)")
+    plt.tight_layout()
+    plt.savefig(plots_dir / "mcs_evolution.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'mcs_evolution.png'}")
 
+
+def plot_adaptation_metric(results_dir, methods, plots_dir):
+    fig, axes = plt.subplots(len(methods), 1, figsize=(14, 3 * len(methods)), sharex=True)
+    if len(methods) == 1:
+        axes = [axes]
+    for idx, method in enumerate(methods):
+        ax = axes[idx]
+        db_path = Path(results_dir) / method / f"{method}_seed1.db"
+        if not db_path.exists():
+            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center")
+            ax.set_title(method)
+            continue
+        rows = get_adapt_log(str(db_path))
+        if rows:
+            times = [r[0] / 1000.0 for r in rows]
+            metrics = [r[1] for r in rows]
+            new_mcs = [r[3] for r in rows]
+            ax.plot(times, metrics, "b-", lw=1.5, label="Metric")
+            ax.fill_between(times, 0, metrics, alpha=0.3)
+            config = METHOD_CONFIG.get(method, {})
+            if method == "nack_rate":
+                ax.axhline(config.get("down_thr", 0.15), color="red", ls="--", alpha=0.7)
+                ax.axhline(config.get("up_thr", 0.08), color="green", ls="--", alpha=0.7)
+            for r in rows:
+                if r[3] != r[2]:
+                    ax.axvline(r[0]/1000.0, color="red" if r[3] < r[2] else "green", alpha=0.6, ls="--")
+            ax2 = ax.twinx()
+            ax2.step(times, new_mcs, where="post", color="purple", lw=2)
+            ax2.set_ylabel("MCS", color="purple")
+        else:
+            ax.text(0.5, 0.5, "No adaptLog", transform=ax.transAxes, ha="center")
+        ax.set_title(method)
+        ax.grid(True, alpha=0.3)
+    axes[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
+    plt.savefig(plots_dir / "adaptation_metric.png", dpi=150)
+    plt.close()
+    print(f"Saved {plots_dir / 'adaptation_metric.png'}")
+
+
+# ── Main ───────────────────────────────────────────────────────────
 def main():
-    OUT_DIR.mkdir(exist_ok=True)
-    print("Loading per-seed data ...")
-    prr   = {s: collect(s, per_seed_prr_vs_time)   for s in SCHEMES}
-    perrx = {s: collect(s, per_seed_per_rx_prr)    for s in SCHEMES}
-    mux   = {s: collect(s, per_seed_mux_vs_time)   for s in SCHEMES}
-    mcs   = {s: collect(s, per_seed_mcs_vs_time)   for s in SCHEMES}
-    harq  = {s: collect(s, per_seed_harq_vs_time)  for s in SCHEMES}
-    pir   = {s: collect(s, per_seed_pir_vs_time)   for s in SCHEMES}
-
-    # Derive ETP per seed = PRR(t) · δ(t).
-    etp = {s: [p * m for p, m in zip(prr[s], mux[s])]
-           for s in SCHEMES}
-
-    print("\nRendering plots ...")
-    plot_prr_vs_time(prr, OUT_DIR / "ra_apc_prr_vs_time.png")
-    plot_per_rx_prr(perrx, OUT_DIR / "ra_apc_per_rx_prr.png")
-    plot_mux_vs_time(mux, OUT_DIR / "ra_apc_multiplex_vs_time.png")
-    plot_etp_vs_time(prr, mux, OUT_DIR / "ra_apc_etp_vs_time.png")
-    plot_mcs_trace(mcs, OUT_DIR / "ra_apc_mcs_trace.png")
-    plot_pir_vs_time(pir, OUT_DIR / "ra_apc_pir_vs_time.png")
-    plot_harq_overview(harq, OUT_DIR / "ra_apc_harq_vs_time.png")
-    plot_harq_bar(harq, OUT_DIR / "ra_apc_harq_bar.png")
-    plot_overview(prr, perrx, mux, mcs, etp,
-                  OUT_DIR / "ra_apc_overview.png")
-    print(f"\nDone — outputs in {OUT_DIR}")
+    global RESULTS_DIR
+    
+    parser = argparse.ArgumentParser(description="Plot RA-APC results")
+    parser.add_argument("--results", required=True, help="Results folder")
+    parser.add_argument("--plot", help="Plot type (default: all)")
+    parser.add_argument("--methods", nargs="+", default=METHODS, help="Methods to plot")
+    args = parser.parse_args()
+    
+    script_dir = Path(__file__).parent
+    results_dir = script_dir / args.results
+    RESULTS_DIR = results_dir
+    
+    # Always use results-specific plots folder
+    plots_dir = results_dir / "plots"
+    plots_dir.mkdir(exist_ok=True)
+    
+    plot_all = not args.plot
+    plot_type = args.plot
+    
+    plot_map = {
+        "prr_vs_time": plot_prr_vs_time,
+        "per_rx_prr": plot_per_rx_prr,
+        "mux_vs_time": plot_mux_vs_time,
+        "multiplex_vs_time": plot_mux_vs_time,  # alias
+        "etp_vs_time": plot_etp_vs_time,
+        "mcs_trace": plot_mcs_trace,
+        "pir_vs_time": plot_pir_vs_time,
+        "harq_overview": plot_harq_overview,
+        "harq_vs_time": plot_harq_overview,  # alias
+        "harq_bar": plot_harq_bar,
+        "overview": plot_overview,
+        "mcs_evolution": plot_mcs_evolution,
+        "adaptation_metric": plot_adaptation_metric,
+    }
+    
+    if plot_all:
+        for name, func in plot_map.items():
+            func(results_dir, args.methods, plots_dir)
+        print(f"\nAll plots saved to {plots_dir}/")
+    else:
+        if plot_type in plot_map:
+            plot_map[plot_type](results_dir, args.methods, plots_dir)
+        else:
+            print(f"Unknown plot: {plot_type}")
+            print(f"Available: {', '.join(plot_map.keys())}")
 
 
 if __name__ == "__main__":

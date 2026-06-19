@@ -21,7 +21,7 @@
  * pathloss in dB under each model. Output is a per-link-sample CSV.
  */
 
-#include "../csi_groupcast_eval/three-gpp-geometric-nlosv.h"
+#include "common/channel/three-gpp-geometric-nlosv.h"
 
 #include "ns3/core-module.h"
 #include "ns3/mobility-module.h"

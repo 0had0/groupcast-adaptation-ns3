@@ -23,11 +23,11 @@
 // Reuses all C++ support files from scratch_overlay/csi_groupcast_eval/
 // via CMake source-path references — no duplication.
 
-#include "../csi_groupcast_eval/groupcast_flows.h"
-#include "../csi_groupcast_eval/kpi_hooks.h"
-#include "../csi_groupcast_eval/mobility.h"
-#include "../csi_groupcast_eval/nr_sl_stack.h"
-#include "../csi_groupcast_eval/v2x-kpi.h"
+#include "common/flows/groupcast_flows.h"
+#include "common/kpi/kpi_hooks.h"
+#include "common/mobility/mobility.h"
+#include "common/stack/nr_sl_stack.h"
+#include "common/kpi/v2x-kpi.h"
 
 #include "ns3/core-module.h"
 #include "ns3/log.h"

@@ -25,3 +25,6 @@ tmp/
 *.png
 *.tex
 *.drawio
+graphify-out/
+experiment*/
+nr_sidelink_visualizer/

@@ -116,20 +116,55 @@ def compute_kpis(db_path: Path,
             rx_times[(int(node), f, str(src_ip))].append(float(t))
 
         # ---- HARQ feedback per (rx, optional) ----
+        # ATTRIBUTION FIX: slHarqFeedback.rxNodeId == data-Tx (the node whose MAC
+        # receives the PSFCH ACK/NACK), NOT the data-Rx.  The feedback sender
+        # (= data-Rx) is identified by txRnti.  We resolve txRnti -> nodeId via
+        # the pktTxRx IP<->nodeId map already built above.
+        #
+        # Strategy: build rnti->nodeId from pktTxRx (tx rows carry srcIp which
+        # maps to nodeId).  Then key harq_by_rx by the resolved data-Rx nodeId.
+        # Fall back to the legacy rxNodeId key if txRnti is 0 / unresolvable so
+        # old DBs without the txRnti column still produce valid run-level totals.
         harq_by_rx: Dict[int, Dict[str, int]] = defaultdict(lambda: {"ack": 0, "nack": 0})
         harq_total = {"ack": 0, "nack": 0}
         try:
-            for rxn, status, c in con.execute(
-                "SELECT rxNodeId, status, COUNT(*) FROM slHarqFeedback "
-                "WHERE timeSec>? GROUP BY rxNodeId, status", (warmup_s,)
+            # Build rnti->nodeId map from pktTxRx TX rows (srcIp -> nodeId already
+            # in ip_to_node; we need rnti -> nodeId from psschTxUeMac if available,
+            # else we skip per-rx attribution and only accumulate totals).
+            rnti_to_node: Dict[int, int] = {}
+            try:
+                for rnti, node in con.execute(
+                    "SELECT DISTINCT rnti, nodeId FROM psschTxUeMac"
+                ):
+                    rnti_to_node[int(rnti)] = int(node)
+            except sqlite3.OperationalError:
+                pass  # table absent — per-rx attribution unavailable
+
+            for txRnti, status, c in con.execute(
+                "SELECT txRnti, status, COUNT(*) FROM slHarqFeedback "
+                "WHERE timeSec>? GROUP BY txRnti, status", (warmup_s,)
             ):
                 s = str(status).strip().upper()
                 if s not in ("ACK", "NACK"):
                     continue
-                harq_by_rx[int(rxn)][s.lower()] += int(c)
+                # txRnti = feedback sender = data-Rx RNTI.
+                data_rx_node = rnti_to_node.get(int(txRnti), -1)
+                if data_rx_node >= 0:
+                    harq_by_rx[data_rx_node][s.lower()] += int(c)
                 harq_total[s.lower()] += int(c)
         except sqlite3.OperationalError:
-            pass
+            # Legacy fallback: try old rxNodeId column grouping for run-level totals.
+            try:
+                for rxn, status, c in con.execute(
+                    "SELECT rxNodeId, status, COUNT(*) FROM slHarqFeedback "
+                    "WHERE timeSec>? GROUP BY rxNodeId, status", (warmup_s,)
+                ):
+                    s = str(status).strip().upper()
+                    if s not in ("ACK", "NACK"):
+                        continue
+                    harq_total[s.lower()] += int(c)
+            except sqlite3.OperationalError:
+                pass
 
         try:
             harq_timeout = con.execute(

@@ -11,13 +11,13 @@
 //   6. Simulator::Run()
 //   7. Flush() + run-summary CSV
 
-#include "groupcast_flows.h"
-#include "kpi_hooks.h"
-#include "mobility.h"
-#include "nr-sl-adaptive-mcs-controller.h"
-#include "nr-sl-adaptive-mcs-scheduler.h"
-#include "nr_sl_stack.h"
-#include "v2x-kpi.h"
+#include "common/flows/groupcast_flows.h"
+#include "common/kpi/kpi_hooks.h"
+#include "common/mobility/mobility.h"
+#include "common/stack/nr-sl-adaptive-mcs-controller.h"
+#include "common/stack/nr-sl-adaptive-mcs-scheduler.h"
+#include "common/stack/nr_sl_stack.h"
+#include "common/kpi/v2x-kpi.h"
 #include <sqlite3.h>
 
 #include "ns3/core-module.h"
@@ -237,11 +237,29 @@ main(int argc, char* argv[])
     stackParams.mu               = mu;
     stackParams.bwPRBs           = bwPRBs;
     stackParams.mcs              = mcs;
+    stackParams.adaptiveMcs      = adaptiveMcs;  // CRITICAL: SlStackParams defaults
+                                                 // adaptiveMcs{true}; without this
+                                                 // assignment every fixed-MCS run
+                                                 // silently installed the adaptive
+                                                 // scheduler and transmitted at its
+                                                 // m_adaptiveMcs=14 default, ignoring --mcs.
     stackParams.seed             = seed;
     stackParams.maxNumTx         = static_cast<uint8_t>(maxNumTx);
     stackParams.psfchPeriod      = static_cast<uint16_t>(psfchPeriod);
     stackParams.shadowingEnabled = shadowing;
     stackParams.scenario         = baseScenario;
+
+    // Per-destination fixed-MCS overrides: any flow carrying an explicit mcs=
+    // pins its dstL2Id to that MCS (dual-MCS redundant groupcast). Flows without
+    // mcs= (fd.mcs < 0) keep the global --mcs default for their destination.
+    for (const auto& fd : flowDefs)
+    {
+        if (fd.mcs >= 0)
+        {
+            stackParams.dstMcsOverride[fd.dstL2Id] =
+                static_cast<uint8_t>(fd.mcs);
+        }
+    }
 
     SlStackCtx stack = BuildSlStack(stackParams, geomCfg, ueNodes);
 
