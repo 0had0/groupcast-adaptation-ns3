@@ -22,9 +22,11 @@ tmp/
 # (sumo, netanim, ns-3-dev are intentionally absent from this list)
 *.db
 *.csv
+*.pdf
 *.png
 *.tex
 *.drawio
 graphify-out/
 experiment*/
 nr_sidelink_visualizer/
+analytical_relay_model
