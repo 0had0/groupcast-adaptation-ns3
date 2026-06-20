@@ -519,6 +519,22 @@ KpiHooks::KpiHooks(const std::string& dbPath, const std::string& csvPath)
         "nSegmentsPost INTEGER NOT NULL, "
         "tbSize        INTEGER NOT NULL"
         ");");
+
+    // nodeInfo: one row per UE, written at Flush() time.
+    // Provides the runtime identity map (nodeId, imsi, ip, position) that
+    // kpi_postprocess.py uses for range-gating, per-UE attribution, and the
+    // rnti bridge (via rlcRx join). Requires no ns-3 edits.
+    db.SpinExec(
+        "CREATE TABLE IF NOT EXISTS nodeInfo ("
+        "nodeId  INTEGER NOT NULL, "
+        "imsi    INTEGER NOT NULL, "
+        "ip      TEXT    NOT NULL, "
+        "x       DOUBLE  NOT NULL, "
+        "y       DOUBLE  NOT NULL, "
+        "z       DOUBLE  NOT NULL, "
+        "SEED    INTEGER NOT NULL, "
+        "RUN     INTEGER NOT NULL"
+        ");");
 }
 
 // ---------------------------------------------------------------------------
@@ -530,36 +546,35 @@ KpiHooks::WriteAdaptLog(double timeMs, double metric, uint8_t prevMcs, uint8_t n
                        const std::string& decision, uint32_t ackCount, uint32_t nackCount,
                        double windowStartMs, double windowEndMs)
 {
-    // Force log to appear
-    std::cerr << "WriteAdaptLog CALLED: timeMs=" << timeMs << " metric=" << metric << std::endl;
+    NS_LOG_DEBUG("WriteAdaptLog: timeMs=" << timeMs << " metric=" << metric);
     sqlite3_stmt* stmt;
     bool ok = db.WaitPrepare(&stmt, "INSERT INTO adaptLog (timeMs, metric, prevMcs, newMcs, decision, ackCount, nackCount, windowStartMs, windowEndMs) VALUES (?,?,?,?,?,?,?,?,?);");
     if (!ok || !stmt)
     {
-        std::cerr << "WaitPrepare failed" << std::endl;
+        NS_LOG_ERROR("WriteAdaptLog: WaitPrepare failed");
         return;
     }
     ok = db.Bind(stmt, 1, timeMs);
-    if (!ok) { std::cerr << "Bind 1 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 1 failed"); return; }
     ok = db.Bind(stmt, 2, metric);
-    if (!ok) { std::cerr << "Bind 2 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 2 failed"); return; }
     ok = db.Bind(stmt, 3, static_cast<uint32_t>(prevMcs));
-    if (!ok) { std::cerr << "Bind 3 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 3 failed"); return; }
     ok = db.Bind(stmt, 4, static_cast<uint32_t>(newMcs));
-    if (!ok) { std::cerr << "Bind 4 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 4 failed"); return; }
     ok = db.Bind(stmt, 5, decision);
-    if (!ok) { std::cerr << "Bind 5 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 5 failed"); return; }
     ok = db.Bind(stmt, 6, ackCount);
-    if (!ok) { std::cerr << "Bind 6 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 6 failed"); return; }
     ok = db.Bind(stmt, 7, nackCount);
-    if (!ok) { std::cerr << "Bind 7 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 7 failed"); return; }
     ok = db.Bind(stmt, 8, windowStartMs);
-    if (!ok) { std::cerr << "Bind 8 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 8 failed"); return; }
     ok = db.Bind(stmt, 9, windowEndMs);
-    if (!ok) { std::cerr << "Bind 9 failed" << std::endl; return; }
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: Bind 9 failed"); return; }
     ok = db.SpinExec(stmt);
-    if (!ok) { std::cerr << "SpinExec failed" << std::endl; return; }
-    std::cerr << "WriteAdaptLog SUCCESS" << std::endl;
+    if (!ok) { NS_LOG_ERROR("WriteAdaptLog: SpinExec failed"); return; }
+    NS_LOG_DEBUG("WriteAdaptLog: row inserted");
 }
 
 // ---------------------------------------------------------------------------
@@ -820,7 +835,22 @@ Flush(KpiHooks& h)
     h.rlcRx.EmptyCache();
     h.slHarq.EmptyCache();
 
-    // Record each UE's IP→position mapping so V2xKpi can apply the range gate.
+    // Record each UE's IP→position mapping so V2xKpi can apply the range gate,
+    // and persist it to the nodeInfo table for offline Python post-processing.
+    // One row per UE device (UEs only; non-UE nodes are skipped).
+    // Delete any existing rows for this (seed, run) so re-runs don't duplicate.
+    {
+        sqlite3_stmt* delStmt = nullptr;
+        if (h.db.SpinPrepare(&delStmt,
+                             "DELETE FROM nodeInfo WHERE SEED = ? AND RUN = ?;") &&
+            delStmt)
+        {
+            h.db.Bind(delStmt, 1, RngSeedManager::GetSeed());
+            h.db.Bind(delStmt, 2, static_cast<uint32_t>(RngSeedManager::GetRun()));
+            h.db.SpinExec(delStmt);
+        }
+    }
+    h.db.SpinExec("BEGIN TRANSACTION;");
     for (auto it = NodeList::Begin(); it != NodeList::End(); ++it)
     {
         Ptr<Node> node = *it;
@@ -832,10 +862,34 @@ Flush(KpiHooks& h)
             }
             std::ostringstream ip;
             ip << node->GetObject<Ipv4L3Protocol>()->GetAddress(1, 0).GetLocal();
+            const std::string ipStr = ip.str();
             Vector pos = node->GetObject<MobilityModel>()->GetPosition();
-            h.v2xKpi.FillPosPerIpMap(ip.str(), pos);
+            const uint64_t imsi = node->GetDevice(j)->GetObject<NrUeNetDevice>()->GetImsi();
+            const uint32_t nodeId = node->GetId();
+
+            // Feed V2xKpi range-gate map.
+            h.v2xKpi.FillPosPerIpMap(ipStr, pos);
+
+            // Persist to nodeInfo.
+            sqlite3_stmt* stmt = nullptr;
+            bool ok = h.db.SpinPrepare(
+                &stmt,
+                "INSERT INTO nodeInfo (nodeId,imsi,ip,x,y,z,SEED,RUN) VALUES (?,?,?,?,?,?,?,?);");
+            if (ok && stmt)
+            {
+                h.db.Bind(stmt, 1, nodeId);
+                h.db.Bind(stmt, 2, static_cast<uint32_t>(imsi));
+                h.db.Bind(stmt, 3, ipStr);
+                h.db.Bind(stmt, 4, pos.x);
+                h.db.Bind(stmt, 5, pos.y);
+                h.db.Bind(stmt, 6, pos.z);
+                h.db.Bind(stmt, 7, RngSeedManager::GetSeed());
+                h.db.Bind(stmt, 8, static_cast<uint32_t>(RngSeedManager::GetRun()));
+                h.db.SpinExec(stmt);
+            }
         }
     }
+    h.db.SpinExec("END TRANSACTION;");
 
     h.v2xKpi.WriteKpis();
 
