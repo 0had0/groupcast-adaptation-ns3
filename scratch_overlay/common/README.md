@@ -70,18 +70,32 @@ FlowResult res = InstallGroupcastFlows(ueNodes, stack, flowDefs,
 ### `kpi/` — KPI hooks, SQLite output, V2xKpi engine
 | File | Purpose |
 |------|---------|
-| `kpi_hooks.h/.cc` | `KpiHooks` struct, `ConnectPhyMacTraces()`, `ConnectAppTraces()`, `Flush()`. Owns the SQLite DB, CSV file, HARQ feedback logger, V2xKpi engine. |
+| `kpi_hooks.h/.cc` | `KpiHooks` struct, `ConnectPhyMacTraces()`, `ConnectAppTraces()`, `Flush()`. Owns the SQLite DB, CSV file, HARQ feedback logger, V2xKpi engine. Also writes the `nodeInfo` table (node positions, IMSI, IP) at `Flush()` time. |
 | `v2x-kpi.h/.cc` | `V2xKpi`: computes PRR, PIR, throughput, collision stats from the DB tables. (Derived from `contrib/nr/examples/nr-v2x-examples/`.) |
+| `kpi_postprocess.py` | **Canonical Python KPI post-processor.** Reads the SQLite DB, computes per-(UE, flow) KPIs in memory (no ns-3 required), and writes a tidy CSV. See [KPI Post-Processor](#kpi-post-processor-kpi_postprocesspy) below. |
 
-**Canonical call sequence:**
+**Canonical call sequence (C++):**
 ```cpp
 KpiHooks hooks(dbPath, csvPath);
 hooks.warmupTime = warmup;       // seconds before KPI measurement
 ConnectPhyMacTraces(hooks);
 ConnectAppTraces(hooks, flows);
 // ... Simulator::Run() ...
-Flush(hooks);                    // drains caches, writes V2xKpi tables
+Flush(hooks);                    // drains caches, writes V2xKpi + nodeInfo tables
 ```
+
+#### Tables written to SQLite DB
+
+| Table | Written by | Content |
+|-------|-----------|---------|
+| `pktTxRx` | `kpi_hooks.cc` | Per-packet TX/RX events: time, node, IP, port, seq, size |
+| `rlcRx` | `kpi_hooks.cc` | RLC PDU delivery: IMSI, RNTI, delay |
+| `psschTxUeMac` | `kpi_hooks.cc` | PSSCH grant per transmission: RNTI, slot, RB, subchannel |
+| `psschRxUePhy` | `kpi_hooks.cc` | PSSCH reception per decode attempt: corrupt flag, SINR |
+| `pscchTxUeMac` | `kpi_hooks.cc` | PSCCH control grant per transmission |
+| `pscchRxUePhy` | `kpi_hooks.cc` | PSCCH reception decode attempt |
+| `slHarqFeedback` | `kpi_hooks.cc` | HARQ ACK/NACK per transport block |
+| `nodeInfo` | `kpi_hooks.cc` → `Flush()` | UE identity: `(nodeId, imsi, ip, x, y, z, SEED, RUN)` — written once at flush time from `NodeList` |
 
 ### `relay/` — L2 decode-and-forward relay apps
 | File | Purpose |
@@ -113,6 +127,58 @@ cd ns-3-dev
 ```
 
 The template `eval_template.cc` demonstrates the full composition recipe with comments at each step.
+
+---
+
+## KPI Post-Processor (`kpi_postprocess.py`)
+
+`scratch_overlay/common/kpi/kpi_postprocess.py` is the canonical Python script for computing all V2X KPIs from a simulation SQLite DB.  It **bulk-loads** all relevant tables into Python memory (no per-link SQL queries), so it processes a typical 300 MB DB in ~20 seconds.
+
+### Computed metrics (per `(rx_node, tx_node, flow)` row)
+
+| Column | Description |
+|--------|-------------|
+| `n_tx` / `n_rx` | Total packets transmitted / received in measurement window |
+| `prr_mean/p5/p95` | Packet Reception Ratio over sliding windows |
+| `pir_mean/p5/p95_ms` | Packet Inter-Reception interval (ms) over sliding windows |
+| `thput_mean/p5/p95_kbps` | Throughput (kbps) over sliding windows |
+| `aoi_mean/peak_ms` | Time-average and peak Age-of-Information (ms) via sawtooth integral |
+| `harq_ack` / `harq_nack` / `harq_nack_rate` | HARQ ACK/NACK counts and NACK rate per receiver |
+| `hd_count` | Half-duplex slot overlaps (RX node was TX-ing on same slot as sender) |
+| `rc_count` / `ce_count` | Corrupt frames attributed to resource collision / channel error |
+| `total_corrupt` | Total corrupt PSSCH receptions for this (rx, tx) pair |
+| `ch_occupancy` | Channel occupancy ratio for the TX node [0, 1] |
+
+### CLI usage
+
+```bash
+python3 kpi_postprocess.py \
+    --db path/to/sim.db \
+    --out results/kpi.csv \
+    --warmup 2.0 \          # skip first 2 s (default)
+    --sim-end 12.0 \        # inferred from DB if omitted
+    --window 1.0 \          # sliding-window width (s); 1.0 suited to μ=1
+    --step 0.1 \            # window advance step (s)
+    --seed 1 --run 1        # SQLite SEED/RUN discriminators
+```
+
+Optional flags: `--range <meters>` (spatial gate), `--seed`, `--run`.
+
+### Identity resolution
+
+The post-processor prefers the `nodeInfo` table (written by `Flush()` since the audited C++ update).  For older DBs lacking `nodeInfo` it falls back to reconstructing identity from `pktTxRx + rlcRx` (no positions, limited RNTI coverage — HARQ/occupancy/collision columns will be zero).
+
+### Tests
+
+```bash
+# Unit tests only (no DB needed — ~30 ms):
+python3 -m unittest tests.test_kpi_helpers
+
+# Unit + real-DB invariant tests (needs a .db file — ~20 s):
+KPITEST_REAL=1 python3 -m unittest tests.test_kpi_helpers
+```
+
+`KPITEST_REAL` auto-detects the first `.db` under `experiment_*/`.
 
 ---
 
