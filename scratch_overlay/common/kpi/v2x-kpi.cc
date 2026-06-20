@@ -101,8 +101,12 @@ V2xKpi::SavePktRxData()
     NS_ABORT_MSG_UNLESS(rc == SQLITE_OK, "Error open DB. Db error: " << sqlite3_errmsg(m_db));
 
     sqlite3_stmt* stmt;
+    // ORDER BY timeSec is mandatory: ComputeAvrgPir accumulates inter-arrival
+    // gaps sequentially and silently produces wrong PIR if rows arrive
+    // out-of-order (e.g., after VACUUM or with multi-seed DBs).
     std::string sql(
-        "SELECT * FROM pktTxRx WHERE txRx = 'rx' AND txRx IS NOT NULL AND SEED = ? AND RUN = ?;");
+        "SELECT * FROM pktTxRx WHERE txRx = 'rx' AND txRx IS NOT NULL AND SEED = ? AND RUN = ?"
+        " ORDER BY timeSec;");
     rc = sqlite3_prepare_v2(m_db, sql.c_str(), static_cast<int>(sql.size()), &stmt, nullptr);
     NS_ABORT_MSG_UNLESS(rc == SQLITE_OK, "Error SELECT. Db error: " << sqlite3_errmsg(m_db));
     NS_ABORT_UNLESS(sqlite3_bind_int(stmt, 1, RngSeedManager::GetSeed()) == SQLITE_OK);
@@ -259,7 +263,6 @@ V2xKpi::ComputeAvrgPir(std::string ipTx, std::vector<PktTxRxData> data)
     double lastPktRxTime = 0.0;
     double pir = 0.0;
 
-    // NS_LOG_UNCOND ("Packet Vector size " << data.size () << " to compute average PIR");
     if (m_range > 0)
     {
         PktTxRxData dataIpRx = data.at(0);
@@ -279,16 +282,18 @@ V2xKpi::ComputeAvrgPir(std::string ipTx, std::vector<PktTxRxData> data)
         }
     }
 
+    // Use an explicit first-packet flag so the guard is correct even when
+    // the first packet arrives at simulation time 0.0.
+    bool firstPkt = true;
     for (const auto& it : data)
     {
-        if (pirCounter == 0 && lastPktRxTime == 0.0)
+        if (firstPkt)
         {
-            // this is the first packet, just store the time and get out
             lastPktRxTime = it.time;
+            firstPkt = false;
             continue;
         }
 
-        // NS_LOG_UNCOND ("it.time - lastPktRxTime " << it.time - lastPktRxTime);
         pir = pir + (it.time - lastPktRxTime);
         lastPktRxTime = it.time;
         pirCounter++;
@@ -296,9 +301,7 @@ V2xKpi::ComputeAvrgPir(std::string ipTx, std::vector<PktTxRxData> data)
     double avrgPir = 0.0;
     if (pirCounter == 0)
     {
-        // It may happen that a node would rxed only one pkt from a
-        // particular tx node. In that case, PIR can not be computed.
-        // assert added just to check range based
+        // Node received only one packet from this TX — PIR undefined.
         avrgPir = -1.0;
     }
     else
@@ -747,7 +750,14 @@ V2xKpi::ComputePsschTxStats()
                            sqlite3_column_int(stmt, 11),
                            sqlite3_column_int(stmt, 12));
 
-        if (nonOverLapPsschTx.empty() && nonOverLapPsschTx.empty())
+        // NOTE: simulPsschTx is a coarse resource-overlap proxy based on the
+        // TX-side grant log.  It counts (frame,subFrame,slot,sym,RB) overlaps
+        // between any two grants globally — it does NOT account for receiver
+        // geometry or half-duplex, and the move-to-overlap logic below is
+        // only exact for 2 simultaneous colliders.  Use the Python
+        // kpi_postprocess.py for per-RX, range-gated, attributed collision
+        // counts (half-duplex / resource-collision / channel-error).
+        if (nonOverLapPsschTx.empty() && overLapPsschTx.empty())
         {
             nonOverLapPsschTx.push_back(result);
         }
