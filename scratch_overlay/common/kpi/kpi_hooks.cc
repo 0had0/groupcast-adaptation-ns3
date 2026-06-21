@@ -892,6 +892,15 @@ PreFlush(KpiHooks& h)
 void
 Flush(KpiHooks& h)
 {
+    // Backward-compatibility shim: if NodeList is still populated (caller
+    // hasn't split PreFlush/Flush), snapshot node positions now.
+    // Preferred usage: call PreFlush() before Simulator::Destroy(), then
+    // Flush() afterwards (relay_storm_eval pattern).
+    if (NodeList::Begin() != NodeList::End())
+    {
+        PreFlush(h);
+    }
+
     // Drain in-memory caches → DB.
     h.pktTxRx.EmptyCache();
     h.pscchTxMac.EmptyCache();
