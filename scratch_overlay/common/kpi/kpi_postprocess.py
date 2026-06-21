@@ -306,17 +306,25 @@ def _build_identity_map(
                 node_id=int(node_id), imsi=int(imsi), ip=str(ip)
             )
 
-    # Resolve rnti via rlcRx (imsi is in both tables; rnti bridges to PHY).
+    # Resolve rnti via rlcRx (covers RX nodes) and psschTxUeMac (covers TX-only nodes).
+    imsi_to_rnti: Dict[int, int] = {}
     if _has_table(con, "rlcRx"):
-        imsi_to_rnti: Dict[int, int] = {}
         rows = con.execute(
             "SELECT DISTINCT imsi, rnti FROM rlcRx WHERE SEED=? AND RUN=?;",
             (seed, run),
         ).fetchall()
         for imsi, rnti in rows:
             imsi_to_rnti[int(imsi)] = int(rnti)
-        for nm in meta.values():
-            nm.rnti = imsi_to_rnti.get(nm.imsi)
+    # Also pull from psschTxUeMac so TX-only nodes (leader, relay) get their rnti.
+    if _has_table(con, "psschTxUeMac"):
+        rows = con.execute(
+            "SELECT DISTINCT imsi, rnti FROM psschTxUeMac WHERE SEED=? AND RUN=?;",
+            (seed, run),
+        ).fetchall()
+        for imsi, rnti in rows:
+            imsi_to_rnti.setdefault(int(imsi), int(rnti))
+    for nm in meta.values():
+        nm.rnti = imsi_to_rnti.get(nm.imsi)
 
     return meta
 
@@ -801,6 +809,30 @@ class KpiRow:
     # Channel occupancy (TX side)
     ch_occupancy: Optional[float] = None
 
+    # ---- worst / best aggregates (relay_storm_eval additions) ----
+    # PRR: worst = min, best = max
+    prr_worst: Optional[float] = None
+    prr_best: Optional[float] = None
+    # PIR (ms): worst = max, best = min
+    pir_worst_ms: Optional[float] = None
+    pir_best_ms: Optional[float] = None
+    # Throughput (kbps): worst = min, best = max
+    thput_worst_kbps: Optional[float] = None
+    thput_best_kbps: Optional[float] = None
+    # AoI (ms): worst = max already captured by aoi_peak; best = min
+    aoi_best_ms: Optional[float] = None
+
+    # ---- Per-hop reTX counts (psschTxUeMac, ndi=0 rows, grouped by TX RNTI) ----
+    # hop1_retx = retransmissions by leader (node 0 / min-nodeId TX)
+    # hop2_retx = retransmissions by relay node
+    hop1_retx: Optional[int] = None
+    hop2_retx: Optional[int] = None
+
+    # ---- Time-series export flag (rows with window_t set are time-series rows) ----
+    # When window_t is not None this row represents a single time window, not
+    # the aggregate. Aggregate rows have window_t = None.
+    window_t: Optional[float] = None
+
 
 def _fmt(v) -> str:
     if v is None:
@@ -968,6 +1000,39 @@ def compute_kpis(
             )
             corrupt_rx[(rx_rn, tx_rn)].append((fr, sf, sl, rb_s, rb_l))
 
+    # ------------------------------------------------------------------ #
+    # Bulk load 5: per-hop reTX counts from psschTxUeMac (ndi=0 rows)    #
+    # retx_by_rnti[rnti] = count of retransmissions (ndi=0) in window    #
+    # ------------------------------------------------------------------ #
+    print(f"[kpi_postprocess] Loading per-hop reTX ...")
+    retx_by_rnti: Dict[int, int] = {}
+    if _has_table(con, "psschTxUeMac"):
+        ndi_col = None
+        # Check if 'ndi' column exists.
+        pragma = con.execute("PRAGMA table_info(psschTxUeMac);").fetchall()
+        col_names = [r[1] for r in pragma]
+        if "ndi" in col_names:
+            ndi_col = "ndi"
+        elif "rv" in col_names:
+            ndi_col = "rv"  # rv>0 also identifies retx
+
+        if ndi_col == "ndi":
+            for row in con.execute(
+                "SELECT rnti, COUNT(*) FROM psschTxUeMac "
+                "WHERE ndi=0 AND SEED=? AND RUN=? AND timeMs>=? AND timeMs<=? "
+                "GROUP BY rnti;",
+                (seed, run, t_start_ms, t_end_ms),
+            ):
+                retx_by_rnti[int(row[0])] = int(row[1])
+        elif ndi_col == "rv":
+            for row in con.execute(
+                "SELECT rnti, COUNT(*) FROM psschTxUeMac "
+                "WHERE rv>0 AND SEED=? AND RUN=? AND timeMs>=? AND timeMs<=? "
+                "GROUP BY rnti;",
+                (seed, run, t_start_ms, t_end_ms),
+            ):
+                retx_by_rnti[int(row[0])] = int(row[1])
+
     con.close()
 
     # ------------------------------------------------------------------ #
@@ -1052,9 +1117,20 @@ def compute_kpis(
                 ss = sorted(s)
                 return _safe_mean(ss), _percentile(ss, 0.05), _percentile(ss, 0.95)
 
-            prr_mean, prr_p5, prr_p95 = _stats(prr_samples)
-            pir_mean, pir_p5, pir_p95 = _stats(pir_samples)
-            thput_mean, thput_p5, thput_p95 = _stats(thput_samples)
+            def _stats_ext(s: List[float]):
+                """Returns (mean, p5, p95, worst, best) for a sample list.
+                For PRR/Tput: worst=min, best=max.
+                For PIR: worst=max, best=min.
+                Caller picks the interpretation by field assignment."""
+                if not s:
+                    return None, None, None, None, None
+                ss = sorted(s)
+                return (_safe_mean(ss), _percentile(ss, 0.05), _percentile(ss, 0.95),
+                        ss[0], ss[-1])  # (mean, p5, p95, min, max)
+
+            prr_mean, prr_p5, prr_p95, prr_min, prr_max = _stats_ext(prr_samples)
+            pir_mean, pir_p5, pir_p95, pir_min, pir_max = _stats_ext(pir_samples)
+            thput_mean, thput_p5, thput_p95, thput_min, thput_max = _stats_ext(thput_samples)
 
             def _ms(v): return v * 1000.0 if v is not None else None
 
@@ -1062,6 +1138,12 @@ def compute_kpis(
             gen_times = [tx_seq_map[seq][0] for _, seq, _ in rx_list if seq in tx_seq_map]
             rx_for_aoi = [t for t, seq, _ in rx_list if seq in tx_seq_map]
             aoi_mean, aoi_peak = _aoi_stats(gen_times, rx_for_aoi, t_start, t_end)
+            # AoI best = minimum instantaneous AoI at any RX event.
+            aoi_best = None
+            if gen_times and rx_for_aoi:
+                instants = [(r - g) * 1000.0
+                            for g, r in zip(gen_times, rx_for_aoi) if r >= g]
+                aoi_best = min(instants) if instants else None
 
             # ---- HARQ ----
             rx_rnti = rx_nm.rnti if rx_nm else None
@@ -1156,6 +1238,21 @@ def compute_kpis(
                 ce_count=ce_count,
                 total_corrupt=total_corrupt,
                 ch_occupancy=occupancy,
+                # ---- worst / best ----
+                prr_worst=prr_min,      # PRR worst = min
+                prr_best=prr_max,       # PRR best  = max
+                pir_worst_ms=_ms(pir_max),  # PIR worst = max latency
+                pir_best_ms=_ms(pir_min),   # PIR best  = min latency
+                thput_worst_kbps=thput_min, # Tput worst = min
+                thput_best_kbps=thput_max,  # Tput best  = max
+                aoi_best_ms=aoi_best,
+                # ---- per-hop reTX ----
+                # hop1 = leader RNTI (tx_node_id 0 → tx_rnti resolved above),
+                # hop2 = any other TX RNTI in retx_by_rnti not matching hop1.
+                # We report the leader's retx for the first link row and the
+                # relay's retx for links where tx is the relay node.
+                hop1_retx=retx_by_rnti.get(tx_rnti, 0) if tx_rnti is not None else None,
+                hop2_retx=None,  # populated by analyse_relay_storm.py
             )
             rows.append(row)
 
