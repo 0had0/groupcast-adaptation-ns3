@@ -225,7 +225,14 @@ void ConnectPhyMacTraces(KpiHooks& h);
 // `flows.clients[f]` and `flows.servers[f]` must already be installed.
 void ConnectAppTraces(KpiHooks& h, const FlowResult& flows);
 
-// Drain all DB caches and write KPI tables.  Call after Simulator::Run().
+// Snapshot node positions into the nodeInfo DB table and into the V2xKpi
+// IP-to-position map.  Must be called BEFORE Simulator::Destroy() while
+// NodeList is still populated (i.e. after Simulator::Run() returns but
+// before ::Destroy()).
+void PreFlush(KpiHooks& h);
+
+// Drain all DB caches and write KPI tables.  Call after Simulator::Destroy().
+// PreFlush() must have been called first.
 void Flush(KpiHooks& h);
 
 } // namespace ns3

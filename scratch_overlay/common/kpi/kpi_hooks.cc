@@ -820,24 +820,16 @@ ConnectAppTraces(KpiHooks& h, const FlowResult& flows)
 }
 
 // ---------------------------------------------------------------------------
-// Flush
+// PreFlush — must be called BEFORE Simulator::Destroy()
 // ---------------------------------------------------------------------------
 
 void
-Flush(KpiHooks& h)
+PreFlush(KpiHooks& h)
 {
-    // Drain in-memory caches → DB.
-    h.pktTxRx.EmptyCache();
-    h.pscchTxMac.EmptyCache();
-    h.psschTxMac.EmptyCache();
-    h.pscchRxPhy.EmptyCache();
-    h.psschRxPhy.EmptyCache();
-    h.rlcRx.EmptyCache();
-    h.slHarq.EmptyCache();
-
     // Record each UE's IP→position mapping so V2xKpi can apply the range gate,
     // and persist it to the nodeInfo table for offline Python post-processing.
     // One row per UE device (UEs only; non-UE nodes are skipped).
+    // Must be called while NodeList is still populated (before Simulator::Destroy()).
     // Delete any existing rows for this (seed, run) so re-runs don't duplicate.
     {
         sqlite3_stmt* delStmt = nullptr;
@@ -856,7 +848,8 @@ Flush(KpiHooks& h)
         Ptr<Node> node = *it;
         for (uint32_t j = 0; j < node->GetNDevices(); ++j)
         {
-            if (!node->GetDevice(j)->GetObject<NrUeNetDevice>())
+            auto nrDev = node->GetDevice(j)->GetObject<NrUeNetDevice>();
+            if (!nrDev)
             {
                 continue;
             }
@@ -864,7 +857,7 @@ Flush(KpiHooks& h)
             ip << node->GetObject<Ipv4L3Protocol>()->GetAddress(1, 0).GetLocal();
             const std::string ipStr = ip.str();
             Vector pos = node->GetObject<MobilityModel>()->GetPosition();
-            const uint64_t imsi = node->GetDevice(j)->GetObject<NrUeNetDevice>()->GetImsi();
+            const uint64_t imsi = nrDev->GetImsi();
             const uint32_t nodeId = node->GetId();
 
             // Feed V2xKpi range-gate map.
@@ -890,6 +883,23 @@ Flush(KpiHooks& h)
         }
     }
     h.db.SpinExec("END TRANSACTION;");
+}
+
+// ---------------------------------------------------------------------------
+// Flush — call after Simulator::Destroy() (PreFlush must have been called first)
+// ---------------------------------------------------------------------------
+
+void
+Flush(KpiHooks& h)
+{
+    // Drain in-memory caches → DB.
+    h.pktTxRx.EmptyCache();
+    h.pscchTxMac.EmptyCache();
+    h.psschTxMac.EmptyCache();
+    h.pscchRxPhy.EmptyCache();
+    h.psschRxPhy.EmptyCache();
+    h.rlcRx.EmptyCache();
+    h.slHarq.EmptyCache();
 
     h.v2xKpi.WriteKpis();
 
