@@ -9,20 +9,23 @@
 #   - Seeds: configurable (default 1..3)
 #
 # Usage:
-#   ./run_relay_storm.sh [outputDir] [simTime] [seeds]
+#   ./run_relay_storm.sh [outputDir] [simTime] [seeds] [nParallel]
 #
-# Example:
-#   ./run_relay_storm.sh ./results 5.0 "1 2 3"
+# Example (10 seeds, all 10 cores):
+#   ./run_relay_storm.sh ./results 5.0 "$(seq -s' ' 1 10)" 10
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NS3_DIR="$(cd "$SCRIPT_DIR/../../ns-3-dev" && pwd)"
-SIM="scratch/relay_storm_eval/relay_storm_eval"
+BINARY="$NS3_DIR/cmake-cache-opt/scratch/relay_storm_eval/ns3.42-relay_storm_eval-default"
+KPI_SCRIPT="$SCRIPT_DIR/../../scratch_overlay/common/kpi/kpi_postprocess.py"
 
-OUTPUT_DIR="${1:-./results}"
+# Resolve output dir to absolute path (ns3 run executes from ns-3-dev/).
+OUTPUT_DIR="$(mkdir -p "${1:-./results}" && cd "${1:-./results}" && pwd)"
 SIM_TIME="${2:-5.0}"
 SEEDS="${3:-1 2 3}"
+NPAR="${4:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -41,46 +44,58 @@ MCD_VALUES=(80 100 150 300 350)
 RELAY_NODES=(4 6)
 
 echo "=== relay_storm_eval sweep ==="
-echo "Output: $OUTPUT_DIR"
-echo "SimTime: $SIM_TIME s"
-echo "Seeds: $SEEDS"
-echo "Speed/IVD pairs: ${#SPEED_IVD_PAIRS[@]}"
-echo "MCD values: ${MCD_VALUES[*]}"
+echo "Output:      $OUTPUT_DIR"
+echo "Binary:      $BINARY"
+echo "SimTime:     $SIM_TIME s"
+echo "Seeds:       $SEEDS"
+echo "Parallel:    $NPAR jobs"
+echo "Speed/IVD:   ${#SPEED_IVD_PAIRS[@]} pairs"
+echo "MCD values:  ${MCD_VALUES[*]}"
 echo "Relay nodes: ${RELAY_NODES[*]}"
 echo ""
 
-total=0
-done_=0
+# ---------------------------------------------------------------------------
+# Build run-list (one line per run: tag speed ivd mcd relay relayEnabled seed)
+# ---------------------------------------------------------------------------
+RUNLIST="$OUTPUT_DIR/runlist.txt"
+> "$RUNLIST"
 
-# Pre-compute total runs.
-for _ in "${SPEED_IVD_PAIRS[@]}"; do
-    for _ in "${MCD_VALUES[@]}"; do
-        for _ in "${RELAY_NODES[@]}"; do
-            for _ in $SEEDS; do total=$((total+1)); done
+for speedivd in "${SPEED_IVD_PAIRS[@]}"; do
+    speed=$(echo "$speedivd" | awk '{print $1}')
+    ivd=$(echo "$speedivd" | awk '{print $2}')
+    for mcd in "${MCD_VALUES[@]}"; do
+        # No-relay baseline
+        for seed in $SEEDS; do
+            tag="baseline_s${speed}_ivd${ivd}_mcd${mcd}_seed${seed}"
+            echo "$tag $speed $ivd $mcd 0 false $seed" >> "$RUNLIST"
         done
-        # +1 for no-relay baseline per (speed,ivd,mcd,seed).
-        for _ in $SEEDS; do total=$((total+1)); done
+        # Relay runs
+        for relay in "${RELAY_NODES[@]}"; do
+            for seed in $SEEDS; do
+                tag="relay${relay}_s${speed}_ivd${ivd}_mcd${mcd}_seed${seed}"
+                echo "$tag $speed $ivd $mcd $relay true $seed" >> "$RUNLIST"
+            done
+        done
     done
 done
-echo "Total runs: $total"
+
+TOTAL=$(wc -l < "$RUNLIST")
+echo "Total runs: $TOTAL"
 echo ""
 
-run_sim() {
-    local runId="$1"
-    local speed="$2"
-    local ivd="$3"
-    local mcd="$4"
-    local relay="$5"
-    local relayEnabled="$6"
-    local seed="$7"
+# ---------------------------------------------------------------------------
+# Parallel execution via xargs -P
+# ---------------------------------------------------------------------------
+run_one() {
+    local tag speed ivd mcd relay relayEnabled seed
+    read -r tag speed ivd mcd relay relayEnabled seed <<< "$1"
 
-    local outDir="$OUTPUT_DIR/$runId"
+    local outDir="$OUTPUT_DIR/$tag"
     mkdir -p "$outDir"
-
     local logFile="$outDir/sim.log"
 
-    "$NS3_DIR/ns3" run "$SIM" -- \
-        --runId="$runId" \
+    "$BINARY" \
+        --runId="$tag" \
         --seed="$seed" \
         --speed="$speed" \
         --ivd="$ivd" \
@@ -89,58 +104,45 @@ run_sim() {
         --relayEnabled="$relayEnabled" \
         --simTime="$SIM_TIME" \
         --outputDir="$outDir" \
-        --simTag="$runId" \
-        > "$logFile" 2>&1 && echo "  OK: $runId" || echo "  FAIL: $runId (see $logFile)"
+        --simTag="$tag" \
+        >"$logFile" 2>&1 \
+    && echo "OK  $tag" \
+    || echo "FAIL $tag (see $logFile)"
 }
 
-for speedivd in "${SPEED_IVD_PAIRS[@]}"; do
-    speed=$(echo "$speedivd" | awk '{print $1}')
-    ivd=$(echo "$speedivd" | awk '{print $2}')
+export -f run_one
+export BINARY OUTPUT_DIR SIM_TIME
 
-    for mcd in "${MCD_VALUES[@]}"; do
-        # No-relay baseline runs.
-        for seed in $SEEDS; do
-            runId="baseline_s${speed}_ivd${ivd}_mcd${mcd}_seed${seed}"
-            run_sim "$runId" "$speed" "$ivd" "$mcd" "0" "false" "$seed"
-            done_=$((done_+1))
-            echo "  Progress: $done_/$total"
-        done
-
-        # Relay runs.
-        for relay in "${RELAY_NODES[@]}"; do
-            for seed in $SEEDS; do
-                runId="relay${relay}_s${speed}_ivd${ivd}_mcd${mcd}_seed${seed}"
-                run_sim "$runId" "$speed" "$ivd" "$mcd" "$relay" "true" "$seed"
-                done_=$((done_+1))
-                echo "  Progress: $done_/$total"
-            done
-        done
-    done
-done
-
+START=$(date +%s)
+xargs -P "$NPAR" -I '{}' bash -c 'run_one "$@"' _ '{}' < "$RUNLIST"
+END=$(date +%s)
 echo ""
-echo "=== Sweep complete. Running KPI postprocess ==="
+echo "=== Simulation sweep done in $((END-START))s ==="
 
-# Run kpi_postprocess.py on each DB.
-# Note: our sim uses SetSeed(1)/SetRun(seed), so SEED=1,RUN=seed_number in the DB.
-KPI_SCRIPT="$(cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../scratch_overlay/common/kpi" && pwd)/kpi_postprocess.py"
+# ---------------------------------------------------------------------------
+# KPI post-processing (parallelised too)
+# ---------------------------------------------------------------------------
+echo "Running KPI postprocess ($NPAR parallel)..."
 
-find "$OUTPUT_DIR" -name "*.db" | while read -r db; do
+kpi_one() {
+    local db="$1"
+    local tag seed_n outCsv
     tag=$(basename "$db" .db)
-    # Extract seed number from tag suffix "_seed<N>" → --run N
     seed_n=$(echo "$tag" | grep -oE 'seed[0-9]+$' | grep -oE '[0-9]+')
     [ -z "$seed_n" ] && seed_n=1
     outCsv="${db%.db}_kpi.csv"
     python3 "$KPI_SCRIPT" \
-        --db "$db" \
-        --out "$outCsv" \
-        --warmup 1.0 \
-        --window 1.0 \
-        --step 0.5 \
-        --seed 1 \
-        --run "$seed_n" \
-        2>&1 | tail -3
-done
+        --db "$db" --out "$outCsv" \
+        --warmup 1.0 --window 1.0 --step 0.5 \
+        --seed 1 --run "$seed_n" \
+        2>&1 | tail -1
+}
+
+export -f kpi_one
+export KPI_SCRIPT
+
+find "$OUTPUT_DIR" -name "*.db" -print0 \
+    | xargs -0 -P "$NPAR" -I '{}' bash -c 'kpi_one "$@"' _ '{}'
 
 echo ""
 echo "=== All done. Results in $OUTPUT_DIR ==="
