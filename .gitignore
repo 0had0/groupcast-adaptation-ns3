@@ -15,6 +15,9 @@ tmp/
 *.log
 *.pcap
 
+# Simulation result trees (large binary + CSV data, not committed)
+results_*/
+
 # Tool state (local to this machine)
 .claude/
 
