@@ -5,9 +5,12 @@
 //   1. BandwidthPartInfo::Scenario is a parameter (default V2V_Urban).
 //   2. ApplyGeometricNlosv() is called immediately after InitializeOperationBand().
 //   3. An RNTI→nodeId map is built for optional future use.
+//   4. Explicit bandwidth control via channelBwMHz + numSubchannels.
+//   5. MCD feedback gate integration (RegisterRntiMobility + InstallMcdFeedbackGate).
 
 #include "nr_sl_stack.h"
 
+#include "common/mcd/mcd_feedback_gate.h"
 #include "common/stack/nr-sl-adaptive-mcs-scheduler.h"
 #include "common/stack/nr-sl-deterministic-scheduler.h"
 
@@ -19,6 +22,8 @@
 #include "ns3/lte-ue-rrc.h"
 #include "ns3/nr-amc.h"
 #include "ns3/pointer.h"
+
+#include <cmath>
 
 namespace ns3
 {
@@ -34,10 +39,67 @@ BuildSlStack(const SlStackParams& p,
 
     // -----------------------------------------------------------------------
     // 1. Band / BWP: 5.89 GHz (band n47).
-    //    Bandwidth scales with numerology so PRB count stays ~106 across mu.
+    //    Bandwidth: legacy = 200<<mu (100-kHz units); override via channelBwMHz.
+    //    At mu=2 and 20 MHz: 20e6 / (15000 * 2^mu * 12) ≈ 51 PRBs.
+    //    The NR BWP bandwidth is specified in units of 100 kHz.
     // -----------------------------------------------------------------------
     const double   centralFreqHz  = 5.89e9;
-    const uint16_t fullBand100kHz = static_cast<uint16_t>(200u << p.mu);
+
+    // Compute fullBand100kHz:
+    //   Legacy: 200 * 2^mu  (gives 80 MHz at mu=2).
+    //   Override: round(channelBwMHz * 10) 100-kHz units.
+    uint16_t fullBand100kHz;
+    if (p.channelBwMHz > 0.0)
+    {
+        fullBand100kHz = static_cast<uint16_t>(std::round(p.channelBwMHz * 10.0));
+        NS_LOG_INFO("NrSlStack: explicit bandwidth " << p.channelBwMHz
+                    << " MHz → " << fullBand100kHz << " * 100 kHz units");
+    }
+    else
+    {
+        fullBand100kHz = static_cast<uint16_t>(200u << p.mu);
+    }
+
+    // Compute per-subchannel PRB count for the pool.
+    // PRBs available ≈ floor(fullBand100kHz * 100e3 / (subcarriers_per_RB * subcarrier_spacing))
+    //   subcarriers_per_RB = 12
+    //   subcarrier_spacing = 15000 * 2^mu  Hz
+    // Equivalently: availPRBs = floor(fullBand100kHz * 100e3 / (12 * 15000 * 2^mu))
+    const double subcarrierSpacingHz = 15000.0 * (1u << p.mu);
+    const double availPRBs = std::floor(
+        (static_cast<double>(fullBand100kHz) * 100e3) / (12.0 * subcarrierSpacingHz));
+    const uint32_t availPRBsInt = static_cast<uint32_t>(availPRBs);
+
+    uint32_t subchSize;
+    if (p.numSubchannels > 0 && p.channelBwMHz > 0.0)
+    {
+        // Snap subchSize to nearest valid value {10,15,20,25,50,75,100}.
+        // Derived from availPRBs / numSubchannels, rounded up to next valid.
+        const uint32_t raw = (availPRBsInt > 0 && p.numSubchannels > 0)
+                             ? availPRBsInt / p.numSubchannels : 10;
+        static const uint32_t valid[] = {10, 15, 20, 25, 50, 75, 100};
+        subchSize = valid[sizeof(valid)/sizeof(valid[0]) - 1]; // default max
+        for (uint32_t v : valid)
+        {
+            if (v >= raw) { subchSize = v; break; }
+        }
+        // Guard: if subchSize * numSubchannels > availPRBs, fall back to bwPRBs.
+        if (subchSize * p.numSubchannels > availPRBsInt + 20 /* 20 PRB guard */)
+        {
+            NS_LOG_WARN("NrSlStack: computed subchSize=" << subchSize
+                        << " × numSubchannels=" << p.numSubchannels
+                        << " > availPRBs=" << availPRBsInt
+                        << "; falling back to bwPRBs=" << p.bwPRBs);
+            subchSize = p.bwPRBs;
+        }
+        NS_LOG_INFO("NrSlStack: " << p.numSubchannels << " subchannels"
+                    << " × " << subchSize << " PRBs/subch"
+                    << " (avail=" << availPRBsInt << " PRBs, raw=" << raw << ")");
+    }
+    else
+    {
+        subchSize = p.bwPRBs; // legacy
+    }
 
     CcBwpCreator::SimpleOperationBandConf bandConf(centralFreqHz,
                                                     fullBand100kHz,
@@ -226,7 +288,7 @@ BuildSlStack(const SlStackParams& p,
     poolFactory->SetSlSensingWindow(100);
     poolFactory->SetSlSelectionWindow(5);
     poolFactory->SetSlFreqResourcePscch(10);
-    poolFactory->SetSlSubchannelSize(p.bwPRBs);
+    poolFactory->SetSlSubchannelSize(subchSize);
     poolFactory->SetSlMaxNumPerReserve(3);
     // Build the allowed-RRI list.
     // The ns-3 NrSlCommResourcePoolFactory switch only recognises:
@@ -339,6 +401,29 @@ BuildSlStack(const SlStackParams& p,
         uint16_t rnti   = rrc->GetRnti();
         uint32_t nodeId = nodes.Get(i)->GetId();
         ctx.rntiToNode[rnti] = nodeId;
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. MCD feedback gate (optional).
+    //     The InstallMcdFeedbackGate() shim wires into the spectrum-phy
+    //     callback regardless of whether RNTIs are assigned yet — the gate
+    //     only needs to resolve TX mobility when feedback fires at runtime.
+    //     RegisterRntiMobility() is SIMULATOR-SCHEDULED here because the
+    //     NR RRC assigns RNTIs via asynchronous events that run during
+    //     Simulator::Run() (e.g. StartContentionResolution scheduled from
+    //     RecvRnti).  Calling it synchronously before Run() finds all RNTIs
+    //     still equal to 0, leaving the registry empty and defeating the gate.
+    //     The poll interval (1 ms) is well below the RACH response time so
+    //     all UEs will have valid RNTIs by the time the sidelink actually
+    //     starts transmitting at ~100 ms.
+    // -----------------------------------------------------------------------
+    if (p.mcdMeters > 0.0)
+    {
+        InstallMcdFeedbackGate(ctx.ueNetDev, p.mcdMeters);
+        Simulator::Schedule(MilliSeconds(0),
+                            &RegisterRntiMobilityPoll,
+                            ctx.ueNetDev);
+        NS_LOG_INFO("NrSlStack: MCD feedback gate installed, mcd=" << p.mcdMeters << " m");
     }
 
     NS_LOG_INFO("NR-SL stack built: scenario=" << p.scenario

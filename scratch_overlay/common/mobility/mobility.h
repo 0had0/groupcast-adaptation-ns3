@@ -41,6 +41,16 @@ struct MobConfig
     double staticLaneY{0.0};   //!< lane y-coordinate (m)
     double staticFrontX{1000.0}; //!< x of the front node (node 0)
     double antennaHeight{1.5}; //!< node z (m)
+
+    // MOVING platoon mode (extension of staticPlatoon). When staticPlatoon is
+    // true AND platoonSpeedMps > 0, ConstantVelocityMobilityModel is used
+    // instead of ConstantPositionMobilityModel. All nodes share the same
+    // velocity vector (+x direction at platoonSpeedMps m/s), preserving IVD
+    // spacing. This produces real Doppler shift in the channel model. The
+    // initial positions are the same as in the static case (node 0 at
+    // staticFrontX, node i at x0 - i*ivd).
+    // platoonSpeedMps = 0.0 → use ConstantPositionMobilityModel (legacy).
+    double platoonSpeedMps{0.0}; //!< platoon speed in m/s (+x); 0 = static
 };
 
 struct MobResult

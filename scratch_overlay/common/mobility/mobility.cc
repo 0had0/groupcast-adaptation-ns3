@@ -4,6 +4,7 @@
 
 #include "ns3/boolean.h"
 #include "ns3/constant-position-mobility-model.h"
+#include "ns3/constant-velocity-mobility-model.h"
 #include "ns3/double.h"
 #include "ns3/integer.h"
 #include "ns3/log.h"
@@ -188,6 +189,10 @@ InstallMobilityFromSumo(const MobConfig& cfg)
 // behind node i-1. All nodes share y = staticLaneY, so the platoon is exactly
 // collinear and every intermediate vehicle is an NLOSv blocker for any pair
 // straddling it.
+//
+// Moving variant: when cfg.platoonSpeedMps > 0, ConstantVelocityMobilityModel
+// is used instead. All nodes share velocity (+x, platoonSpeedMps m/s) so IVD
+// spacing is preserved and the channel model sees real Doppler.
 // ---------------------------------------------------------------------------
 static MobResult
 InstallMobilityStatic(const MobConfig& cfg)
@@ -198,17 +203,42 @@ InstallMobilityStatic(const MobConfig& cfg)
     NodeContainer nodes;
     nodes.Create(cfg.numUEs);
 
-    MobilityHelper mob;
-    mob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    mob.Install(nodes);
+    const bool moving = (cfg.platoonSpeedMps > 0.0);
 
-    for (uint32_t i = 0; i < nodes.GetN(); ++i)
+    if (moving)
     {
-        const double x = cfg.staticFrontX - static_cast<double>(i) * cfg.ivd;
-        auto cpm = nodes.Get(i)->GetObject<ConstantPositionMobilityModel>();
-        cpm->SetPosition(Vector(x, cfg.staticLaneY, cfg.antennaHeight));
-        NS_LOG_INFO("Static node " << i << " at (" << x << ", " << cfg.staticLaneY
-                    << ", " << cfg.antennaHeight << ")");
+        // Install ConstantVelocityMobilityModel on every node.
+        MobilityHelper mob;
+        mob.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+        mob.Install(nodes);
+
+        for (uint32_t i = 0; i < nodes.GetN(); ++i)
+        {
+            const double x = cfg.staticFrontX - static_cast<double>(i) * cfg.ivd;
+            auto cvm = nodes.Get(i)->GetObject<ConstantVelocityMobilityModel>();
+            cvm->SetPosition(Vector(x, cfg.staticLaneY, cfg.antennaHeight));
+            cvm->SetVelocity(Vector(cfg.platoonSpeedMps, 0.0, 0.0));
+            NS_LOG_INFO("Moving node " << i
+                        << " at (" << x << ", " << cfg.staticLaneY
+                        << ", " << cfg.antennaHeight << ")"
+                        << " v=" << cfg.platoonSpeedMps << " m/s");
+        }
+    }
+    else
+    {
+        MobilityHelper mob;
+        mob.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        mob.Install(nodes);
+
+        for (uint32_t i = 0; i < nodes.GetN(); ++i)
+        {
+            const double x = cfg.staticFrontX - static_cast<double>(i) * cfg.ivd;
+            auto cpm = nodes.Get(i)->GetObject<ConstantPositionMobilityModel>();
+            cpm->SetPosition(Vector(x, cfg.staticLaneY, cfg.antennaHeight));
+            NS_LOG_INFO("Static node " << i
+                        << " at (" << x << ", " << cfg.staticLaneY
+                        << ", " << cfg.antennaHeight << ")");
+        }
     }
 
     result.ueNodes = nodes;

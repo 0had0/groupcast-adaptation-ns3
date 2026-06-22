@@ -57,6 +57,30 @@ struct SlStackParams
     std::string detScheme{"fdm"};         // "fdm" (subchannel lanes) | "tdm" (slot phases)
     uint8_t     detNumLanes{2};           // number of disjoint partitions
     uint8_t     detTotalSubch{10};        // subchannels in the pool (for FDM split)
+
+    // -- Explicit bandwidth control --
+    // By default the bandwidth is derived as 200 * 2^mu (100-kHz units), which
+    // gives 80 MHz at mu=2. Set channelBwMHz > 0 to override this and specify
+    // the SLRP bandwidth explicitly (e.g. 20 MHz at mu=2). The matching
+    // subchannel size is bwPRBs (as before); numSubchannels controls how many
+    // subchannels the pool sees. When numSubchannels == 0 (default) the pool
+    // uses bwPRBs as the subchannel size and auto-derives the count from the
+    // band width (legacy behaviour). When numSubchannels > 0 AND channelBwMHz >
+    // 0, the subchannel size is derived as floor(availablePRBs / numSubchannels)
+    // and bwPRBs is overridden for the pool (bwPRBs is still used for the
+    // scheduler default if no override is made by the caller).
+    //
+    // For the relay_storm_eval target: mu=2, channelBwMHz=20, numSubchannels=10
+    // → ~51 PRBs available at mu=2/20 MHz → subchannel size = 5 PRBs.
+    double   channelBwMHz{0.0};    //!< 0 = legacy (200<<mu); >0 = explicit MHz
+    uint32_t numSubchannels{0};    //!< 0 = legacy (pool uses bwPRBs); >0 = explicit
+
+    // -- MCD feedback gate --
+    // When mcdMeters > 0, InstallMcdFeedbackGate() is called on all UE devices
+    // after the SL bearer/pre-config wiring, suppressing PSFCH from receivers
+    // farther than mcdMeters from the TB's transmitter.
+    // 0.0 = disabled (no gate installed; full feedback from all RX nodes).
+    double mcdMeters{0.0};
 };
 
 struct SlStackCtx
