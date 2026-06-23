@@ -61,7 +61,7 @@ SameL2IdRelayApp::StopApplication()
 void
 SameL2IdRelayApp::OnLeaderRx(Ptr<const Packet> /*p*/,
                               const Address& /*src*/,
-                              const Address& /*dst*/,
+                              const Address& dst,
                               const SeqTsSizeHeader& hdr)
 {
     const uint32_t seq           = hdr.GetSeq();
@@ -79,16 +79,29 @@ SameL2IdRelayApp::OnLeaderRx(Ptr<const Packet> /*p*/,
     Ptr<Packet> pkt = Create<Packet>(payloadBytes);
     pkt->AddHeader(out);
 
-    if (m_socket)
-        m_socket->Send(pkt);
+    // Optional artificial stage delay (co_tx_interference sensitivity sweep).
+    // The relayTiming log records the *actual* Simulator::Now() at send,
+    // so total_pipeline latency grows by m_stageDelayMs.
+    auto doSend = [this, pkt]() {
+        if (m_socket) m_socket->Send(pkt);
+    };
+    if (m_stageDelayMs > 0.0)
+    {
+        Simulator::Schedule(MilliSeconds(m_stageDelayMs), doSend);
+    }
+    else
+    {
+        doSend();
+    }
 
-    const double sendSec = Simulator::Now().GetSeconds();
+    const double sendSec = Simulator::Now().GetSeconds() + (m_stageDelayMs / 1000.0);
 
     NS_LOG_INFO("SameL2IdRelay node " << GetNode()->GetId()
                 << " fwd seq=" << seq
                 << " leaderGen=" << leaderGenSec
                 << " decode=" << decodeSec
-                << " send=" << sendSec);
+                << " send=" << sendSec
+                << " stageDelayMs=" << m_stageDelayMs);
 
     if (m_timingCb)
         m_timingCb(seq, m_port, GetNode()->GetId(),

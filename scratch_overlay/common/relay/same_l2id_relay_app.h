@@ -54,6 +54,13 @@ class SameL2IdRelayApp : public Application
 
     void SetTimingCb(RelayTimingCb cb) { m_timingCb = std::move(cb); }
 
+    // Inject an artificial delay (ms) between relayDecodeSec and the actual
+    // m_socket->Send() call. Used by co_tx_interference sweep to study the
+    // impact of relay-pipeline latency on co-TX interference with the leader.
+    // The relayTiming log records the *actual* Simulator::Now() at send, so
+    // measured pipeline latency grows by this amount.
+    void SetStageDelayMs(double ms) { m_stageDelayMs = std::max(0.0, ms); }
+
     // Bound to the relay node's leader-group PacketSink "RxWithSeqTsSize" trace.
     void OnLeaderRx(Ptr<const Packet> p,
                     const Address& src,
@@ -68,6 +75,7 @@ class SameL2IdRelayApp : public Application
     uint16_t      m_port{0};
     RelayTimingCb m_timingCb;
     Ptr<Socket>   m_socket;
+    double        m_stageDelayMs{0.0};
 };
 
 // Install a SameL2IdRelayApp on the relay node, wired to the first leader
