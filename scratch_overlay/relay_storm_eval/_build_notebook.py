@@ -481,6 +481,235 @@ print('90 km/h @ ivd=27 (r4 dist = 108 m) the storm stays ~0.95 at MCD=100')
 print('and jumps to 1.73× at MCD=150 (relay4 just entered). Identical mechanism:')
 print('storm switch-on occurs at the MCD that first admits the relay.')"""))
 
+cells.append(new_markdown_cell(r"""## 3c. Co-TX interference sweep — separating the two mechanisms
+
+The §3b switch-on says **whether** the storm ignites. This section explains **why** it ignites:
+is the storm driven by the relay's TB co-TX interference (the relay sitting in the same sidelink
+pool as the leader, 2 slots behind, raising SINR at all listeners and especially at itself),
+or by the MCD gate admitting the relay's high-NACK feedback into the leader's reTX decision?
+
+We ran a focused 2×2 sweep on relay4 only (`co_tx_interference` sim):
+
+|              | **MCD on** (gate active)            | **MCD off** (`mcd=1e9`, gate disabled) |
+|--------------|--------------------------------------|----------------------------------------|
+| **forward**  | **C2** storm headline (relay4 in MCD group, MCD gate active) | **C1** co-TX only (relay TXs but gate disabled) |
+| **noForward**| **B1** feedback NACK only (relay RX, no TX, gate active) | **B2** true baseline (relay RX, no TX, no gate) |
+
+Three MCDs per (speed, IVD) bracket the relay-entry threshold `4·IVD`. 5 seeds × 12 s sim. 420 runs total.
+Aggregated file: `../../results_co_tx_interference/co_tx_aggregate.csv`.
+
+**Key findings** (from the Effect analysis below):
+1. Relay TX (co-TX interference) raises reTX by +0.04 over baseline.
+2. When the relay is **outside** MCD, the gate *protects* the leader from the relay's high-NACK feedback
+   (storm 0.12 vs 0.23 = -0.11).
+3. When the relay is **inside** MCD, the gate cannot help — the relay's NACK dominates either way
+   (storm 0.23 vs 0.23 = +0.01). The MCD threshold is the **switch**, not the amplifier.
+4. The §3b switch-on (relay-in-MCD: 0.23 vs relay-out: 0.12) is reproduced exactly by the 2×2 design."""))
+
+cells.append(new_code_cell(r"""# Load co_tx sweep aggregate
+co_tx_path = RESULTS.parent / 'results_co_tx_interference' / 'co_tx_aggregate.csv'
+if not co_tx_path.exists():
+    print(f'WARN: {co_tx_path} not found — run run_co_tx.sh + analyse_co_tx.py first')
+    cotx = None
+else:
+    cotx = pd.read_csv(co_tx_path)
+    print(f'Loaded {len(cotx)} rows from {co_tx_path}')
+    print('Configs:', sorted(cotx['mode'].unique() + '/' + cotx['gate'].unique()))
+
+if cotx is not None:
+    # The 2×2 design: 4 cells per (speed, ivd, mcd)
+    cotx['config'] = cotx['mode'] + '_' + cotx['gate']
+    print('\nstorm_ratio_l_mean by config (mean over speed/ivd/mcd):')
+    print(cotx.groupby('config')['storm_ratio_l_mean'].agg(['mean','min','max']).round(3))
+    print('\nco_tx_overlap_frac_mean by config:')
+    print(cotx.groupby('config')['co_tx_overlap_frac_mean'].agg(['mean','min','max']).round(4))
+    print('\npipeline_p95_ms by config (only forward cells have non-zero):')
+    print(cotx.groupby('config')['pipeline_p95_ms'].agg(['mean','min','max']).round(2))"""))
+
+cells.append(new_code_cell(r"""if cotx is not None:
+    # ---- Panel A: 2x2 design heatmap (avg over speed/ivd/mcd) ----
+    fig3c, axes = plt.subplots(1, 4, figsize=(15, 4.0),
+                               gridspec_kw={'width_ratios':[1,1,1,1]},
+                               constrained_layout=True)
+
+    # Compute the marginals of the 2x2 design matrix
+    design = cotx.groupby(['mode','gate'])['storm_ratio_l_mean'].mean().unstack('gate')
+    print('2x2 design matrix (mean storm_ratio over all cells):')
+    print(design.round(3))
+
+    # 4 panels: B1, B2, C1, C2 each shown as (spd, mcd) heatmap
+    panels = [
+        ('noForward', 'on',  'B1: relay RX, gate ON',  axes[0]),
+        ('noForward', 'off', 'B2: relay RX, gate OFF', axes[1]),
+        ('forward',   'off', 'C1: relay TX, gate OFF', axes[2]),
+        ('forward',   'on',  'C2: relay TX, gate ON (storm)', axes[3]),
+    ]
+    for mode, gate, title, ax in panels:
+        sub = cotx[(cotx['mode']==mode) & (cotx['gate']==gate)]
+        if len(sub) == 0:
+            ax.set_title(f'{title} (no data)')
+            continue
+        pv = sub.pivot_table(index='speed', columns='mcd', values='storm_ratio_l_mean')
+        im = ax.imshow(pv.values, aspect='auto', cmap='RdYlGn_r',
+                       vmin=0, vmax=0.5, origin='lower')
+        ax.set_xticks(range(len(pv.columns))); ax.set_xticklabels(pv.columns)
+        ax.set_yticks(range(len(pv.index))); ax.set_yticklabels(pv.index)
+        ax.set_xlabel('MCD (m)'); ax.set_ylabel('Speed (km/h)')
+        ax.set_title(title, fontsize=9)
+        for i in range(len(pv.index)):
+            for j in range(len(pv.columns)):
+                v = pv.values[i,j]
+                if not np.isnan(v):
+                    ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=7)
+    fig3c.colorbar(im, ax=axes, label='storm_ratio')
+    fig3c.suptitle('Storm ratio across the 2×2 design (relay4)', y=1.02)
+    fig3c.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_design_heatmaps.pdf')
+    fig3c.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_design_heatmaps.png')
+    plt.show()
+"""))
+
+cells.append(new_code_cell(r"""if cotx is not None:
+    # ---- Panel B: storm_ratio vs co_tx_overlap_frac (scatter, by config) ----
+    figB, ax = plt.subplots(1, 1, figsize=(7.5, 5))
+    cfg_styles = {
+        'noForward_on':  ('o', '#888888', 'B1: relay RX, gate ON'),
+        'noForward_off': ('o', '#444444', 'B2: relay RX, gate OFF'),
+        'forward_off':   ('s', '#ff7f0e', 'C1: relay TX, gate OFF'),
+        'forward_on':    ('s', '#d62728', 'C2: relay TX, gate ON (storm)'),
+    }
+    for cfg, (mk, col, lab) in cfg_styles.items():
+        sub = cotx[cotx['config']==cfg]
+        if len(sub)==0: continue
+        ax.scatter(sub['co_tx_overlap_frac_mean'], sub['storm_ratio_l_mean'],
+                   marker=mk, c=col, label=lab, alpha=0.7, s=60,
+                   edgecolors='k', linewidths=0.5)
+    ax.set_xlabel('co_tx_overlap_frac  (fraction of leader TB slots with concurrent relay TX)')
+    ax.set_ylabel('storm_ratio (leader hop-1 reTX / n_new)')
+    ax.set_title('Storm ratio vs co-TX overlap')
+    ax.grid(alpha=0.3); ax.legend(fontsize=8, loc='upper left')
+    figB.tight_layout()
+    figB.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_storm_vs_cotx.pdf')
+    figB.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_storm_vs_cotx.png')
+    plt.show()
+    print('Pearson r(storm_ratio, co_tx_overlap_frac) on forward cells:')
+    fwd = cotx[cotx['mode']=='forward']
+    if len(fwd) > 2:
+        r = np.corrcoef(fwd['storm_ratio_l_mean'], fwd['co_tx_overlap_frac_mean'])[0,1]
+        print(f'  r = {r:.3f}  (n={len(fwd)})')
+
+    # ---- Panel C: storm_ratio vs relay_pipeline_p95 ----
+    figC, ax = plt.subplots(1, 1, figsize=(7.5, 5))
+    for cfg, (mk, col, lab) in cfg_styles.items():
+        sub = cotx[cotx['config']==cfg]
+        if len(sub)==0: continue
+        ax.scatter(sub['pipeline_p95_ms'], sub['storm_ratio_l_mean'],
+                   marker=mk, c=col, label=lab, alpha=0.7, s=60,
+                   edgecolors='k', linewidths=0.5)
+    ax.set_xlabel('relay pipeline p95 latency (ms)')
+    ax.set_ylabel('storm_ratio')
+    ax.set_title('Storm ratio vs relay pipeline p95 latency')
+    ax.grid(alpha=0.3); ax.legend(fontsize=8, loc='upper left')
+    figC.tight_layout()
+    figC.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_storm_vs_pipeline.pdf')
+    figC.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_storm_vs_pipeline.png')
+    plt.show()
+    print('Pearson r(storm_ratio, pipeline_p95) on forward cells:')
+    if len(fwd) > 2:
+        r = np.corrcoef(fwd['storm_ratio_l_mean'], fwd['pipeline_p95_ms'])[0,1]
+        print(f'  r = {r:.3f}  (n={len(fwd)})')
+"""))
+
+cells.append(new_code_cell(r"""if cotx is not None:
+    # ---- Panel D: main-effect bar chart ----
+    # Marginals of the 2x2 design matrix, with error bars (std across cells)
+    by_mode = cotx.groupby('mode')['storm_ratio_l_mean'].agg(['mean','std','count'])
+    by_gate = cotx.groupby('gate')['storm_ratio_l_mean'].agg(['mean','std','count'])
+    print('Main effect — relayMode (relay TX or not):')
+    print(by_mode.round(3))
+    print('\nMain effect — MCD gate:')
+    print(by_gate.round(3))
+
+    figD, ax = plt.subplots(1, 1, figsize=(7, 4.5))
+    cfgs = ['noForward_off (B2)', 'noForward_on (B1)',
+            'forward_off (C1)',   'forward_on (C2)']
+    cfg_keys = ['noForward_off','noForward_on','forward_off','forward_on']
+    means = [cotx[cotx['config']==k]['storm_ratio_l_mean'].mean() for k in cfg_keys]
+    stds  = [cotx[cotx['config']==k]['storm_ratio_l_mean'].std()  for k in cfg_keys]
+    cols = ['#444444','#888888','#ff7f0e','#d62728']
+    bars = ax.bar(range(len(cfgs)), means, yerr=stds, color=cols, alpha=0.85,
+                  edgecolor='k', linewidth=0.5, capsize=4)
+    ax.set_xticks(range(len(cfgs))); ax.set_xticklabels(cfgs, fontsize=8, rotation=15)
+    ax.set_ylabel('storm_ratio (mean over all speed/ivd/mcd cells)')
+    ax.set_title('2×2 design main-effects — bar chart of storm_ratio by config')
+    ax.yaxis.grid(True, alpha=0.35)
+    for b, m in zip(bars, means):
+        ax.text(b.get_x()+b.get_width()/2, m + 0.005, f'{m:.3f}',
+                ha='center', va='bottom', fontsize=9)
+    figD.tight_layout()
+    figD.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_main_effects.pdf')
+    figD.savefig(RESULTS.parent / 'results_co_tx_interference' / 'fig3c_main_effects.png')
+    plt.show()
+"""))
+
+cells.append(new_code_cell(r"""if cotx is not None:
+    # Print the two main pairwise comparisons
+    # CAVEAT: 2x2 averages over MCD are misleading — the MCD gate's effect
+    # is non-monotonic (relay in vs out of MCD group). We condition on
+    # whether the relay is within MCD: relay4 dist = 4·IVD, so MCD<4·IVD
+    # means relay excluded, MCD≥4·IVD means relay included.
+    print('=' * 70)
+    print('Verifying the two main effects:')
+    print('=' * 70)
+
+    # --- Effect 1: relay TX (co-TX interference contribution) ---
+    c2 = cotx[(cotx['mode']=='forward')  & (cotx['gate']=='on')]['storm_ratio_l_mean']
+    b1 = cotx[(cotx['mode']=='noForward')& (cotx['gate']=='on')]['storm_ratio_l_mean']
+    print(f'\n[Effect 1] co-TX interference (relay TX raises reTX):')
+    print(f'  C2 (forward, gate on):    mean storm = {c2.mean():.3f} ± {c2.std():.3f}')
+    print(f'  B1 (noForward, gate on):  mean storm = {b1.mean():.3f} ± {b1.std():.3f}')
+    print(f'  Δ (C2 - B1) = {c2.mean() - b1.mean():+.3f}  '
+          f'→ {"YES" if c2.mean() > b1.mean() else "NO"}: relay TX raises reTX')
+
+    # --- Effect 2: MCD gate conditioned on relay-in vs relay-out ---
+    # Split C2 cells by whether relay is in MCD group.
+    cotx = cotx.copy()
+    cotx['relay_dist'] = 4 * cotx['ivd']
+    cotx['relay_in_mcd'] = cotx['mcd'] >= cotx['relay_dist']
+    c2_in  = cotx[(cotx['mode']=='forward') & (cotx['gate']=='on')  & (cotx['relay_in_mcd']==True)]['storm_ratio_l_mean']
+    c2_out = cotx[(cotx['mode']=='forward') & (cotx['gate']=='on')  & (cotx['relay_in_mcd']==False)]['storm_ratio_l_mean']
+    c1     = cotx[(cotx['mode']=='forward') & (cotx['gate']=='off')]['storm_ratio_l_mean']
+    print(f'\n[Effect 2a] MCD gate when relay is INSIDE MCD group (mcd≥4·ivd):')
+    print(f'  C2_in (forward, gate on,  relay-in-MCD): mean storm = {c2_in.mean():.3f} ± {c2_in.std():.3f}, n={len(c2_in)}')
+    print(f'  C1    (forward, gate off):               mean storm = {c1.mean():.3f} ± {c1.std():.3f}, n={len(c1)}')
+    print(f'  Δ (C2_in - C1) = {c2_in.mean() - c1.mean():+.3f}  '
+          f'→ {"YES" if c2_in.mean() > c1.mean() else "NO"}: gate amplifies storm when relay is in MCD')
+
+    print(f'\n[Effect 2b] MCD gate when relay is OUTSIDE MCD group (mcd<4·ivd):')
+    print(f'  C2_out (forward, gate on,  relay-out-MCD): mean storm = {c2_out.mean():.3f} ± {c2_out.std():.3f}, n={len(c2_out)}')
+    print(f'  C1     (forward, gate off):                mean storm = {c1.mean():.3f} ± {c1.std():.3f}, n={len(c1)}')
+    print(f'  Δ (C2_out - C1) = {c2_out.mean() - c1.mean():+.3f}  '
+          f'→ {"YES (gate helps)" if c2_out.mean() < c1.mean() else "NO"}: '
+          f'gate *protects* leader from relay NACKs when relay is out of MCD')
+
+    # --- Sanity check 1: B1 ≈ B2 (MCD gate has no effect when no relay TX) ---
+    b1_2 = cotx[(cotx['mode']=='noForward') & (cotx['gate']=='on')]['storm_ratio_l_mean']
+    b2_2 = cotx[(cotx['mode']=='noForward') & (cotx['gate']=='off')]['storm_ratio_l_mean']
+    print(f'\n[Sanity 1] B1 vs B2 (gate effect without relay TX):')
+    print(f'  B1 (gate on):  mean storm = {b1_2.mean():.3f} ± {b1_2.std():.3f}')
+    print(f'  B2 (gate off): mean storm = {b2_2.mean():.3f} ± {b2_2.std():.3f}')
+    print(f'  Δ (B1 - B2) = {b1_2.mean() - b2_2.mean():+.3f}  '
+          f'→ {"OK" if abs(b1_2.mean() - b2_2.mean()) < 0.05 else "WARN"}: '
+          f'gate alone has little effect (no NACK sources)')
+
+    # --- Sanity 2: relay in vs out (within forward+gate-on) should match §3b ---
+    print(f'\n[Sanity 2] §3b switch-on (forward+gate-on, relay in vs out of MCD):')
+    print(f'  relay-IN-MCD:  mean storm = {c2_in.mean():.3f}  (n={len(c2_in)})')
+    print(f'  relay-OUT-MCD: mean storm = {c2_out.mean():.3f}  (n={len(c2_out)})')
+    print(f'  Δ (in - out) = {c2_in.mean() - c2_out.mean():+.3f}  '
+          f'→ {"OK" if c2_in.mean() > c2_out.mean() else "WARN"}: '
+          f'storm ignites when relay enters MCD group')
+"""))
+
 cells.append(new_markdown_cell(r"""## 4. Summary table (mean over speed & MCD)"""))
 
 cells.append(new_code_cell(r"""def stat(df, col): return df[col].mean()
