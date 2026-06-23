@@ -3,21 +3,30 @@
 Aggregate relay_storm_fixed sweep DBs into sweep_aggregate.csv.
 
 KPIs extracted from the ns-3 trace tables:
-  storm_ratio : (leader_reTX + relay_reTX) / total_new_tx
-                — captures the extra PSSCH channel load from storm
+  storm_ratio : n_retx / n_new  over all PSSCH transmissions in psschTxUeMac
+                (ndi==0 -> HARQ retransmission, ndi==1 -> fresh transport block).
+                It is the per-run retransmission overhead fraction: how many
+                HARQ retransmissions occur per fresh TB. Higher => more storm.
   prr_mean    : mean effective PRR across nodes
                 = max(leader_rxed, relay_rxed) / leader_total_txed
   prr_worst   : worst-case PRR across nodes (last vehicle)
   aoi_mean_ms : mean Age of Information at each node (ms)
   harq_nack   : HARQ NACK / total HARQ feedback
-  ch_occ      : total PSSCH TBs / sim_duration_ms
+  ch_occ      : resource occupation = total PSSCH TBs / sim_duration_ms
+                (mean number of sidelink transport blocks sent per ms; a
+                proxy for how much of the shared sidelink resource pool the
+                platoon consumes).
 """
 
-import sqlite3, csv, re
+import sqlite3, csv, re, argparse
 from collections import defaultdict
 from pathlib import Path
 
-BASE = Path("/tmp/relay_storm_10seeds_fixed")
+parser = argparse.ArgumentParser(description="Aggregate relay_storm_eval sweep DBs.")
+parser.add_argument("db_dir", nargs="?", default="/tmp/relay_storm_10seeds_fixed",
+                    help="Directory containing per-run subdirectories (default: /tmp/relay_storm_10seeds_fixed)")
+args = parser.parse_args()
+BASE = Path(args.db_dir)
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────

@@ -155,6 +155,66 @@ for key,df in [('b',baseline),('r4',relay4),('r6',relay6)]:
     v = vs_mcd(df, 'harq_nack_rate_agg_mean')
     print(f'  {LBL[key]:24s}: {v.loc[80]:.5f} -> {v.loc[350]:.5f}  ({v.loc[350]/v.loc[80]:.1f}x)')"""))
 
+cells.append(new_markdown_cell(r"""## 2b. Resource occupation vs MCD
+
+**Resource occupation** (`ch_occupancy`) = mean number of PSSCH transport blocks sent
+per millisecond = `total_PSSCH_TBs / sim_duration_ms`. It is a proxy for how much of the
+shared sidelink resource pool the platoon consumes. Every retransmission costs a fresh TB,
+so a reTX storm shows up directly as higher resource occupation.
+
+We compare baseline / relay-4 / relay-6 and overlay the *retransmission share* (the part of
+the occupation attributable to HARQ reTX, = `occupation x storm_ratio/(1+storm_ratio)`),
+which isolates the storm's contribution to channel load."""))
+
+cells.append(new_code_cell(r"""fig2b, (axA, axB) = plt.subplots(1, 2, figsize=(13, 4.4))
+
+# A. Absolute resource occupation vs MCD
+for key,df in [('b',baseline),('r4',relay4),('r6',relay6)]:
+    m = vs_mcd(df, 'ch_occupancy_agg_mean')
+    axA.plot(MCDS, m.values, marker=MRK[key], color=CLR[key],
+             linewidth=1.8, markersize=6, label=LBL[key])
+axA.set_xlabel('MCD (m)'); axA.set_ylabel('Resource occupation (PSSCH TBs / ms)')
+axA.set_title('A. Sidelink resource occupation vs MCD')
+axA.set_ylim(bottom=0); axA.yaxis.grid(True, alpha=0.35); axA.legend()
+
+# B. Decompose occupation into new-TX vs reTX share (stacked) for each config at each MCD
+x = np.arange(len(MCDS)); w = 0.26
+for i,(key,df,name) in enumerate([('b',baseline,'Baseline'),
+                                  ('r4',relay4,'Relay 4'),
+                                  ('r6',relay6,'Relay 6')]):
+    occ   = vs_mcd(df, 'ch_occupancy_agg_mean').values
+    sr    = vs_mcd(df, 'storm_ratio_agg_mean').values
+    retx_share = occ * sr / (1.0 + sr)           # TBs/ms spent on retransmissions
+    new_share  = occ - retx_share                # TBs/ms spent on fresh data
+    off = x + (i-1)*w
+    axB.bar(off, new_share,  w*0.9, color=CLR[key], alpha=0.55,
+            edgecolor='white', linewidth=0.4,
+            label=f'{name} (new TX)' )
+    axB.bar(off, retx_share, w*0.9, bottom=new_share, color=CLR[key], alpha=1.0,
+            hatch='///', edgecolor='white', linewidth=0.4,
+            label=f'{name} (reTX)')
+axB.set_xticks(x); axB.set_xticklabels(MCDS)
+axB.set_xlabel('MCD (m)'); axB.set_ylabel('Resource occupation (PSSCH TBs / ms)')
+axB.set_title('B. Occupation split: fresh TX vs retransmissions')
+axB.yaxis.grid(True, alpha=0.35)
+axB.legend(fontsize=7, ncol=3, loc='upper left')
+fig2b.suptitle('Resource occupation grows with MCD as the reTX storm consumes the pool', y=1.02)
+fig2b.tight_layout()
+fig2b.savefig(RESULTS / 'fig2b_resource_occupation.pdf')
+fig2b.savefig(RESULTS / 'fig2b_resource_occupation.png')
+plt.show()
+
+print('Resource occupation (PSSCH TBs/ms) by config, MCD 80 -> 350 m:')
+for key,df in [('b',baseline),('r4',relay4),('r6',relay6)]:
+    v = vs_mcd(df, 'ch_occupancy_agg_mean')
+    print(f'  {LBL[key]:24s}: {v.loc[80]:.3f} -> {v.loc[350]:.3f}  '
+          f'(+{(v.loc[350]/v.loc[80]-1)*100:.0f}%)')
+print('\nRelay overhead vs baseline at MCD=350 m:')
+b350 = vs_mcd(baseline,'ch_occupancy_agg_mean').loc[350]
+for key,df,name in [('r4',relay4,'Relay 4'),('r6',relay6,'Relay 6')]:
+    v = vs_mcd(df,'ch_occupancy_agg_mean').loc[350]
+    print(f'  {name}: {v:.3f} vs baseline {b350:.3f}  ({v/b350:.2f}x the resource pool)')"""))
+
 cells.append(new_markdown_cell(r"""## 3. The storm itself — hop-1 retransmissions (relay vs baseline)
 
 `storm_indicator.csv` records the mean hop-1 reTX count for the baseline leader link
@@ -260,15 +320,21 @@ at MCD ≥ 150 m — a **storm ratio of ~1.9–2.0**. Below 100 m the relay sits
 feedback group and adds no retransmission overhead (storm ratio ≈ 0.92–0.94, i.e. it even
 trims reTX slightly).
 
-**3. The close relay (node 4) is a clear win on latency and reliability.** Averaged over the
+**3. Resource occupation grows with MCD and the relay roughly doubles it.** Sidelink
+resource occupation (PSSCH TBs/ms) climbs as MCD admits more nodes to the feedback group,
+and the stacked decomposition shows the extra load is almost entirely **retransmissions**,
+not fresh data. The close relay (node 4) consumes ~2x the baseline pool at large MCD — the
+direct cost of the relaying gain that must be weighed against the AoI/PRR benefit.
+
+**4. The close relay (node 4) is a clear win on latency and reliability.** Averaged over the
 sweep it lifts mean PRR by **~+1.0 pp** (0.954 → 0.964) and cuts mean AoI by **~32%**
 (28.4 → 19.2 ms), both statistically significant. The far relay (node 6) helps AoI modestly
 (~−9%) but does **not** improve PRR (slightly worse than baseline), because it is too far
 from the tail vehicles it is meant to serve.
 
-**4. Operating recommendation.** Deploy the **close relay (node 4)** and keep **MCD ≤ 100 m**.
+**5. Operating recommendation.** Deploy the **close relay (node 4)** and keep **MCD ≤ 100 m**.
 That combination captures the AoI/PRR benefit of relaying while keeping the relay out of the
-leader's feedback group, so the reTX storm never ignites.
+leader's feedback group, so the reTX storm never ignites and resource occupation stays low.
 
 **Caveats.** The 200 m platoon means MCD only becomes "interesting" near 100–150 m; a longer
 platoon would spread the transition. Fixed MCS and a single LOS road segment also bound the
