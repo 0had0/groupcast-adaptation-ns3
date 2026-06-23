@@ -91,6 +91,38 @@ def compute_kpis(conn, info):
         1 for r in tx_rows if r["srcL2Id"] == leader_l2 and r["ndi"] == 0
     ) if leader_l2 is not None else 0.0
 
+    # ── Packet-Successfully-Relayed (PSR) ──────────────────────────────────
+    # PSR = (packets the relay decoded AND forwarded) / (packets the leader TX).
+    # The relayTiming table logs one row per packet the relay's app delivered
+    # (decoded) and handed to the socket (forwarded). With the same-L2Id /
+    # fixed relay app there is no PDB drop, so decoded == forwarded; the only
+    # way a packet is missing is the relay failed to DECODE it on the
+    # leader→relay hop (SINR-limited). PSR therefore measures how good a
+    # forwarding source the relay is. A far relay (6·IVD) has worse SINR on
+    # that first hop, decodes fewer packets, forwards fewer → weaker tail
+    # coverage → lower worst-Rx PRR. Baselines have no relay (PSR = None).
+    if info.get("is_baseline"):
+        kpi["leader_tx_total"] = 0.0
+        kpi["relay_decoded"]   = 0.0
+        kpi["relay_forwarded"] = 0.0
+        kpi["psr"]             = None
+    else:
+        leader_tx_total = conn.execute(
+            "SELECT COUNT(DISTINCT pktSeqNum) FROM pktTxRx "
+            "WHERE nodeId = 0 AND txRx = 'tx'"
+        ).fetchone()[0] or 0
+        relay_decoded = conn.execute(
+            "SELECT COUNT(DISTINCT seq) FROM relayTiming"
+        ).fetchone()[0] or 0
+        relay_forwarded = conn.execute(
+            "SELECT COUNT(DISTINCT seq) FROM relayTiming WHERE forwarded = 1"
+        ).fetchone()[0] or 0
+        kpi["leader_tx_total"] = float(leader_tx_total)
+        kpi["relay_decoded"]   = float(relay_decoded)
+        kpi["relay_forwarded"] = float(relay_forwarded)
+        kpi["psr"] = (relay_forwarded / leader_tx_total
+                      if leader_tx_total > 0 else None)
+
     # ── Sim duration (ms) ─────────────────────────────────────────────────
     max_tx_ms = conn.execute(
         "SELECT MAX(timeMs) FROM psschTxUeMac"
@@ -253,6 +285,10 @@ def run():
         "ch_occupancy_agg_mean",
         "storm_ratio_agg_mean",
         "hop1_retx_agg_mean",
+        # ── Packet-Successfully-Relayed (relay runs only; baselines = blank) ──
+        "psr_agg_mean", "psr_agg_min", "psr_agg_max", "psr_agg_p5", "psr_agg_p95",
+        "relay_decoded_agg_mean", "relay_forwarded_agg_mean",
+        "leader_tx_total_agg_mean",
     ]
 
     rows = []
@@ -267,6 +303,13 @@ def run():
         occ_a       = _agg([d["ch_occ"]        for d in sd])
         storm_a     = _agg([d["storm_ratio"]  for d in sd])
         hop1_a      = _agg([d["hop1_retx"]    for d in sd])
+        # PSR is None for baselines (no relay). Aggregate only over runs that
+        # produced a PSR value; if none (baseline group) leave columns blank.
+        psr_vals    = [d["psr"] for d in sd if d.get("psr") is not None]
+        psr_a       = _agg(psr_vals) if psr_vals else None
+        decoded_a   = _agg([d["relay_decoded"]   for d in sd if not d["is_baseline"]])
+        forward_a   = _agg([d["relay_forwarded"] for d in sd if not d["is_baseline"]])
+        leadtx_a    = _agg([d["leader_tx_total"] for d in sd if not d["is_baseline"]])
 
         rows.append({
             "speed": speed, "ivd": ivd, "mcd": mcd,
@@ -290,6 +333,15 @@ def run():
             "ch_occupancy_agg_mean":   occ_a[0],
             "storm_ratio_agg_mean":    storm_a[0],
             "hop1_retx_agg_mean":      hop1_a[0],
+            # ── PSR (blank for baseline groups) ──────────────────────────
+            "psr_agg_mean": psr_a[0] if psr_a else "",
+            "psr_agg_min":  psr_a[1] if psr_a else "",
+            "psr_agg_max":  psr_a[2] if psr_a else "",
+            "psr_agg_p5":   psr_a[3] if psr_a else "",
+            "psr_agg_p95":  psr_a[4] if psr_a else "",
+            "relay_decoded_agg_mean":   decoded_a[0] if not sd[0]["is_baseline"] else "",
+            "relay_forwarded_agg_mean": forward_a[0] if not sd[0]["is_baseline"] else "",
+            "leader_tx_total_agg_mean": leadtx_a[0] if not sd[0]["is_baseline"] else "",
         })
 
     out_path = BASE / "sweep_aggregate.csv"
