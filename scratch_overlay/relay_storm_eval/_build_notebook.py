@@ -377,6 +377,110 @@ plt.show()
 print('Storm ratio by MCD (mean over speed):')
 print(storm.groupby('mcd')['storm_ratio_hop1'].mean().reindex(MCDS).round(3))"""))
 
+cells.append(new_markdown_cell(r"""## 3b. Hop-1 group size — the MCD × IVD distance threshold
+
+The MCD feedback gate is a **pure distance filter in metres**: a follower at follower-index
+`k` (imsi = `k+1`) is admitted into the leader's hop-1 group iff
+
+> `(k - 1) · IVD  ≤  MCD`.
+
+Speed is *not* in this inequality. Only the geometric spacing (IVD) sets who is in the group.
+The relay positions are fixed in the platoon (`relay4` = imsi 5, distance 4·IVD from leader;
+`relay6` = imsi 7, distance 6·IVD). This section derives the resulting hop-1 group size
+purely from the sweep's (speed, IVD, MCD) operating points — *no simulation needed* — and
+shows how the storm-ratio switch-on lines in §3 line up with the two threshold curves
+`MCD = 4·IVD` (relay4 enters) and `MCD = 6·IVD` (relay6 enters)."""))
+
+cells.append(new_code_cell(r"""# Analytic hop-1 group size: # followers within MCD
+# Follower k (=1..8 for imsi 2..9) sits at distance k * IVD from the leader.
+# Within MCD iff k * IVD <= MCD  →  k <= MCD / IVD  →  floor(MCD/IVD) followers.
+group_sz = pd.DataFrame(
+    [(s, IVD_BY_SPEED[s], mcd, int(mcd // IVD_BY_SPEED[s]))
+     for s in SPEEDS for mcd in MCDS],
+    columns=['speed','ivd','mcd','n_followers_in_hop1']
+)
+print('Hop-1 group size (#followers within MCD), per (speed, ivd, mcd):')
+pv = group_sz.pivot(index=['speed','ivd'], columns='mcd', values='n_followers_in_hop1')
+display(pv)
+print()
+# Same for relay4 / relay6: in the group iff MCD >= distance from leader
+def in_group(mcd, ivd, k_dist):
+    return mcd >= k_dist * ivd
+relay4_in = pd.DataFrame(
+    [(s, IVD_BY_SPEED[s], mcd, in_group(mcd, IVD_BY_SPEED[s], 4))
+     for s in SPEEDS for mcd in MCDS],
+    columns=['speed','ivd','mcd','relay4_in_hop1'])
+relay6_in = pd.DataFrame(
+    [(s, IVD_BY_SPEED[s], mcd, in_group(mcd, IVD_BY_SPEED[s], 6))
+     for s in SPEEDS for mcd in MCDS],
+    columns=['speed','ivd','mcd','relay6_in_hop1'])
+print('relay4 (imsi=5, dist=4·IVD) is in leader hop-1 group:')
+display(relay4_in.pivot(index=['speed','ivd'], columns='mcd', values='relay4_in_hop1'))
+print()
+print('relay6 (imsi=7, dist=6·IVD) is in leader hop-1 group:')
+display(relay6_in.pivot(index=['speed','ivd'], columns='mcd', values='relay6_in_hop1'))"""))
+
+cells.append(new_code_cell(r"""# Overlay the MCD = 4·IVD and MCD = 6·IVD threshold curves on the storm-ratio heatmap.
+# For each operating point (s, IVD), the storm should switch on at MCD ≥ 4·IVD (relay4
+# enters) and worsen again as the leader's group grows further.
+fig3b, ax = plt.subplots(1, 1, figsize=(10, 5.2))
+
+# Plot the same storm heatmap as in §3
+im = ax.imshow(piv.values, aspect='auto', cmap='RdYlGn_r', vmin=0.5, vmax=2.0,
+               origin='lower')
+ax.set_xticks(range(len(MCDS))); ax.set_xticklabels(MCDS)
+ax.set_yticks(range(len(SPEEDS)))
+ax.set_yticklabels([f'{s} @ {IVD_BY_SPEED[s]:.0f}m' for s in SPEEDS], fontsize=9)
+ax.set_xlabel('MCD (m)')
+ax.set_ylabel('Operating point: speed (km/h) @ IVD (m)')
+ax.set_title('Storm ratio with analytic MCD = k·IVD threshold overlay')
+
+# Continuous threshold curves: MCD = k·IVD for k=4 (relay4 enters) and k=6 (relay6 enters)
+mcd_grid = np.linspace(50, 400, 500)
+for k, ls, col, lab in [(4, '--', 'cyan', 'MCD = 4·IVD (relay4 enters)'),
+                        (6, ':',  'magenta', 'MCD = 6·IVD (relay6 enters)')]:
+    # for each speed index i, the corresponding IVD is IVD_BY_SPEED[s]
+    ivd_at_y = [IVD_BY_SPEED[s] for s in SPEEDS]
+    # build the (x_continuous, y_continuous) line
+    xs, ys = [], []
+    for ivd, y in zip(ivd_at_y, range(len(SPEEDS))):
+        # x position where MCD = k·ivd
+        x_mcd = k * ivd
+        if 80 <= x_mcd <= 350:
+            xs.append(x_mcd); ys.append(y + 0.5)
+    if xs:
+        ax.plot([(x-80)/(350-80)*4 for x in xs], ys, ls, color=col, lw=2.2,
+                label=lab)
+# Annotated MCD values on left edge
+for k, col in [(4, 'cyan'), (6, 'magenta')]:
+    ax.text(-0.02, 0.5, f'MCD={k}·IVD',
+            transform=ax.transAxes, rotation=90, va='center', ha='right',
+            color=col, fontsize=8, fontweight='bold')
+
+cb = fig3b.colorbar(im, ax=ax); cb.set_label('storm ratio')
+ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+fig3b.tight_layout()
+fig3b.savefig(RESULTS / 'fig3b_storm_threshold_overlay.pdf')
+fig3b.savefig(RESULTS / 'fig3b_storm_threshold_overlay.png')
+plt.show()
+
+# Print the actual MCDs that cross the relay4 and relay6 threshold per operating point
+print('Predicted storm switch-on MCDs (analytic, from distance filter only):')
+print(f'{"spd":>4}  {"IVD":>3}  {"4·IVD (r4)":>9}  {"6·IVD (r6)":>9}  '
+      f'{"r4 in group @ MCD=150?":>22}  {"r6 in group @ MCD=150?":>22}')
+for s in SPEEDS:
+    ivd = IVD_BY_SPEED[s]
+    th4, th6 = 4*ivd, 6*ivd
+    r4_150 = 'YES' if 150 >= th4 else 'no '
+    r6_150 = 'YES' if 150 >= th6 else 'no '
+    print(f'{s:>4}  {ivd:>3}  {th4:>5}m    {th6:>5}m    {r4_150:>22}  {r6_150:>22}')
+print()
+print('Compare with §3 storm-ratio table: at 80 km/h @ ivd=25 (r4 dist = 100 m)')
+print('the storm is already 2.60× at MCD=100 (relay4 just entered), while at')
+print('90 km/h @ ivd=27 (r4 dist = 108 m) the storm stays ~0.95 at MCD=100')
+print('and jumps to 1.73× at MCD=150 (relay4 just entered). Identical mechanism:')
+print('storm switch-on occurs at the MCD that first admits the relay.')"""))
+
 cells.append(new_markdown_cell(r"""## 4. Summary table (mean over speed & MCD)"""))
 
 cells.append(new_code_cell(r"""def stat(df, col): return df[col].mean()
