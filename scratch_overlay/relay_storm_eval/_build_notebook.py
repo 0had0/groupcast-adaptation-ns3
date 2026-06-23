@@ -158,7 +158,7 @@ averaged over the 30 seeds of each (speed, MCD, relay) cell.
 | KPI (column) | Definition | What it reflects | Why we chose it |
 |---|---|---|---|
 | **Storm metric** `storm_ratio_agg_mean` | `n_retx / n_new` over all PSSCH TX in `psschTxUeMac` (`ndi=0` = HARQ reTX, `ndi=1` = fresh TB) | Per-run retransmission overhead: HARQ reTX per fresh transport block | Directly counts the storm at its source (the air interface). Higher = more channel effort wasted on reTX |
-| **Storm ratio** `storm_ratio` (storm_indicator.csv) | relay hop-1 reTX ÷ baseline hop-1 reTX, per (speed, MCD) | Whether adding the relay *amplifies* retransmissions vs no-relay | Isolates the relay's marginal effect; **>1 = storm**, <1 = relay even helps. The crisp test of H2 |
+| **Storm ratio** `storm_ratio_hop1` (storm_indicator.csv) | relay hop-1 reTX ÷ baseline hop-1 reTX, per (speed, MCD) | Whether adding the relay *amplifies* retransmissions vs no-relay | Isolates the relay's marginal effect; **>1 = storm**, <1 = relay even helps. The crisp test of H2 |
 | **Mean PRR** `prr_mean_agg_mean` | mean over nodes of `max(leader_rx, relay_rx) / leader_tx` | Average delivery reliability seen by a follower (best of direct or relayed copy) | The primary reliability target; "effective" PRR credits the relay's second copy |
 | **Tail PRR** `prr_worst_agg_mean` | the **worst** node's PRR (the last vehicle) | Reliability of the most disadvantaged follower | Platoon safety is governed by the *worst* link, not the average; this is where a relay should help most (H3) |
 | **AoI** `aoi_mean_ms_agg_mean` | mean of `rx_time - tx_time` (ms) over the earliest reception of each packet at each node | Freshness/latency of information at the followers | Platooning control needs *fresh* state; AoI captures both delay and loss (a dropped packet ages the info). Latency-side test of H3 |
@@ -334,9 +334,9 @@ for key,df,name in [('r4',relay4,'Relay 4'),('r6',relay6,'Relay 6')]:
 cells.append(new_markdown_cell(r"""## 3. The storm itself — hop-1 retransmissions (relay vs baseline)
 
 `storm_indicator.csv` records the mean hop-1 reTX count for the baseline leader link
-versus the relay link. **storm_ratio > 1 means the relay *amplifies* retransmissions.**"""))
+versus the relay link. **storm_ratio_hop1 > 1 means the relay *amplifies* retransmissions.**"""))
 
-cells.append(new_code_cell(r"""piv = storm.pivot_table(index='speed', columns='mcd', values='storm_ratio')
+cells.append(new_code_cell(r"""piv = storm.pivot_table(index='speed', columns='mcd', values='storm_ratio_hop1')
 piv = piv.reindex(index=SPEEDS, columns=MCDS)
 
 fig3, (axA, axB) = plt.subplots(1, 2, figsize=(14, 4.6),
@@ -360,8 +360,8 @@ for i in range(len(SPEEDS)):
 cb = fig3.colorbar(im, ax=axA); cb.set_label('storm ratio')
 
 # Mean hop-1 reTX vs MCD
-base_h1  = storm.groupby('mcd')['baseline_hop1_retx_mean'].mean().reindex(MCDS)
-relay_h1 = storm.groupby('mcd')['relay_hop1_retx_mean'].mean().reindex(MCDS)
+base_h1  = storm.groupby('mcd')['baseline_hop1_retx'].mean().reindex(MCDS)
+relay_h1 = storm.groupby('mcd')['relay_hop1_retx'].mean().reindex(MCDS)
 x = np.arange(len(MCDS)); w = 0.38
 axB.bar(x-w/2, base_h1.values,  w, label='Baseline', color=CLR['b'], alpha=0.88)
 axB.bar(x+w/2, relay_h1.values, w, label='With relay', color=CLR['r4'], alpha=0.88)
@@ -375,7 +375,7 @@ fig3.savefig(RESULTS / 'fig3_storm_detail.pdf'); fig3.savefig(RESULTS / 'fig3_st
 plt.show()
 
 print('Storm ratio by MCD (mean over speed):')
-print(storm.groupby('mcd')['storm_ratio'].mean().reindex(MCDS).round(3))"""))
+print(storm.groupby('mcd')['storm_ratio_hop1'].mean().reindex(MCDS).round(3))"""))
 
 cells.append(new_markdown_cell(r"""## 4. Summary table (mean over speed & MCD)"""))
 
@@ -428,28 +428,33 @@ for name,col in key_cols:
 cells.append(new_markdown_cell(r"""## 6. Conclusions
 
 ### Verdict on each hypothesis
-- **H1 (gate works) — CONFIRMED.** MCD is no longer inert: as MCD grows 80 → 350 m the HARQ
-  NACK rate rises ~15× and the storm metric roughly doubles, monotonically. The feedback-gate
-  timing fix is validated.
+- **H1 (gate works) — CONFIRMED.** Baseline storm metric is flat (~0.143) across all MCDs
+  while the relay storm metric jumps from 0.133 to 0.273, and the HARQ NACK rate rises ~15×.
+  The feedback-gate timing fix is validated.
 - **H2 (storm threshold) — CONFIRMED.** The relay's hop-1 reTX is at parity with baseline for
-  MCD ≤ 100 m (storm ratio ≈ 0.92–0.94) and jumps to ~1.9–2.0 for MCD ≥ 150 m; resource
-  occupation tracks it. The storm ignites once the relay enters the leader's feedback group.
+  MCD ≤ 100 m (storm ratio 0.95–1.08) and rises monotonically to 1.31 at MCD=150 m, 1.57 at
+  MCD=300 m, 1.58 at MCD=350 m. The storm ignites once the relay enters the leader's feedback
+  group, and resource occupation tracks it.
 - **H3 (benefit vs cost) — CONFIRMED.** The close relay (node 4) improves tail-PRR and AoI
   far more than the far relay (node 6), but ~doubles resource occupation at large MCD. A clear
   operating point exists (close relay, small MCD) that keeps the benefit without the storm.
 
 ### Supporting detail
 
-**1. The MCD feedback gate fix is validated.** MCD is no longer inert: as MCD grows from
-80 → 350 m, the HARQ NACK rate rises by **~15×** and the storm metric roughly doubles. This
-is exactly the behaviour expected once distant vehicles (and the relay) are correctly
-included in / excluded from the leader's groupcast feedback group.
+**1. The MCD feedback gate fix is validated.** Baseline storm metric is **flat at ≈0.143
+across all MCDs** (80→350 m) — the leader's own reTX overhead is MCD-independent, exactly as
+expected once distant vehicles are correctly excluded from the feedback group. The relay
+storm metric, by contrast, jumps from **0.133 at MCD=80** to **0.273 at MCD=300/350** —
+roughly doubles — because the relay's reTX overhead scales with how many nodes (including
+itself) it has to track. The HARQ NACK rate rises by **~15×** over the same MCD range.
 
 **2. A retransmission storm switches on at MCD ≥ 150 m.** In `storm_indicator.csv` the
-relay's hop-1 reTX count jumps from ≈67 (parity with baseline) at MCD ≤ 100 m to ≈135–146
-at MCD ≥ 150 m — a **storm ratio of ~1.9–2.0**. Below 100 m the relay sits *outside* the
-feedback group and adds no retransmission overhead (storm ratio ≈ 0.92–0.94, i.e. it even
-trims reTX slightly).
+relay's hop-1 reTX / baseline hop-1 reTX ratio (mean over speed) is **0.95 at MCD=80 m**
+(the relay sits outside the feedback group, so it actually trims reTX slightly),
+**1.08 at MCD=100 m** (relay just enters the group), and then rises monotonically to
+**1.31 at MCD=150 m, 1.57 at MCD=300 m, 1.58 at MCD=350 m**. The transition threshold is
+MCD ≥ 150 m, exactly where the leader's groupcast feedback group first reaches far enough
+down the platoon to admit the relay.
 
 **3. Resource occupation grows with MCD and the relay roughly doubles it.** Sidelink
 resource occupation (PSSCH TBs/ms) climbs as MCD admits more nodes to the feedback group,

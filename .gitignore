@@ -32,4 +32,5 @@ results_*/
 graphify-out/
 experiment*/
 nr_sidelink_visualizer/
-analytical_relay_model
+analytical_relay_model/
+results_relay_storm_eval/

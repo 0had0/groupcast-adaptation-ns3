@@ -81,6 +81,16 @@ def compute_kpis(conn, info):
     kpi["storm_ratio"] = n_retx / n_new if n_new > 0 else 0.0
     kpi["n_total_tx"] = len(tx_rows)
 
+    # ── Hop-1 (leader) retransmission count ─────────────────────────────────
+    # The leader is the lowest srcL2Id (=1). hop1_retx is the number of HARQ
+    # retransmissions (ndi==0) it issues. When the relay joins the leader's
+    # groupcast feedback group this inflates → the reTX storm. This is the
+    # source metric for storm_indicator.csv (relay hop1 / baseline hop1).
+    leader_l2 = min((r["srcL2Id"] for r in tx_rows), default=None)
+    kpi["hop1_retx"] = sum(
+        1 for r in tx_rows if r["srcL2Id"] == leader_l2 and r["ndi"] == 0
+    ) if leader_l2 is not None else 0.0
+
     # ── Sim duration (ms) ─────────────────────────────────────────────────
     max_tx_ms = conn.execute(
         "SELECT MAX(timeMs) FROM psschTxUeMac"
@@ -197,15 +207,15 @@ def run():
     print(f"Found {len(dirs)} run directories")
 
     groups = defaultdict(list)
-
-    for d in dirs:
+    n_dirs = len(dirs)
+    for i, d in enumerate(dirs, 1):
         info = parse_dir(d.name)
         db_files = sorted(d.glob("*.db"))
         if not db_files:
             print(f"  WARNING: no .db in {d.name}")
             continue
         db_path = db_files[0]
-        print(f"  {d.name} ...", end=" ", flush=True)
+        print(f"  [{i}/{n_dirs}] {d.name} ...", end=" ", flush=True)
 
         try:
             conn = open_db(str(db_path))
@@ -216,9 +226,10 @@ def run():
             print(f"ERROR {ex}")
             continue
 
-        key = (info["speed"], info["mcd"], info["relay_node"])
+        key = (info["speed"], info["ivd"], info["mcd"], info["relay_node"])
         groups[key].append({
             "speed":       info["speed"],
+            "ivd":         info["ivd"],
             "mcd":         info["mcd"],
             "relay_node":  info["relay_node"],
             "is_baseline": info["is_baseline"],
@@ -232,7 +243,7 @@ def run():
 
     # ── Aggregate across seeds ───────────────────────────────────────────────
     out_cols = [
-        "speed", "mcd", "relay_node", "is_baseline", "n_rows",
+        "speed", "ivd", "mcd", "relay_node", "is_baseline", "n_rows",
         "prr_mean_agg_mean", "prr_mean_agg_min", "prr_mean_agg_max",
         "prr_mean_agg_p5",  "prr_mean_agg_p95",
         "prr_worst_agg_mean", "prr_worst_agg_min", "prr_worst_agg_max",
@@ -241,12 +252,13 @@ def run():
         "harq_nack_rate_agg_mean",
         "ch_occupancy_agg_mean",
         "storm_ratio_agg_mean",
+        "hop1_retx_agg_mean",
     ]
 
     rows = []
     for key in sorted(groups):
         sd = groups[key]
-        speed, mcd, relay_node = key
+        speed, ivd, mcd, relay_node = key
 
         prr_mean_a  = _agg([d["prr_mean"]      for d in sd])
         prr_wrst_a  = _agg([d["prr_worst"]     for d in sd])
@@ -254,9 +266,10 @@ def run():
         nack_a      = _agg([d["harq_nack"]     for d in sd])
         occ_a       = _agg([d["ch_occ"]        for d in sd])
         storm_a     = _agg([d["storm_ratio"]  for d in sd])
+        hop1_a      = _agg([d["hop1_retx"]    for d in sd])
 
         rows.append({
-            "speed": speed, "mcd": mcd,
+            "speed": speed, "ivd": ivd, "mcd": mcd,
             "relay_node": relay_node,
             "is_baseline": sd[0]["is_baseline"],
             "n_rows": len(sd),
@@ -276,6 +289,7 @@ def run():
             "harq_nack_rate_agg_mean": nack_a[0],
             "ch_occupancy_agg_mean":   occ_a[0],
             "storm_ratio_agg_mean":    storm_a[0],
+            "hop1_retx_agg_mean":      hop1_a[0],
         })
 
     out_path = BASE / "sweep_aggregate.csv"
@@ -286,9 +300,43 @@ def run():
 
     print(f"\nWrote {len(rows)} rows → {out_path}")
     for r in rows:
-        print(f"  speed={r['speed']:3d} mcd={r['mcd']:3d} relay={r['relay_node']}  "
+        print(f"  speed={r['speed']:3d} ivd={r['ivd']:2d} mcd={r['mcd']:3d} "
+              f"relay={r['relay_node']}  "
               f"storm={r['storm_ratio_agg_mean']:.3f}  "
               f"prr={r['prr_mean_agg_mean']:.4f}")
+
+    # ── storm_indicator.csv: relay-hop1 / baseline-hop1 ─────────────────────
+    # For each (speed, ivd, mcd) pair, compute the ratio of leader (hop-1)
+    # retransmissions under relay vs baseline. A ratio >1 means the relay
+    # presence inflates the leader's reTX load → the storm.
+    base = {(r["speed"], r["ivd"], r["mcd"]): r["hop1_retx_agg_mean"]
+            for r in rows if r["is_baseline"]}
+    storm_rows = []
+    for r in rows:
+        if r["is_baseline"]:
+            continue
+        b = base.get((r["speed"], r["ivd"], r["mcd"]), 0.0)
+        ratio = r["hop1_retx_agg_mean"] / b if b > 0 else 0.0
+        storm_rows.append({
+            "speed": r["speed"], "ivd": r["ivd"], "mcd": r["mcd"],
+            "relay_node": r["relay_node"],
+            "baseline_hop1_retx": b,
+            "relay_hop1_retx":    r["hop1_retx_agg_mean"],
+            "storm_ratio_hop1":   ratio,
+        })
+
+    si_path = BASE / "storm_indicator.csv"
+    with open(si_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(storm_rows[0].keys()) if storm_rows else
+                           ["speed","ivd","mcd","relay_node","baseline_hop1_retx",
+                            "relay_hop1_retx","storm_ratio_hop1"])
+        w.writeheader()
+        w.writerows(storm_rows)
+    print(f"\nWrote {len(storm_rows)} rows → {si_path}")
+    for r in storm_rows[:5]:
+        print(f"  sp={r['speed']:3d} ivd={r['ivd']:2d} mcd={r['mcd']:3d} "
+              f"relay={r['relay_node']}  base={r['baseline_hop1_retx']:.1f}  "
+              f"relay={r['relay_hop1_retx']:.1f}  storm={r['storm_ratio_hop1']:.2f}x")
 
 
 if __name__ == "__main__":
