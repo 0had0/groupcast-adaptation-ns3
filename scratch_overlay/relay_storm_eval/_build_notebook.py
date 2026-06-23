@@ -18,7 +18,11 @@ reads the post-processed sweep results from `../../results_relay_storm_eval/`.
 
 **Sweep.**
 - 9-node platoon: 1 leader + 7 followers, plus an optional relay (node 4 = *close*, node 6 = *far*)
-- Speeds: 80–140 km/h   |   MCD ∈ {80, 100, 150, 300, 350} m
+- Speeds: 80–140 km/h. **By design** (see `run_relay_storm.sh`) each speed is paired with the
+  inter-vehicle distance (IVD) that holds a safe stopping **time-headway** (~1 s: IVD 25→39 m
+  as speed 80→140), so speed never varies in isolation. The data-load cell prints the *actual*
+  `speed → IVD → headway` map for the loaded CSVs and the plots label ticks accordingly.
+- MCD ∈ {80, 100, 150, 300, 350} m
 - 30 seeds per cell, aggregated   |   3 relay configs (baseline / relay-4 / relay-6)
 
 **KPIs.** PRR (packet reception rate), tail-end PRR, AoI (age of information),
@@ -98,15 +102,33 @@ storm = pd.read_csv(RESULTS / 'storm_indicator.csv')
 
 SPEEDS = sorted(agg['speed'].unique())
 MCDS   = sorted(agg['mcd'].unique())
+
+# This is NOT a pure speed sweep: each speed is run at the inter-vehicle
+# distance (IVD) that keeps a safe stopping time-headway. Recover the actual
+# (speed -> IVD) operating points from storm_indicator.csv, and the resulting
+# time-headway  th = IVD / (speed in m/s).  The *intended* design couples them
+# as 80->25, 90->27, 100->29, 110->32, 120->34, 130->37, 140->39 m (~1.0-1.1 s).
+IVD_BY_SPEED   = storm.groupby('speed')['ivd'].first().reindex(SPEEDS).to_dict()
+HEADWAY_BY_SPD = {s: IVD_BY_SPEED[s] / (s / 3.6) for s in SPEEDS}
+
 print(f'Speeds : {SPEEDS} km/h')
 print(f'MCDs   : {MCDS} m')
+print('Operating points (speed -> IVD -> time-headway):')
+for s in SPEEDS:
+    print(f'   {s:3d} km/h  ivd={IVD_BY_SPEED[s]:.0f} m   headway={HEADWAY_BY_SPD[s]:.2f} s')
 print(f'agg rows={len(agg)}  storm rows={len(storm)}')
 agg.head()"""))
 
 cells.append(new_markdown_cell(r"""## 0. Data sanity check
 
 Each `agg` row is one (speed, mcd, relay) cell already averaged over the 30 seeds
-(`n_rows`). `is_baseline` is boolean; `relay_node` ∈ {0 (baseline), 4, 6}."""))
+(`n_rows`). `is_baseline` is boolean; `relay_node` ∈ {0 (baseline), 4, 6}.
+
+> **Operating-point note.** Speed and IVD are *coupled* by design (constant safe stopping
+> time-headway). The cell printed its recovered `speed → IVD → headway` map above. If every
+> headway prints ~constant, the safe-headway coupling held; if IVD is flat across speeds,
+> these particular CSVs were produced with a fixed IVD and only the *speed* side of the
+> operating point varied (still a valid sweep, just labelled honestly)."""))
 
 cells.append(new_code_cell(r"""print('config counts:')
 print(agg.groupby(['is_baseline','relay_node']).size(), '\n')
@@ -118,7 +140,14 @@ relay6   = agg[(~agg.is_baseline) & (agg.relay_node == 6)]
 
 CLR = {'b': '#444444', 'r4': '#1f77b4', 'r6': '#ff7f0e'}
 MRK = {'b': 'o',       'r4': 's',       'r6': '^'}
-LBL = {'b': 'Baseline', 'r4': 'Relay node 4 (close)', 'r6': 'Relay node 6 (far)'}"""))
+LBL = {'b': 'Baseline', 'r4': 'Relay node 4 (close)', 'r6': 'Relay node 6 (far)'}
+
+# Shared x-axis labelling for the coupled speed/IVD operating points.
+# Each tick shows the speed and the IVD it was run at (held at a safe
+# stopping time-headway), so no panel implies speed varied in isolation.
+SPEED_XLABEL = 'Operating point: speed (km/h) @ inter-vehicle distance (m)'
+def speed_ticklabels():
+    return [f'{s}\\n@{IVD_BY_SPEED[s]:.0f}m' for s in SPEEDS]"""))
 
 cells.append(new_markdown_cell(r"""## Metric definitions — what each KPI measures, and why we chose it
 
@@ -147,7 +176,14 @@ Mean vs tail PRR are both kept on purpose: a relay can lift the average while th
 critical tail still lags (or vice-versa), so reporting only the mean would hide the effect
 the relay exists to fix."""))
 
-cells.append(new_markdown_cell(r"""## 1. Overview: KPIs vs speed (averaged over MCD)
+cells.append(new_markdown_cell(r"""## 1. Overview: KPIs across the speed/IVD operating points (averaged over MCD)
+
+This is **not** a pure speed sweep. Each x-axis point is a coupled *operating point*:
+by design the inter-vehicle distance (IVD) is paired with speed to preserve a safe stopping
+**time-headway**, so the spacing leaves enough room to brake. Ticks are labelled
+`speed @ IVD` with the **actual** IVD used for the loaded data (printed in the data-load
+cell), so reading left→right reflects the true operating point rather than implying speed
+moved alone.
 
 Six-panel summary. Bars/lines compare the three relay configurations; error bars/bands
 show the spread across the 5 MCD settings."""))
@@ -163,20 +199,22 @@ def grouped_bar(ax, col, ylabel, title, ymin=None, ymax=None):
         ax.bar(x + (i-1)*w, m.values, w*0.92, yerr=s.values, capsize=2,
                label=LBL[key], color=CLR[key], alpha=0.88,
                edgecolor='white', linewidth=0.5)
-    ax.set_xticks(x); ax.set_xticklabels(SPEEDS)
-    ax.set_xlabel('Speed (km/h)'); ax.set_ylabel(ylabel); ax.set_title(title)
+    ax.set_xticks(x); ax.set_xticklabels(speed_ticklabels(), fontsize=8)
+    ax.set_xlabel(SPEED_XLABEL); ax.set_ylabel(ylabel); ax.set_title(title)
     if ymin is not None: ax.set_ylim(bottom=ymin)
     if ymax is not None: ax.set_ylim(top=ymax)
     ax.yaxis.grid(True, alpha=0.35); ax.legend()
 
 def line_band(ax, col, ylabel, title, ymin=None, ymax=None):
+    x = np.arange(len(SPEEDS))
     for key,df in [('b',baseline),('r4',relay4),('r6',relay6)]:
         m,s = by_speed(df, col)
-        ax.plot(SPEEDS, m.values, marker=MRK[key], color=CLR[key],
+        ax.plot(x, m.values, marker=MRK[key], color=CLR[key],
                 linewidth=1.6, markersize=5, label=LBL[key])
-        ax.fill_between(SPEEDS, m.values-s.values, m.values+s.values,
+        ax.fill_between(x, m.values-s.values, m.values+s.values,
                         color=CLR[key], alpha=0.13)
-    ax.set_xlabel('Speed (km/h)'); ax.set_ylabel(ylabel); ax.set_title(title)
+    ax.set_xticks(x); ax.set_xticklabels(speed_ticklabels(), fontsize=8)
+    ax.set_xlabel(SPEED_XLABEL); ax.set_ylabel(ylabel); ax.set_title(title)
     if ymin is not None: ax.set_ylim(bottom=ymin)
     if ymax is not None: ax.set_ylim(top=ymax)
     ax.yaxis.grid(True, alpha=0.35); ax.legend()
@@ -194,7 +232,8 @@ grouped_bar(fig.add_subplot(2,3,5), 'harq_nack_rate_agg_mean',
             'HARQ NACK rate', 'E. HARQ NACK rate', ymin=0)
 line_band  (fig.add_subplot(2,3,6), 'ch_occupancy_agg_mean',
             'PSSCH occupancy', 'F. Sidelink channel occupancy', ymin=0)
-fig.suptitle('NR-V2X Sidelink Platoon — KPI overview (30 seeds, averaged over MCD)', y=1.01)
+fig.suptitle('NR-V2X Sidelink Platoon — KPIs across safe-headway speed/IVD operating points '
+             '(30 seeds, averaged over MCD)', y=1.01)
 fig.tight_layout()
 fig.savefig(RESULTS / 'fig1_overview.pdf'); fig.savefig(RESULTS / 'fig1_overview.png')
 plt.show()"""))
@@ -307,8 +346,10 @@ fig3, (axA, axB) = plt.subplots(1, 2, figsize=(14, 4.6),
 im = axA.imshow(piv.values, aspect='auto', cmap='RdYlGn_r', vmin=0.5, vmax=2.0,
                 origin='lower')
 axA.set_xticks(range(len(MCDS))); axA.set_xticklabels(MCDS)
-axA.set_yticks(range(len(SPEEDS))); axA.set_yticklabels(SPEEDS)
-axA.set_xlabel('MCD (m)'); axA.set_ylabel('Speed (km/h)')
+axA.set_yticks(range(len(SPEEDS)))
+axA.set_yticklabels([f'{s} @ {IVD_BY_SPEED[s]:.0f}m' for s in SPEEDS], fontsize=8)
+axA.set_xlabel('MCD (m)')
+axA.set_ylabel('Operating point: speed (km/h) @ IVD (m)')
 axA.set_title('A. Storm ratio  (relay reTX / baseline reTX)')
 for i in range(len(SPEEDS)):
     for j in range(len(MCDS)):
