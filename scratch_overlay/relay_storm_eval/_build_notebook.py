@@ -810,6 +810,8 @@ platoon would spread the transition. Fixed MCS and a single LOS road segment als
 generality of the NACK-rate magnitudes."""))
 
 nb['cells'] = cells
-out = Path('analysis.ipynb')
+# Write the notebook next to the build script (the simulation source dir),
+# not at the project root, so it lives with the sim that produced it.
+out = Path(__file__).resolve().parent / 'analysis.ipynb'
 nbf.write(nb, out)
-print('wrote', out.resolve(), 'with', len(cells), 'cells')
+print('wrote', out, 'with', len(cells), 'cells')
