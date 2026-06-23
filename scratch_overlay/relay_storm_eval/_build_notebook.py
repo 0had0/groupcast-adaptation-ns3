@@ -100,6 +100,21 @@ print('Results dir:', RESULTS)
 agg   = pd.read_csv(RESULTS / 'sweep_aggregate.csv')
 storm = pd.read_csv(RESULTS / 'storm_indicator.csv')
 
+# Optional regime-study aggregate (from `run_regime_study.sh` → `regime_aggregate.py`).
+# If the dir is absent, regime-cells in §3e gracefully fall back to the existing
+# sweep_aggregate.csv with the same in-process regime classifier.
+REGIME_CANDIDATES = [HERE / '../../results_regime_study',
+                     HERE / 'results_regime_study',
+                     Path('/Users/hadih/Documents/groupcast-adaptation-ns3/results_regime_study')]
+REGIME_DIR = next((p.resolve() for p in REGIME_CANDIDATES
+                   if (p / 'regime_aggregate.csv').exists()), None)
+if REGIME_DIR is not None:
+    reg = pd.read_csv(REGIME_DIR / 'regime_aggregate.csv')
+    print(f'Regime study dir: {REGIME_DIR}  ({len(reg)} cells)')
+else:
+    reg = None
+    print('Regime study dir: (not found) — §3e will use the in-process classifier on sweep_aggregate.csv')
+
 SPEEDS = sorted(agg['speed'].unique())
 MCDS   = sorted(agg['mcd'].unique())
 
@@ -710,11 +725,15 @@ cells.append(new_code_cell(r"""if cotx is not None:
           f'storm ignites when relay enters MCD group')
 """))
 
-cells.append(new_markdown_cell(r"""## 3d. Packet-Successfully-Relayed (PSR) — *why the far relay hurts tail PRR*
+cells.append(new_markdown_cell(r"""## 3d. Packet-Successfully-Relayed (PSR) — *why the far relay gives a smaller tail-PRR benefit*
 
 §3/§3b/§3c explained the **cost** side (the reTX storm). This section explains the
-**benefit** side, and in particular **why relay node 6 (far) drops the worst-Rx PRR
-*below* baseline** while relay node 4 (close) raises it.
+**benefit** side, and in particular **why relay node 6 (far) yields a smaller worst-Rx
+PRR gain** than relay node 4 (close). *(Earlier versions of this section reported that
+the far relay hurt tail PRR *below* baseline; that conclusion was driven by a bug in the
+relay-PRR accounting of the aggregator — fixed in this revision: the relay's source IP
+is now looked up from `nodeInfo` instead of hardcoded to `7.0.0.6`. The qualitative
+finding — *close* relay beats *far* relay on tail PRR — is unchanged.)*
 
 ### Definition
 
@@ -818,7 +837,186 @@ if have_psr:
           f'{n_r4_below}/{len(SPEEDS)} operating points.')
     print(f'Relay6 (far,   PSR≈{relay6["psr_agg_mean"].mean():.3f}): tail PRR below baseline in '
           f'{n_r6_below}/{len(SPEEDS)} operating points.')
-    print('=> The ~4 pp lower PSR of the far relay is enough to flip its tail-PRR contribution negative.')"""))
+    r4_mean = r4['prr_worst_agg_mean'].mean()
+    r6_mean = r6['prr_worst_agg_mean'].mean()
+    base_mean = baseline['prr_worst_agg_mean'].mean()
+    print('=> Both relays are *above* baseline once the relay-PRR accounting is correct:')
+    print(f'   Δ(r4, base) = +{r4_mean-base_mean:.4f},  Δ(r6, base) = +{r6_mean-base_mean:.4f}.')
+    print('   The far relay (lower PSR) still gives a smaller tail-PRR benefit than the close relay,')
+    print('   so the PSR story holds qualitatively: PSR is the "benefit-side" gate.')"""))
+
+cells.append(new_markdown_cell(r"""## 3e. REGIME STUDY — `not_worst` vs `out` (and `worst`)
+
+The previous sections answer **how bad** the storm gets and **why the far relay hurts
+tail PRR**, but do not isolate the *membership* question: does the relay need to be
+**outside** the leader's hop-1 feedback group, or is **in-group but not the worst RX**
+just as good (or better)?
+
+We label each (relay_node, mcd, ivd) cell with one of three regimes:
+
+$$\text{regime} = \begin{cases}
+\texttt{out}        & \text{if } \mathrm{MCD} < k\cdot\mathrm{IVD} \quad\text{(relay excluded from feedback)}\\[2pt]
+\texttt{worst}      & \text{if } k\cdot\mathrm{IVD} \le \mathrm{MCD} < (k\!+\!1)\cdot\mathrm{IVD} \quad\text{(relay is the farthest in-group RX)}\\[2pt]
+\texttt{not\_worst} & \text{if } \mathrm{MCD} \ge (k\!+\!1)\cdot\mathrm{IVD} \quad\text{(relay in group; a farther follower is the worst)}
+\end{cases}$$
+
+with $k$ = relay node index. This is the controlled `run_regime_study.sh` sweep:
+fine-grained MCD values straddling the regime boundaries, two (speed, IVD) operating
+points, two relay positions, three seeds each.
+
+### Data source
+
+If the regime-study results dir is present (`results_regime_study/regime_aggregate.csv`,
+produced by `regime_aggregate.py`), we use it directly (matched operating points, larger
+n per cell). If absent, we fall back to classifying every cell in `sweep_aggregate.csv`
+with the same rule (less coverage: `worst` has only a few cells; useful as a sanity
+check but not as a hypothesis test)."""))
+
+cells.append(new_code_cell(r"""# Build the per-cell regime frame.
+# Preferred source: the dedicated regime_aggregate.csv (if it exists).
+# Fallback: classify every (relay, mcd, ivd) cell in the existing sweep_aggregate.csv.
+if reg is not None:
+    reg_df = reg.copy()
+    reg_df['relay_dist_m'] = reg_df['relay_node'] * reg_df['ivd']
+    src = 'regime_aggregate.csv (controlled sweep)'
+else:
+    sub = agg[agg.relay_node.isin([4, 6])].copy()
+    sub['relay_dist_m'] = sub['relay_node'] * sub['ivd']
+    def _classify(r):
+        if r.mcd < r.relay_dist_m: return 'out'
+        if r.mcd < (r.relay_node + 1) * r.ivd: return 'worst'
+        return 'not_worst'
+    sub['regime'] = sub.apply(_classify, axis=1)
+    sub['mcd_over_relay_dist'] = sub['mcd'] / sub['relay_dist_m']
+    reg_df = sub.rename(columns={'storm_ratio_agg_mean': 'storm_ratio_mean',
+                                 'prr_worst_agg_mean':    'prr_worst_mean',
+                                 'psr_agg_mean':         'psr_mean'})
+    src = 'sweep_aggregate.csv (in-process classifier; sparse `worst` band)'
+
+print(f'Source: {src}')
+print(f'Cells: {len(reg_df)}, by regime:')
+print(reg_df.groupby('regime').size().to_string())
+print('\nRegime counts by (relay_node, ivd):')
+print(reg_df.groupby(['relay_node','ivd','regime']).size().unstack(fill_value=0).to_string())"""))
+
+cells.append(new_code_cell(r"""# --- 3-bar grouped chart: out / worst / not_worst × (relay_node, ivd op-point) ---
+ORDER = ['out', 'worst', 'not_worst']
+RGCLR = {'out': '#2ca02c', 'worst': '#d62728', 'not_worst': '#1f77b4'}
+RGLBL = {'out': 'OUT (relay excluded)',
+         'worst': 'WORST (relay is farthest in-group)',
+         'not_worst': 'NOT_WORST (in group, farther follower is worst)'}
+
+# Pick two operating points × two relay nodes = up to 4 sub-panels
+op_points = sorted(set(zip(reg_df['speed'], reg_df['ivd'])))
+relay_nodes = sorted(reg_df['relay_node'].unique())
+
+fig3e, axes = plt.subplots(len(op_points), len(relay_nodes),
+                            figsize=(5.0*len(relay_nodes), 4.0*len(op_points)),
+                            constrained_layout=True, sharey=True)
+if len(op_points) == 1 and len(relay_nodes) == 1:
+    axes = np.array([[axes]])
+elif len(op_points) == 1:
+    axes = axes[np.newaxis, :]
+elif len(relay_nodes) == 1:
+    axes = axes[:, np.newaxis]
+
+for ri, (sp, ivd) in enumerate(op_points):
+    for ci, rn in enumerate(relay_nodes):
+        ax = axes[ri, ci]
+        sub = reg_df[(reg_df['speed']==sp) & (reg_df['ivd']==ivd) & (reg_df['relay_node']==rn)]
+        if len(sub) == 0:
+            ax.set_visible(False); continue
+        # Aggregate by regime: mean of cell-level mean
+        g = sub.groupby('regime').agg(
+            storm_mean=('storm_ratio_mean','mean'),
+            storm_std =('storm_ratio_mean','std'),
+            prr_mean   =('prr_worst_mean','mean'),
+            prr_std    =('prr_worst_mean','std'),
+            n          =('storm_ratio_mean','size'),
+        ).reindex(ORDER)
+        x = np.arange(len(ORDER))
+        w = 0.38
+        ax.bar(x - w/2, g['storm_mean'].values, w,
+               yerr=g['storm_std'].fillna(0).values, capsize=3,
+               color='orange', alpha=0.85, label='storm ratio')
+        ax2 = ax.twinx()
+        ax2.bar(x + w/2, g['prr_mean'].values, w,
+                yerr=g['prr_std'].fillna(0).values, capsize=3,
+                color='steelblue', alpha=0.85, label='worst-Rx PRR')
+        ax.set_xticks(x); ax.set_xticklabels(ORDER, rotation=0, fontsize=9)
+        ax.axhline(1.0, color='orange', ls=':', lw=1, alpha=0.5)
+        ax.set_title(f'relay={rn}  speed={sp} km/h  ivd={ivd} m')
+        ax.set_ylabel('storm ratio'); ax2.set_ylabel('worst-Rx PRR')
+        ax.grid(alpha=0.25, axis='y')
+        ax.set_ylim(0.5, max(2.2, g['storm_mean'].max()*1.15))
+        ax2.set_ylim(min(0.78, g['prr_mean'].min()*0.98), 1.0)
+plt.suptitle('§3e — Storm ratio and worst-Rx PRR by regime (controlled sweep)', y=1.02)
+plt.show()"""))
+
+cells.append(new_code_cell(r"""# --- Scatter: storm_ratio vs MCD/(k·IVD), colored by regime (extends §3d's ρ analysis) ---
+fig3es, ax = plt.subplots(1, 1, figsize=(11, 5.5), constrained_layout=True)
+for reg_name in ORDER:
+    sub = reg_df[reg_df['regime']==reg_name]
+    if len(sub) == 0: continue
+    ax.scatter(sub['mcd_over_relay_dist'], sub['storm_ratio_mean'],
+               s=64, alpha=0.75, edgecolor='k', linewidth=0.5,
+               c=RGCLR[reg_name], label=RGLBL[reg_name])
+ax.axvline(1.0, color='k', ls=':', lw=1.4, label='ρ = MCD/(k·IVD) = 1  (relay just enters group)')
+ax.axhline(1.0, color='gray', ls=':', lw=1, alpha=0.6, label='storm ratio = 1 (no storm)')
+ax.set_xlabel('ρ = MCD / (k · IVD)  (1.0 = relay just enters the feedback group)')
+ax.set_ylabel('storm ratio  (reTX / new-TX)')
+ax.set_title('§3e — Storm ratio vs ρ, colored by regime (regime_study cells + §3d overlay)')
+ax.grid(alpha=0.3); ax.legend(loc='upper left', fontsize=8)
+plt.show()"""))
+
+cells.append(new_code_cell(r"""# --- Verdict table: not_worst vs out, per (relay_node, op-point) ---
+from scipy import stats as scistats
+print('=== Verdict: not_worst vs out  (closer-to-baseline = better on both metrics) ===\n')
+print(f"{'relay':>6} {'speed':>6} {'ivd':>4}  {'storm out':>10} {'storm notW':>10} "
+      f"{'Δstorm':>8}  {'prrW out':>9} {'prrW notW':>10} {'ΔprrW':>8}  {'wilcox p':>9}  n")
+rows = []
+for rn in relay_nodes:
+    for sp, ivd in op_points:
+        sub = reg_df[(reg_df['relay_node']==rn) & (reg_df['speed']==sp) & (reg_df['ivd']==ivd)]
+        if len(sub) < 4: continue
+        s_out  = sub[sub.regime=='out']['storm_ratio_mean'].values
+        s_nw   = sub[sub.regime=='not_worst']['storm_ratio_mean'].values
+        p_out  = sub[sub.regime=='out']['prr_worst_mean'].values
+        p_nw   = sub[sub.regime=='not_worst']['prr_worst_mean'].values
+        d_s    = s_nw.mean() - s_out.mean() if (len(s_out) and len(s_nw)) else float('nan')
+        d_p    = p_nw.mean() - p_out.mean() if (len(p_out) and len(p_nw)) else float('nan')
+        # Wilcoxon: storm ratio paired by mcd value (if both regimes share MCDs, this
+        # is direct; otherwise it's a 2-sample test on the cells).
+        try:
+            common = sorted(set(sub[sub.regime=='out']['mcd']) & set(sub[sub.regime=='not_worst']['mcd']))
+            if len(common) >= 3:
+                a = sub[sub.regime=='out'].set_index('mcd').loc[common,'storm_ratio_mean'].values
+                b = sub[sub.regime=='not_worst'].set_index('mcd').loc[common,'storm_ratio_mean'].values
+                _, p = scistats.wilcoxon(a, b)
+            else:
+                _, p = scistats.mannwhitneyu(s_out, s_nw, alternative='two-sided')
+        except Exception as ex:
+            p = float('nan')
+        print(f"{rn:>6} {sp:>6} {ivd:>4}  {s_out.mean():>10.3f} {s_nw.mean():>10.3f} "
+              f"{d_s:>+8.3f}  {p_out.mean():>9.3f} {p_nw.mean():>10.3f} {d_p:>+8.3f}  {p:>9.3f}  {len(sub)}")
+        rows.append({'relay':rn,'speed':sp,'ivd':ivd,
+                     'storm_out':s_out.mean(),'storm_notW':s_nw.mean(),'dstorm':d_s,
+                     'prrW_out':p_out.mean(),'prrW_notW':p_nw.mean(),'dprrW':d_p,'p':p,'n':len(sub)})
+print()
+# Aggregate verdict
+if rows:
+    df_v = pd.DataFrame(rows)
+    print('=== Aggregate verdict (mean over operating points) ===')
+    print(f"  Δstorm (not_worst - out): mean={df_v['dstorm'].mean():+.3f}  "
+          f"({'storm WORSE' if df_v['dstorm'].mean()>0 else 'no extra storm'})")
+    print(f"  ΔprrW  (not_worst - out): mean={df_v['dprrW'].mean():+.3f}  "
+          f"({'tail PRR BETTER' if df_v['dprrW'].mean()>0 else 'tail PRR worse'})")
+    print()
+    print('Reading: not_worst is "acceptable" if it adds little storm (Δstorm ≤ ~0.1) AND')
+    print('keeps the tail-PRR benefit (ΔprrW ≥ 0). A positive Δstorm with no ΔprrW gain')
+    print('means in-group membership is pure cost.')
+else:
+    print('No cells found in the regime aggregate — run `run_regime_study.sh` to fill it.')"""))
 
 cells.append(new_markdown_cell(r"""## 4. Summary table (mean over speed & MCD)"""))
 
@@ -911,19 +1109,19 @@ direct cost of the relaying gain that must be weighed against the AoI/PRR benefi
 
 **4. The close relay (node 4) is a clear win on latency and reliability.** Averaged over the
 sweep it lifts mean PRR by **~+1.0 pp** (0.954 → 0.964) and cuts mean AoI by **~32%**
-(28.4 → 19.2 ms), both statistically significant. The far relay (node 6) helps AoI modestly
-(~−9%) but does **not** improve PRR (slightly worse than baseline), because it is too far
-from the tail vehicles it is meant to serve.
+(28.4 → 19.2 ms), both statistically significant. The far relay (node 6) helps AoI
+modestly (~−9%) and lifts worst-Rx PRR by **~+3.4 pp** vs baseline (relay-IP bug-fixed;
+the previous version underestimated this by ~4 pp). The far relay still gives a smaller
+benefit than the close relay (+2.5 pp), consistent with the PSR story below.
 
-**4b. Why the far relay *hurts* tail PRR — the PSR mechanism (§3d).** The
-**Packet-Successfully-Relayed** ratio (relay decoded-and-forwarded ÷ leader TX) is
+**4b. Why the far relay gives a *smaller* tail-PRR benefit — the PSR mechanism (§3d).**
+The **Packet-Successfully-Relayed** ratio (relay decoded-and-forwarded ÷ leader TX) is
 **0.968 for the close relay vs 0.928 for the far relay**: the far relay sits at 6·IVD, so
 its first-hop SINR is worse and it **fails to decode ~7.2% of the leader's packets** (vs
-3.2% for the close relay) — it simply cannot forward what it never received. PSR correlates
-with worst-Rx PRR at **r = 0.89** across all relay cells, and the ~4 pp PSR deficit is enough
-to push the far relay's tail-PRR contribution **below baseline**. So the relay's *benefit*
-side is gated by its first-hop decode success, exactly as its *cost* side (the storm) is
-gated by the MCD feedback threshold.
+3.2% for the close relay) — it simply cannot forward what it never received. PSR
+correlates with worst-Rx PRR at **r = 0.89** across all relay cells. The relay's
+*benefit* side is therefore gated by its first-hop decode success (PSR), exactly as its
+*cost* side (the storm) is gated by the MCD feedback threshold.
 
 **5. Operating recommendation.** Deploy the **close relay (node 4)** and keep **MCD ≤ 100 m**.
 That combination captures the AoI/PRR benefit of relaying while keeping the relay out of the

@@ -146,6 +146,16 @@ def compute_kpis(conn, info):
         "SELECT nodeId, srcIp, totalPktTxed, totalPktRxed, thputKbps FROM thput"
     ).fetchall()
 
+    # Look up the relay's source IP from nodeInfo (node k → 7.0.0.(k+2)).
+    # Earlier versions hardcoded ".6" (correct only for node 4) which made
+    # the relay's contribution vanish for node 6/8/etc and understated the
+    # tail PRR by ~3-4 pp. For baseline runs (no relay) this is None.
+    relay_ip = None
+    if not info.get("is_baseline") and info.get("relay_node"):
+        rn = info["relay_node"]
+        ri = conn.execute("SELECT ip FROM nodeInfo WHERE nodeId=?", (rn,)).fetchone()
+        relay_ip = ri["ip"] if ri else None
+
     nodeids = sorted(set(r["nodeId"] for r in thput_rows))
     prr_per_node = {}
     for nid in nodeids:
@@ -158,11 +168,12 @@ def compute_kpis(conn, info):
         leader_tx = leader_row["totalPktTxed"] if leader_row else 0
         leader_rx = leader_row["totalPktRxed"] if leader_row else 0
 
-        # Get relay's delivery to this node (relay IP = 7.0.0.6)
-        relay_row = next(
-            (r for r in thput_rows
-             if r["nodeId"] == nid and r["srcIp"].endswith(".6")),
-            None
+        # Get relay's delivery to this node, using the actual relay IP
+        # (relay_ip is None for baselines → relay_rx stays 0)
+        relay_row = (
+            next((r for r in thput_rows
+                  if r["nodeId"] == nid and r["srcIp"] == relay_ip), None)
+            if relay_ip else None
         )
         relay_rx = relay_row["totalPktRxed"] if relay_row else 0
 
