@@ -25,6 +25,56 @@ reads the post-processed sweep results from `../../results_relay_storm_eval/`.
 HARQ NACK rate, sidelink channel occupancy, and the **storm ratio**
 (relay hop-1 reTX ÷ baseline hop-1 reTX)."""))
 
+cells.append(new_markdown_cell(r"""## Hypothesis & motivation — why run this experiment?
+
+### Background
+In a NR-V2X **groupcast** platoon, the leader periodically broadcasts cooperative-awareness
+messages (CAMs / kinematics) to the followers. NR sidelink groupcast supports **HARQ
+feedback option 1**: every member of the destination group that fails to decode a transport
+block replies with a NACK on PSFCH, and the sender retransmits. The set of vehicles that are
+*expected to give feedback* is bounded by the **MCD (Maximum Communication Distance)** range
+parameter — a UE farther than MCD from the sender is not part of the feedback group.
+
+A **relay** is introduced to help the tail of the platoon, where the leader's signal is
+weakest. The relay re-broadcasts the leader's packets so distant followers get a second,
+stronger copy.
+
+### The problem we suspect
+The relay re-uses the leader's groupcast L2 destination ID. That means the relay's
+transmissions are *also* eligible for HARQ feedback from the same group. If MCD is large
+enough to include many vehicles (and the relay itself), a single packet can trigger
+**feedback + retransmissions from two senders to an overlapping group**. NACKs and reTX can
+then pile up and feed on themselves — a **retransmission storm** that wastes the shared
+sidelink resource pool and can *hurt* the very latency/reliability the relay was meant to
+improve.
+
+There was also a latent bug: the MCD feedback gate registered RNTIs *before* NR had assigned
+them, so the gate was silently bypassed and MCD did nothing. After fixing that, MCD should
+once again control the feedback-group membership — which is what makes this experiment
+meaningful.
+
+### Hypotheses
+- **H1 (gate works).** With the fix, increasing MCD enlarges the feedback group, so HARQ
+  NACK rate and retransmission count should rise **monotonically with MCD**. (Pre-fix they
+  were flat.)
+- **H2 (storm threshold).** Beyond some MCD the relay's transmissions enter the leader's
+  feedback group and a reTX storm ignites: relay reTX ÷ baseline reTX (**storm ratio**)
+  crosses **1.0** and resource occupation jumps.
+- **H3 (relay benefit vs cost).** A *close* relay (node 4) improves tail-end PRR and AoI
+  more than a *far* relay (node 6), but at the cost of higher resource occupation; there is
+  an MCD operating point that keeps the benefit while avoiding the storm.
+
+### How each KPI tests the hypotheses
+| Hypothesis | Primary evidence (KPI) |
+|---|---|
+| H1 gate works | HARQ NACK rate & storm metric **vs MCD** (Sec. 2) |
+| H2 storm threshold | storm ratio heatmap, hop-1 reTX, resource occupation (Sec. 2b, 3) |
+| H3 benefit vs cost | PRR / tail-PRR / AoI (Sec. 1, 4) vs resource occupation (Sec. 2b) |
+
+The rest of the notebook gathers exactly the evidence in that table and tests it
+statistically (Sec. 5)."""))
+
+
 cells.append(new_code_cell(r"""import pandas as pd, numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -69,6 +119,33 @@ relay6   = agg[(~agg.is_baseline) & (agg.relay_node == 6)]
 CLR = {'b': '#444444', 'r4': '#1f77b4', 'r6': '#ff7f0e'}
 MRK = {'b': 'o',       'r4': 's',       'r6': '^'}
 LBL = {'b': 'Baseline', 'r4': 'Relay node 4 (close)', 'r6': 'Relay node 6 (far)'}"""))
+
+cells.append(new_markdown_cell(r"""## Metric definitions — what each KPI measures, and why we chose it
+
+All KPIs are extracted per run from the ns-3 sidelink trace tables
+(`psschTxUeMac`, `slHarqFeedback`, `thput`, `pktTxRx`) in `agg_fixed_sweep.py`, then
+averaged over the 30 seeds of each (speed, MCD, relay) cell.
+
+| KPI (column) | Definition | What it reflects | Why we chose it |
+|---|---|---|---|
+| **Storm metric** `storm_ratio_agg_mean` | `n_retx / n_new` over all PSSCH TX in `psschTxUeMac` (`ndi=0` = HARQ reTX, `ndi=1` = fresh TB) | Per-run retransmission overhead: HARQ reTX per fresh transport block | Directly counts the storm at its source (the air interface). Higher = more channel effort wasted on reTX |
+| **Storm ratio** `storm_ratio` (storm_indicator.csv) | relay hop-1 reTX ÷ baseline hop-1 reTX, per (speed, MCD) | Whether adding the relay *amplifies* retransmissions vs no-relay | Isolates the relay's marginal effect; **>1 = storm**, <1 = relay even helps. The crisp test of H2 |
+| **Mean PRR** `prr_mean_agg_mean` | mean over nodes of `max(leader_rx, relay_rx) / leader_tx` | Average delivery reliability seen by a follower (best of direct or relayed copy) | The primary reliability target; "effective" PRR credits the relay's second copy |
+| **Tail PRR** `prr_worst_agg_mean` | the **worst** node's PRR (the last vehicle) | Reliability of the most disadvantaged follower | Platoon safety is governed by the *worst* link, not the average; this is where a relay should help most (H3) |
+| **AoI** `aoi_mean_ms_agg_mean` | mean of `rx_time - tx_time` (ms) over the earliest reception of each packet at each node | Freshness/latency of information at the followers | Platooning control needs *fresh* state; AoI captures both delay and loss (a dropped packet ages the info). Latency-side test of H3 |
+| **HARQ NACK rate** `harq_nack_rate_agg_mean` | NACK ÷ total HARQ feedbacks in `slHarqFeedback` | Fraction of feedbacks that demand a retransmission | The *driver* of the storm and the most direct readout of feedback-group size — the headline test of H1 |
+| **Resource occupation** `ch_occupancy_agg_mean` | total PSSCH TBs ÷ sim duration (TBs/ms) | How much of the shared sidelink resource pool the platoon consumes | The *cost* side of H3: a relay that doubles channel load is expensive even if it raises PRR |
+
+### Why this particular set
+These six span the three things that matter for a cooperative-platoon relay and map
+one-to-one onto the hypotheses:
+- **Cause** (feedback-group size): HARQ NACK rate, storm metric — *does MCD do anything?* (H1)
+- **Mechanism** (storm): storm ratio, hop-1 reTX, resource occupation — *does it blow up?* (H2)
+- **Effect** (user-visible QoS): PRR, tail PRR, AoI — *does the user benefit, and at what cost?* (H3)
+
+Mean vs tail PRR are both kept on purpose: a relay can lift the average while the safety-
+critical tail still lags (or vice-versa), so reporting only the mean would hide the effect
+the relay exists to fix."""))
 
 cells.append(new_markdown_cell(r"""## 1. Overview: KPIs vs speed (averaged over MCD)
 
@@ -308,6 +385,19 @@ for name,col in key_cols:
     print(f'{name:14s} {b.mean():10.4f} {r.mean():10.4f} {r.mean()-b.mean():+10.4f} {p:10.2e}  {sig}')"""))
 
 cells.append(new_markdown_cell(r"""## 6. Conclusions
+
+### Verdict on each hypothesis
+- **H1 (gate works) — CONFIRMED.** MCD is no longer inert: as MCD grows 80 → 350 m the HARQ
+  NACK rate rises ~15× and the storm metric roughly doubles, monotonically. The feedback-gate
+  timing fix is validated.
+- **H2 (storm threshold) — CONFIRMED.** The relay's hop-1 reTX is at parity with baseline for
+  MCD ≤ 100 m (storm ratio ≈ 0.92–0.94) and jumps to ~1.9–2.0 for MCD ≥ 150 m; resource
+  occupation tracks it. The storm ignites once the relay enters the leader's feedback group.
+- **H3 (benefit vs cost) — CONFIRMED.** The close relay (node 4) improves tail-PRR and AoI
+  far more than the far relay (node 6), but ~doubles resource occupation at large MCD. A clear
+  operating point exists (close relay, small MCD) that keeps the benefit without the storm.
+
+### Supporting detail
 
 **1. The MCD feedback gate fix is validated.** MCD is no longer inert: as MCD grows from
 80 → 350 m, the HARQ NACK rate rises by **~15×** and the storm metric roughly doubles. This
