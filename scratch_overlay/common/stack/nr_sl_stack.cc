@@ -20,6 +20,7 @@
 #include "ns3/ipv4-static-routing-helper.h"
 #include "ns3/log.h"
 #include "ns3/lte-ue-rrc.h"
+#include "ns3/node-list.h"
 #include "ns3/nr-amc.h"
 #include "ns3/pointer.h"
 
@@ -190,6 +191,40 @@ BuildSlStack(const SlStackParams& p,
     ctx.sl->SetUeSlSchedulerAttribute("Mcs", UintegerValue(p.mcs));
     ctx.sl->PrepareUeForSidelink(ctx.ueNetDev, bwpIdContainer);
     ctx.stream += ctx.sl->AssignStreams(ctx.ueNetDev, ctx.stream);
+
+    // -----------------------------------------------------------------------
+    // 6.0. (Optional) Per-node MCS override.
+    // -----------------------------------------------------------------------
+    // Backward-compat: empty map = no-op, every node keeps the global MCS.
+    // When non-empty, for each (nodeId, mcs) entry replace the scheduler on the
+    // listed TX node with a fresh NrSlUeMacSchedulerFixedMcs at the per-node MCS.
+    // RX-only nodes are unaffected (they have no PSSCH-TX role). Used by
+    // relay_mcs_resource_eval to give leader (node 0) and relay (node r)
+    // independent MCS values for the 2-hop same-L2ID relay.
+    if (!p.nodeMcsOverride.empty())
+    {
+        for (const auto& kv : p.nodeMcsOverride)
+        {
+            const uint32_t nodeId = kv.first;
+            const uint8_t  nodeMcs = kv.second;
+            Ptr<Node> targetNode = NodeList::GetNode(nodeId);
+            if (!targetNode || targetNode->GetNDevices() == 0) continue;
+            auto dev = targetNode->GetDevice(0)->GetObject<NrUeNetDevice>();
+            if (!dev) continue;
+            auto nrSlMac = dev->GetMac(0)->GetObject<NrSlUeMac>();
+            if (!nrSlMac) continue;
+            Ptr<NrSlUeMacSchedulerFixedMcs> perNodeSched =
+                CreateObject<NrSlUeMacSchedulerFixedMcs>();
+            perNodeSched->SetAttribute("Mcs", UintegerValue(nodeMcs));
+            Ptr<NrAmc> perNodeAmc = CreateObject<NrAmc>();
+            perNodeAmc->SetAttribute("AmcModel", EnumValue(NrAmc::ErrorModel));
+            perNodeSched->SetNrSlUeMac(nrSlMac);
+            perNodeSched->InstallAmc(perNodeAmc);
+            nrSlMac->SetAttribute("NrSlUeMacScheduler", PointerValue(perNodeSched));
+            NS_LOG_INFO("NrSlStack: nodeId=" << nodeId
+                        << " MCS overridden to " << +nodeMcs);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // 6a. (Optional) Deterministic collision-free scheduler on every UE.

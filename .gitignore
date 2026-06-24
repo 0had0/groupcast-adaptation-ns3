@@ -14,6 +14,9 @@ __pycache__/
 tmp/
 *.log
 *.pcap
+# NS-3 MAC stats dumps left in scratch dirs after a sim run
+NrDlMacStats.txt
+NrUlMacStats.txt
 
 # Simulation result trees (large binary + CSV data, not committed)
 results_*/

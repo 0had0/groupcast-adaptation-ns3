@@ -48,6 +48,15 @@ struct SlStackParams
     // the adaptiveMcs flag.
     std::map<uint32_t, uint8_t> dstMcsOverride{};
 
+    // Per-node MCS override (mcs applied at the scheduler on the listed nodeIds).
+    // For 2-hop same-L2ID relay: leader = mcsHop1, relayNode = mcsHop2.
+    // Empty = every node uses the global mcs (current default behaviour).
+    // Applied AFTER the default NrSlUeMacSchedulerFixedMcs is installed on all
+    // UEs, by replacing the scheduler on the listed node with a fresh
+    // NrSlUeMacSchedulerFixedMcs at the per-node MCS value. Affects only the
+    // listed TX nodes (RNTI); RX-only nodes are unaffected.
+    std::map<uint32_t, uint8_t> nodeMcsOverride{};
+
     // -- Deterministic (collision-free) scheduler --
     // When "deterministic", every UE gets NrSlDeterministicScheduler instead of
     // SB-SPS: node 0 (leader) is assigned partition lane 0 and every other UE

@@ -806,8 +806,18 @@ class KpiRow:
     ce_count: Optional[int] = None           # channel/decode-error corrupt
     total_corrupt: Optional[int] = None      # total corrupt PHY decodes
 
-    # Channel occupancy (TX side)
+    # Channel occupancy (TX side) — fraction of pool used (existing, unchanged).
     ch_occupancy: Optional[float] = None
+
+    # ---- Absolute subchannel×slot counters (backward-compat add for resource study) ----
+    # Computed from psschTxUeMac grants in the measurement window.
+    # subch_slots_used    = Σ (rbLen / sbChSize) — total subchannel-slots consumed by this TX
+    # subch_slots_total   = pssch_eligible_slots * n_subch — total subchannel-slots in the pool
+    # subch_slots_per_pkt = subch_slots_used / n_tx — resource per emitted packet
+    # All three are None for rows without TX-side context (e.g. RX-only flow rows).
+    subch_slots_used: Optional[int] = None
+    subch_slots_total: Optional[int] = None
+    subch_slots_per_pkt: Optional[float] = None
 
     # ---- worst / best aggregates (relay_storm_eval additions) ----
     # PRR: worst = min, best = max
@@ -1194,6 +1204,10 @@ def compute_kpis(
 
             # ---- Channel occupancy (TX side, per unique TX rnti) ----
             occupancy: Optional[float] = None
+            # ---- Absolute subchannel×slot counters (per unique TX rnti) ----
+            subch_slots_used: Optional[int] = None
+            subch_slots_total: Optional[int] = None
+            subch_slots_per_pkt: Optional[float] = None
             if tx_rnti is not None and pool_info is not None:
                 sb_ch_size = pool_info[0]
                 n_subch = pool_info[1] if pool_info[1] > 0 else 1
@@ -1203,9 +1217,16 @@ def compute_kpis(
                     pssch_slots = total_slots - total_slots // psfch_period
                     total_subch_slots = pssch_slots * n_subch
                     if total_subch_slots > 0:
+                        grants = tx_grants.get(tx_rnti, [])
                         used = sum(rb_l // sb_ch_size
-                                   for _, _, _, _, _, rb_l, _ in tx_grants.get(tx_rnti, []))
+                                   for _, _, _, _, _, rb_l, _ in grants)
                         occupancy = min(1.0, used / total_subch_slots)
+                        subch_slots_used = int(used)
+                        subch_slots_total = int(total_subch_slots)
+                        n_tx_pkts = len(tx_seq_map)
+                        subch_slots_per_pkt = (
+                            used / n_tx_pkts if n_tx_pkts > 0 else None
+                        )
 
             row = KpiRow(
                 rx_node_id=rx_node_id,
@@ -1238,6 +1259,9 @@ def compute_kpis(
                 ce_count=ce_count,
                 total_corrupt=total_corrupt,
                 ch_occupancy=occupancy,
+                subch_slots_used=subch_slots_used,
+                subch_slots_total=subch_slots_total,
+                subch_slots_per_pkt=subch_slots_per_pkt,
                 # ---- worst / best ----
                 prr_worst=prr_min,      # PRR worst = min
                 prr_best=prr_max,       # PRR best  = max
@@ -1248,11 +1272,13 @@ def compute_kpis(
                 aoi_best_ms=aoi_best,
                 # ---- per-hop reTX ----
                 # hop1 = leader RNTI (tx_node_id 0 → tx_rnti resolved above),
-                # hop2 = any other TX RNTI in retx_by_rnti not matching hop1.
-                # We report the leader's retx for the first link row and the
-                # relay's retx for links where tx is the relay node.
-                hop1_retx=retx_by_rnti.get(tx_rnti, 0) if tx_rnti is not None else None,
-                hop2_retx=None,  # populated by analyse_relay_storm.py
+                # hop2 = sum of ndi=0 for any other TX RNTI in retx_by_rnti
+                # (in relay mode the relay re-broadcasts with its own RNTI).
+                hop1_retx=(retx_by_rnti.get(tx_rnti, 0)
+                           if tx_rnti is not None else None),
+                hop2_retx=(sum(c for rn, c in retx_by_rnti.items()
+                               if rn != tx_rnti)
+                           if tx_rnti is not None else None),
             )
             rows.append(row)
 
