@@ -11,3 +11,6 @@ from . import throughput      # noqa: F401
 from . import aoi             # noqa: F401
 from . import harq            # noqa: F401
 from . import ch_occupancy    # noqa: F401
+from . import storm           # noqa: F401   # hop-1 retx storm metric
+from . import psr             # noqa: F401   # packets successfully relayed
+from . import coll_rate       # noqa: F401   # leader↔relay RB collision

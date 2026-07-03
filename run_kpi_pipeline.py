@@ -25,7 +25,7 @@ KPI_DIR = HERE / "scratch_overlay" / "common" / "kpi"
 KPI_SCRIPT = KPI_DIR / "kpi_postprocess.py"
 
 # Match "seedN" at the end of the dir name (or anywhere as a fallback).
-_SEED_RE = re.compile(r"_seed(\d+)\b")
+_SEED_RE = re.compile(r"_seed(\d+)(?:_|$)")
 
 
 def parse_seed(sim_name: str) -> int:

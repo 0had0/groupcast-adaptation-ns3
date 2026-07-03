@@ -40,7 +40,7 @@ import pandas as pd
 # Tag handling
 # --------------------------------------------------------------------------- #
 
-SEED_TAG_RE = re.compile(r"_seed(?P<seed>\d+)$")
+SEED_TAG_RE = re.compile(r"_seed(?P<seed>\d+)(?:_mcd\d+)?$")
 
 
 def split_seed_tag(run_id: str) -> tuple[str, Optional[int]]:
@@ -90,6 +90,14 @@ RX_KEYS_KPIS = {
     "harq":           ["harq_ack", "harq_nack", "harq_nack_rate"],
 }
 
+# KPIs that are scalar per sim (one row total). They are broadcast across
+# all (tx_node_id, rx_node_id) rows.
+SCALAR_KPIS = {
+    "storm":          ["storm_ratio", "n_retx", "n_new", "hop1_retx", "leader_l2_id"],
+    "psr":            ["psr", "forwarded_count", "leader_gen_count"],
+    "coll":           ["coll_rate", "n_colliding", "n_leader_tbs", "n_relay_tbs"],
+}
+
 
 # --------------------------------------------------------------------------- #
 # Per-run combine
@@ -110,7 +118,7 @@ def _find_kpi_files(run_dir: Path) -> dict:
         if name.endswith("_summary.csv"):
             continue
         # Match pattern: <tag>_<kpi_id>.csv or <tag>_<kpi_id>.<kind>.csv
-        for kpi_id in LINK_KEYS_KPIS | TX_KEYS_KPIS | RX_KEYS_KPIS:
+        for kpi_id in LINK_KEYS_KPIS | TX_KEYS_KPIS | RX_KEYS_KPIS | SCALAR_KPIS:
             # e.g. testrun_prr_type2.csv → kpi_id=prr_type2
             # e.g. testrun_prr_type1.bin.csv → kpi_id=prr_type1
             # e.g. testrun_pir_type1.cdf.csv → kpi_id=pir_type1
@@ -221,6 +229,24 @@ def combine_run(
             keep = ["rx_node_id"] + list(ren.values())
             df = df[[c for c in keep if c in df.columns]]
             base_df = pd.merge(base_df, df, on="rx_node_id", how="outer")
+
+    # Merge in scalar KPIs (storm, psr, coll). Each is a single-row CSV;
+    # we take row 0 (or aggregate per relay if psr has multiple rows) and
+    # broadcast across all (tx, rx) rows.
+    for kpi_id, cols in SCALAR_KPIS.items():
+        for path in kpi_files.get(kpi_id, []):
+            df = _safe_read(path)
+            if df is None or len(df) == 0:
+                continue
+            ren = {c: f"{kpi_id}_{c}" for c in cols if c in df.columns}
+            df = df.rename(columns=ren)
+            # If multiple rows (e.g. psr has one row per relay), take the
+            # first row only for broadcasting. Multi-relay scenarios can be
+            # handled later if needed.
+            df = df.iloc[0:1] if len(df) > 0 else df
+            for col in ren.values():
+                if col in df.columns:
+                    base_df[col] = df[col].iloc[0]
 
     # Broadcast summary columns.
     out = base_df.copy()
