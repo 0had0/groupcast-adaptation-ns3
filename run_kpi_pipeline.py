@@ -47,8 +47,10 @@ def process_one(sim_dir: Path, out_root: Path, range_m: float, bin_spec: str,
     db_path = db_files[0]
     sim_out = out_root / sim_name
     sim_out.mkdir(parents=True, exist_ok=True)
-    # Skip if already done (a successful run wrote at least 1 KPI file).
-    if any(sim_out.glob(f"{sim_name}_*.csv")):
+    # Skip if already done (kpi_postprocess wrote 7+ KPI files, not just summary).
+    n_kpi = sum(1 for p in sim_out.glob(f"{sim_name}_*.csv")
+                if not p.name.endswith("_summary.csv"))
+    if n_kpi >= 7:
         return sim_name, "skip:already_done"
     # Copy the per-cell summary CSV (if it exists) so downstream tools
     # (join_per_run, sweep_aggregate) can read seed/run config.

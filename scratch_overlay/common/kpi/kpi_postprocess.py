@@ -59,9 +59,17 @@ def _parse_args(argv=None):
 
 
 def _infer_sim_end(cache: DataCache) -> float:
-    pkt = cache.pkt_txrx()
-    if pkt is not None and len(pkt) > 0:
-        return float(pkt["timeSec"].max())
+    """Best-effort sim-end inference from the most-reliable timestamp column.
+
+    Tries pktTxRx (most precise per-packet), then appPktSeq, then psschTx.
+    Returns 0.0 if all are empty (caller will report "bad window").
+    """
+    for accessor, col in (("pkt_txrx", "timeSec"),
+                          ("app_pkt_seq", "timeSec"),
+                          ("pssch_tx", "timeMs")):
+        df = getattr(cache, accessor)()
+        if df is not None and len(df) > 0 and col in df.columns:
+            return float(df[col].max()) / (1000.0 if col == "timeMs" else 1.0)
     return 0.0
 
 

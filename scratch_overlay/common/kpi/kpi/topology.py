@@ -90,6 +90,15 @@ class Topology:
             for r in tx_only.itertuples(index=False):
                 if r.srcIp and r.nodeId is not None:
                     tx_ip_to_node[str(r.srcIp)] = int(r.nodeId)
+        # Fallback: appPktSeq may have TX events even if pktTxRx is empty
+        # (older or partial sims).
+        if not tx_ip_to_node:
+            app = cache.app_pkt_seq()
+            if app is not None and len(app):
+                app_tx = app[app["txRx"] == "tx"]
+                # appPktSeq doesn't carry srcIp, so use nodeId alone.
+                for nid in app_tx["nodeId"].dropna().unique():
+                    tx_ip_to_node.setdefault(f"app:{int(nid)}", int(nid))
 
         # Relay nodes from relayTiming.relayNodeId.
         relay_nodes: Set[int] = set()
