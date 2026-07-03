@@ -1,0 +1,1 @@
+"""common.kpi — KPI registry, post-processing, and joining utilities."""

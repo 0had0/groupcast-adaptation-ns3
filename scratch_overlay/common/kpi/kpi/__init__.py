@@ -1,0 +1,1 @@
+"""common.kpi.kpi — core abstractions for the KPI registry."""

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # analyse_relay_storm.py — aggregate relay_storm_eval sweep results
 #
-# Reads all *_kpi.csv files under a results directory and produces:
+# Reads per-run directories containing per-KPI CSVs (the registry-based
+# ``kpi_postprocess`` output) and produces:
 #   1. sweep_aggregate.csv  — per-(speed,ivd,mcd,relay) aggregate KPIs
 #   2. storm_indicator.csv  — retx overhead = relay-run retx / baseline retx
 #   3. time_series.csv      — per-window KPI rows (if window_t present)
@@ -16,6 +17,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Allow importing join_per_run from the common.kpi package.
+_KPI_PKG = Path(__file__).resolve().parent.parent / "common" / "kpi"
+sys.path.insert(0, str(_KPI_PKG))
+from join_per_run import combine_run  # noqa: E402
+
 # -------------------------------------------------------------------------
 # CLI
 # -------------------------------------------------------------------------
@@ -28,14 +34,17 @@ output_dir  = Path(sys.argv[2]) if len(sys.argv) > 2 else results_dir
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # -------------------------------------------------------------------------
-# Collect all KPI CSV files
+# Collect per-run directories (each containing per-KPI CSVs + _summary.csv)
 # -------------------------------------------------------------------------
-kpi_files = sorted(results_dir.rglob("*_kpi.csv"))
-if not kpi_files:
-    print(f"No *_kpi.csv files found under {results_dir}", file=sys.stderr)
+run_dirs = sorted([
+    p for p in results_dir.rglob("*")
+    if p.is_dir() and any(p.glob("*_summary.csv")) and any(p.glob("*_*.csv"))
+])
+if not run_dirs:
+    print(f"No per-run KPI directories found under {results_dir}", file=sys.stderr)
     sys.exit(1)
 
-print(f"Found {len(kpi_files)} KPI CSV files")
+print(f"Found {len(run_dirs)} per-run directories")
 
 # -------------------------------------------------------------------------
 # Load all rows; parse run metadata from the parent directory name.
@@ -70,28 +79,27 @@ def parse_run_meta(runid: str) -> Dict:
 
 all_rows: List[Dict] = []
 
-for kpi_file in kpi_files:
-    # Support both flat layout (all CSVs in one dir, filename encodes run metadata)
-    # and subdirectory layout (each run in its own subdirectory).
-    stem = kpi_file.stem  # e.g. "baseline_s80_ivd25_mcd80_seed1_kpi"
-    if stem.endswith("_kpi"):
-        stem = stem[:-4]   # strip "_kpi" → "baseline_s80_ivd25_mcd80_seed1"
-    # Prefer filename-encoded metadata; fall back to parent directory name.
-    run_dir = stem if parse_run_meta(stem)["speed"] is not None else kpi_file.parent.name
-    meta    = parse_run_meta(run_dir)
-    with open(kpi_file, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            row.update({
-                "run_dir":    run_dir,
-                "speed":      meta["speed"],
-                "ivd":        meta["ivd"],
-                "mcd":        meta["mcd"],
-                "relay_node": meta["relay_node"],
-                "seed":       meta["seed"],
-                "is_baseline":meta["baseline"],
-            })
-            all_rows.append(row)
+for run_dir in run_dirs:
+    # Run metadata is encoded in the directory name.
+    run_id = run_dir.name
+    meta = parse_run_meta(run_id)
+    try:
+        df = combine_run(run_dir)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"  skip {run_id}: {e}")
+        continue
+    for _, src in df.iterrows():
+        row = src.to_dict()
+        row.update({
+            "run_dir":    run_id,
+            "speed":      meta["speed"],
+            "ivd":        meta["ivd"],
+            "mcd":        meta["mcd"],
+            "relay_node": meta["relay_node"],
+            "seed":       meta["seed"],
+            "is_baseline":meta["baseline"],
+        })
+        all_rows.append(row)
 
 print(f"Loaded {len(all_rows)} rows")
 
@@ -140,26 +148,18 @@ for row in all_rows:
     groups[key].append(row)
 
 AGG_METRICS = [
-    ("prr_mean",          "prr"),
-    ("prr_worst",         "prr"),
-    ("prr_best",          "prr"),
-    ("prr_p5",            "prr"),
-    ("prr_p95",           "prr"),
-    ("pir_mean_ms",       "pir_ms"),
-    ("pir_worst_ms",      "pir_ms"),
-    ("pir_best_ms",       "pir_ms"),
-    ("pir_p5_ms",         "pir_ms"),
-    ("pir_p95_ms",        "pir_ms"),
-    ("aoi_mean_ms",       "aoi_ms"),
-    ("aoi_peak_ms",       "aoi_ms"),
-    ("aoi_best_ms",       "aoi_ms"),
-    ("thput_mean_kbps",   "thput_kbps"),
-    ("thput_worst_kbps",  "thput_kbps"),
-    ("thput_best_kbps",   "thput_kbps"),
-    ("harq_nack_rate",    "rate"),
-    ("ch_occupancy",      "frac"),
-    ("hop1_retx",         "count"),
-    ("hop2_retx",         "count"),
+    # (column_in_combined_csv, output_short_name)
+    # Columns are prefixed by KPI id (e.g. prr_type2_prr_mean) since they come
+    # from the registry-based per-KPI outputs joined by join_per_run.combine_run.
+    ("prr_type2_prr_mean",     "prr"),
+    ("prr_type2_prr_worst",    "prr"),
+    ("prr_type2_prr_best",     "prr"),
+    ("aoi_aoi_mean_ms",        "aoi_ms"),
+    ("aoi_aoi_p95_ms",         "aoi_ms"),
+    ("aoi_aoi_max_ms",         "aoi_ms"),
+    ("throughput_thput_kbps",  "thput_kbps"),
+    ("harq_harq_nack_rate",    "rate"),
+    ("ch_occupancy_ch_occupancy", "frac"),
 ]
 
 agg_rows = []
