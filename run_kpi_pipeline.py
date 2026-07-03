@@ -35,7 +35,8 @@ def parse_seed(sim_name: str) -> int:
 
 
 def process_one(sim_dir: Path, out_root: Path, range_m: float, bin_spec: str,
-                warmup_s: float, kpis: str, scope: str) -> tuple[str, str]:
+                warmup_s: float, kpis: str, scope: str,
+                force: bool = False) -> tuple[str, str]:
     """Run kpi_postprocess.py on a single sim directory.
 
     Returns (sim_name, status) where status is 'ok' | 'skip' | 'err:<msg>'.
@@ -50,7 +51,7 @@ def process_one(sim_dir: Path, out_root: Path, range_m: float, bin_spec: str,
     # Skip if already done (kpi_postprocess wrote 7+ KPI files, not just summary).
     n_kpi = sum(1 for p in sim_out.glob(f"{sim_name}_*.csv")
                 if not p.name.endswith("_summary.csv"))
-    if n_kpi >= 7:
+    if n_kpi >= 7 and not force:
         return sim_name, "skip:already_done"
     # Copy the per-cell summary CSV (if it exists) so downstream tools
     # (join_per_run, sweep_aggregate) can read seed/run config.
@@ -97,21 +98,35 @@ def main():
     ap.add_argument("--kpis", type=str, default="all")
     ap.add_argument("--pattern", type=str, default="*",
                     help="Glob filter for sim subdir names (e.g. 'baseline_*')")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-run even if sims already have KPI files")
     args = ap.parse_args()
 
     if not KPI_SCRIPT.exists():
         print(f"FATAL: kpi_postprocess.py not found at {KPI_SCRIPT}", file=sys.stderr)
         sys.exit(1)
 
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     sim_dirs = sorted(
         d for d in args.runs_root.iterdir()
         if d.is_dir()
         and fnmatch.fnmatch(d.name, args.pattern)
         and list(d.glob("*.db"))
     )
+    # Build set of already-done sim names (7+ KPI files).
+    done_names: set[str] = set()
+    if not args.force:
+        for d in args.out_dir.iterdir():
+            if not d.is_dir():
+                continue
+            n = sum(1 for p in d.glob(f"{d.name}_*.csv")
+                    if not p.name.endswith("_summary.csv"))
+            if n >= 7:
+                done_names.add(d.name)
+    sim_dirs = [d for d in sim_dirs if d.name not in done_names]
     print(f"[runner] Found {len(sim_dirs)} sim dirs under {args.runs_root} "
-          f"(pattern={args.pattern!r}); using {args.workers} workers")
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+          f"(pattern={args.pattern!r}, force={args.force}, "
+          f"skipped {len(done_names)} already-done); using {args.workers} workers")
 
     t0 = time.time()
     n_ok = n_skip = n_err = 0
@@ -119,7 +134,7 @@ def main():
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         futs = [
             ex.submit(process_one, d, args.out_dir, args.range, args.bin_spec,
-                      args.warmup, args.kpis, args.scope)
+                      args.warmup, args.kpis, args.scope, args.force)
             for d in sim_dirs
         ]
         for i, fut in enumerate(as_completed(futs), 1):

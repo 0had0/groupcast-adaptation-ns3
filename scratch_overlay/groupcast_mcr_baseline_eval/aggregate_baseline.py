@@ -145,12 +145,19 @@ def _safe_stat(vals):
         if v is None:
             return None
         if isinstance(v, (int, float)):
-            return float(v)
+            f = float(v)
+            # Filter NaN/Inf — they're not valid statistics.
+            if f != f or f in (float("inf"), float("-inf")):
+                return None
+            return f
         try:
-            return float(v)
+            f = float(v)
+            if f != f or f in (float("inf"), float("-inf")):
+                return None
+            return f
         except (TypeError, ValueError):
             return None
-    s = sorted(_to_float(v) for v in vals if _to_float(v) is not None)
+    s = sorted(v for v in map(_to_float, vals) if v is not None)
     n = len(s)
     if n == 0:
         return (None, None, None, None, None)
@@ -187,7 +194,7 @@ def aggregate_cell(per_seed_rows):
     # Per-link KPIs.
     prr = _vals(per_seed_rows, "prr_type2_prr_mean")
     aoi = _vals(per_seed_rows, "aoi_aoi_mean_ms")
-    aoi_p95 = _vals(per_seed_rows, "aoi_aoi_p95_ms")
+    aoi_p95_list = _vals(per_seed_rows, "aoi_aoi_p95_ms")
     thput = _vals(per_seed_rows, "throughput_thput_kbps")
     # Per-rx KPIs (harq).
     harq_ack = _vals(per_seed_rows, "harq_harq_ack")
@@ -201,30 +208,42 @@ def aggregate_cell(per_seed_rows):
     prr_worst_per_seed = defaultdict(list)
     aoi_worst_per_seed = defaultdict(list)
     for r in per_seed_rows:
-        v_prr_worst = _f(r.get("prr_type2_prr_worst"))
-        if v_prr_worst is not None:
+        # Use prr_mean for worst-case (per-link prr_worst is the min over
+        # per-packet PRR, which is 0 for any link that ever had a single
+        # dropped packet — too pessimistic for cell-level worst-case).
+        v_prr_worst = _f(r.get("prr_type2_prr_mean"))
+        if v_prr_worst is not None and v_prr_worst == v_prr_worst:  # filter NaN
             prr_worst_per_seed[r.get("seed")].append(v_prr_worst)
         v_aoi_max = _f(r.get("aoi_aoi_max_ms"))
-        if v_aoi_max is not None:
+        if v_aoi_max is not None and v_aoi_max == v_aoi_max:  # filter NaN
             aoi_worst_per_seed[r.get("seed")].append(v_aoi_max)
 
     prr_mean_m,  prr_med,  prr_p5,  prr_p95,  prr_std  = _safe_stat(prr)
     aoi_mean_m,  aoi_med,  aoi_p5,  aoi_p95,  aoi_std  = _safe_stat(aoi)
     thput_mean, thput_med, thput_p5, thput_p95, thput_std = _safe_stat(thput)
-    aoi_p95_mean_m, _, _, _, _ = _safe_stat(aoi_p95)
+    aoi_p95_mean_m, _, _, _, _ = _safe_stat(aoi_p95_list)
     harq_nack_rate_mean, _, _, _, _ = _safe_stat(harq_nack_rate)
 
     prr_worst_per_seed_vals = [min(v) for v in prr_worst_per_seed.values() if v]
     aoi_worst_per_seed_vals = [max(v) for v in aoi_worst_per_seed.values() if v]
 
     def _safe_mean(vals):
-        s = [_f(v) for v in vals if _f(v) is not None]
+        s = [v for v in (_f(v) for v in vals) if v is not None and v == v]
         return mean(s) if s else None
 
     prr_worst_mean = _safe_mean(prr_worst_per_seed_vals)
     aoi_worst_mean = _safe_mean(aoi_worst_per_seed_vals)
-    harq_ack_total = int(sum(v for v in harq_ack if v is not None))
-    harq_nack_total = int(sum(v for v in harq_nack if v is not None))
+    def _sum_finite(xs):
+        s = 0
+        any_added = False
+        for v in xs:
+            f = _f(v)
+            if f is not None and f == f:  # filter NaN
+                s += f
+                any_added = True
+        return s if any_added else 0
+    harq_ack_total = int(_sum_finite(harq_ack))
+    harq_nack_total = int(_sum_finite(harq_nack))
 
     return {
         "prr_mean":  prr_mean_m,
@@ -246,7 +265,7 @@ def aggregate_cell(per_seed_rows):
         "harq_nack_total": harq_nack_total,
         "harq_nack_rate_mean": harq_nack_rate_mean,
         "ch_occupancy_mean": _safe_mean(ch_occ),
-        "subch_slots_used_total": int(sum(v for v in subch_slots_used if v is not None)),
+        "subch_slots_used_total": int(_sum_finite(subch_slots_used)),
         "subch_slots_per_pkt_mean": _safe_mean(subch_slots_per_pkt),
     }
 
