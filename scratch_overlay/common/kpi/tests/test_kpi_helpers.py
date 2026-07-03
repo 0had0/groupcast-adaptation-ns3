@@ -347,6 +347,101 @@ class TestOutcomes(KpiHarness):
         relay_seqs = out.tx_seqs(4)
         self.assertGreaterEqual(len(relay_seqs), 7)
 
+    def test_pkttxrx_augments_missing_relay_receptions(self):
+        """When appPktSeq has no port=8101 RX events (some sims don't write
+        them), the outcomes must still pick up relay→follower receptions
+        from pktTxRx RX events whose srcIp is the relay's IP.
+        """
+        import tempfile
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript("""
+            CREATE TABLE nodeInfo (
+                nodeId INTEGER, imsi INTEGER, ip TEXT, x REAL, y REAL, z REAL
+            );
+            CREATE TABLE pktTxRx (
+                timeSec REAL, txRx TEXT, nodeId INTEGER, imsi INTEGER,
+                pktSizeBytes INTEGER, srcIp TEXT, srcPort INTEGER,
+                dstIp TEXT, dstPort INTEGER, pktSeqNum INTEGER,
+                SEED INTEGER, RUN INTEGER
+            );
+            CREATE TABLE appPktSeq (
+                timeSec REAL, txRx TEXT, nodeId INTEGER, dstPort INTEGER, seq INTEGER
+            );
+            CREATE TABLE relayTiming (
+                seq INTEGER, origPort INTEGER, relayNodeId INTEGER,
+                forwarded INTEGER, leaderGenSec REAL, relayDecodeSec REAL,
+                forwardSendSec REAL
+            );
+        """)
+        # nodeInfo: leader=0 (7.0.0.2), relay=4 (7.0.0.6), followers 1,2,3,5,6,7,8
+        for nid, ip in [(0, "7.0.0.2"), (1, "7.0.0.3"), (2, "7.0.0.4"),
+                        (3, "7.0.0.5"), (4, "7.0.0.6"), (5, "7.0.0.7"),
+                        (6, "7.0.0.8"), (7, "7.0.0.9"), (8, "7.0.0.10")]:
+            con.execute(
+                "INSERT INTO nodeInfo VALUES (?,?,?,?,?,?)",
+                (nid, nid + 100, ip, 0.0, nid * 10.0, 0.0),
+            )
+        # pktTxRx: 10 leader TX, 10 RX at followers from leader IP, 5 RX at
+        # followers from RELAY IP (no appPktSeq entries for these).
+        for seq in range(10):
+            con.execute(
+                "INSERT INTO pktTxRx VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (1.0 + seq * 0.1, "tx", 0, 1, 300, "7.0.0.2", 8001,
+                 "7.0.0.255", 8001, seq, 1, 1),
+            )
+        # Followers 5,6,7,8 receive via relay IP (not in appPktSeq).
+        for seq in range(5):
+            for rx in [5, 6, 7, 8]:
+                con.execute(
+                    "INSERT INTO pktTxRx VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (1.5 + seq * 0.1, "rx", rx, rx + 100, 300, "7.0.0.6", 8101,
+                     "7.0.0.255", 8101, seq, 1, 1),
+                )
+        # appPktSeq: direct (port 8001) RX events for CLOSE followers only.
+        # Far followers (5,6,7,8) have NO direct RX — they only see the relay.
+        for seq in range(10):
+            for rx in [1, 2, 3]:
+                con.execute(
+                    "INSERT INTO appPktSeq VALUES (?,?,?,?,?)",
+                    (1.02 + seq * 0.1, "rx", rx, 8001, seq),
+                )
+        # relayTiming: relay forwarded seqs 0..4.
+        for seq in range(5):
+            con.execute(
+                "INSERT INTO relayTiming VALUES (?,?,?,?,?,?,?)",
+                (seq, 8001, 4, 1, 1.0 + seq * 0.1, 1.02 + seq * 0.1, 1.05 + seq * 0.1),
+            )
+        con.commit()
+
+        # Save to tempfile and open as DataCache.
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        dst = sqlite3.connect(tmp.name)
+        with dst:
+            for row in con.iterdump():
+                if row.startswith("INSERT") or row.startswith("CREATE"):
+                    dst.execute(row)
+        dst.commit(); dst.close(); con.close()
+        self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
+
+        cache = DataCache.open(Path(tmp.name), seed=1, run=1,
+                               t_start=0.0, t_end=10.0)
+        topo = Topology.build(cache, Ranges.from_cli("320"))
+        out = Outcomes(cache, topo)
+        # Relay should have 5 forwarded seqs (from relayTiming).
+        self.assertEqual(len(out.tx_seqs(4)), 5)
+        # Relay→follower 8 should decode seqs 0..4 (5 successes) via
+        # the pktTxRx-augment path.
+        decoded_8 = sum(1 for seq in out.tx_seqs(4) if out.decoded(4, 8, seq))
+        self.assertEqual(decoded_8, 5)
+        # Leader→follower 8 should ALSO be cross-linked (via:4) for these seqs.
+        cross_linked = sum(1 for seq in range(5) if out.decoded(0, 8, seq))
+        self.assertEqual(cross_linked, 5)
+        # rx_via should include "via:4" for the cross-linked seqs.
+        via = out.rx_via(0, 8, 0)
+        self.assertIn("via:4", via)
+
 
 # ===========================================================================
 # KPIs — smoke test

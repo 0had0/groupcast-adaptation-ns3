@@ -78,9 +78,81 @@ class Outcomes:
         else:
             self._build_from_pkttxrx(cache, topo)
 
+        # Augment with relay→follower receptions that are visible in pktTxRx
+        # but missing from appPktSeq (some sims don't write port=8101 RX
+        # events in the app table). Use pktTxRx.srcIp → nodeId to attribute
+        # the actual source. This is the "second chance" cross-link path.
+        self._augment_relay_receptions_from_pkttxrx(cache, topo)
+
         # Augment with relay TX streams (only from appPktSeq path; pktTxRx
         # fallback has its own relay attribution).
         self._augment_relay_tx_streams(cache, topo)
+
+    def _augment_relay_receptions_from_pkttxrx(
+        self, cache: DataCache, topo: Topology
+    ) -> None:
+        """Add relay→follower receptions that appPktSeq missed.
+
+        Walks pktTxRx RX events whose srcIp belongs to a relay node (or any
+        other TX node that's not the leader) and registers the receptions
+        keyed under (relay, rx, seq). Also cross-links to the leader for
+        end-to-end union-dedup.
+        """
+        pkt = cache.pkt_txrx()
+        if pkt is None or len(pkt) == 0:
+            return
+        rx_only = pkt[pkt["txRx"] == "rx"]
+        if len(rx_only) == 0:
+            return
+
+        # Map srcIp → nodeId for all known TX sources.
+        ip_to_node: Dict[str, int] = {}
+        if topo.tx_ip_to_node:
+            ip_to_node.update(topo.tx_ip_to_node)
+        for nid, ni in topo.nodes.items():
+            if ni.ip:
+                ip_to_node.setdefault(ni.ip, nid)
+        # Make sure relay IPs are registered.
+        for nid in topo.relay_nodes:
+            ni = topo.nodes.get(nid)
+            if ni is not None and ni.ip:
+                ip_to_node[ni.ip] = nid
+
+        leader = topo.leader_node
+        for r in rx_only.itertuples(index=False):
+            try:
+                rx_nid = int(r.nodeId); seq = int(r.pktSeqNum); t = float(r.timeSec)
+            except (TypeError, ValueError):
+                continue
+            src_ip = str(r.srcIp) if r.srcIp else ""
+            src_nid = ip_to_node.get(src_ip)
+            if src_nid is None or src_nid == leader:
+                # Either unknown IP (skip) or direct from leader (already in appPktSeq).
+                continue
+            # src_nid is a non-leader TX (typically a relay).
+            if src_nid not in topo.relay_nodes:
+                continue
+            # Register reception at (src_nid, rx_nid) only if not already
+            # present (appPktSeq is preferred).
+            key_rx = (src_nid, rx_nid, seq)
+            if key_rx in self._decoded_cache:
+                continue
+            self._receptions.setdefault((src_nid, rx_nid), []).append(
+                (t, seq, "relay")
+            )
+            self._via_cache.setdefault(key_rx, set()).add("relay")
+            self._decoded_cache[key_rx] = True
+            # Cross-link to leader (end-to-end union-dedup).
+            key_leader = (leader, rx_nid, seq)
+            if key_leader not in self._decoded_cache:
+                self._via_cache.setdefault(key_leader, set()).add(f"via:{src_nid}")
+                self._decoded_cache[key_leader] = True
+                self._receptions.setdefault((leader, rx_nid), []).append(
+                    (t, seq, f"via:{src_nid}")
+                )
+        # Re-sort all receptions.
+        for key in self._receptions:
+            self._receptions[key].sort()
 
     def _augment_relay_tx_streams(self, cache: DataCache, topo: Topology) -> None:
         """For each relay node, register its forwarded seqs as a TX stream.
