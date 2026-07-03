@@ -109,20 +109,26 @@ print(f"Loaded {len(all_rows)} rows")
 
 def safe_float(v) -> Optional[float]:
     try:
-        return float(v) if v not in (None, "", "None") else None
+        if v is None or v == "" or v == "None":
+            return None
+        f = float(v)
+        # Treat NaN/Inf as missing — they pollute aggregations.
+        if f != f or f in (float("inf"), float("-inf")):
+            return None
+        return f
     except (ValueError, TypeError):
         return None
 
 def safe_mean(vals):
-    v = [x for x in vals if x is not None]
+    v = [x for x in vals if x is not None and x == x]
     return sum(v) / len(v) if v else None
 
 def safe_min(vals):
-    v = [x for x in vals if x is not None]
+    v = [x for x in vals if x is not None and x == x]
     return min(v) if v else None
 
 def safe_max(vals):
-    v = [x for x in vals if x is not None]
+    v = [x for x in vals if x is not None and x == x]
     return max(v) if v else None
 
 def percentile(vals, p):
@@ -160,6 +166,12 @@ AGG_METRICS = [
     ("throughput_thput_kbps",  "thput_kbps"),
     ("harq_harq_nack_rate",    "rate"),
     ("ch_occupancy_ch_occupancy", "frac"),
+    ("storm_storm_ratio",      "storm_ratio"),
+    ("storm_hop1_retx",        "hop1_retx"),
+    ("storm_n_retx",           "n_retx"),
+    ("storm_n_new",            "n_new"),
+    ("psr_psr",                "psr"),
+    ("coll_coll_rate",         "coll_rate"),
 ]
 
 agg_rows = []
@@ -189,30 +201,31 @@ if agg_rows:
     print(f"Wrote {len(agg_rows)} rows → {agg_path}")
 
 # -------------------------------------------------------------------------
-# 2. Storm indicator: relay retx / baseline retx per (speed, ivd, mcd)
+# 2. Storm indicator: relay retx / baseline retx per (speed, ivd, mcd, relay_node)
+#    Legacy format: one row per relay_node, comparing each against the same
+#    baseline hop-1 retx (the leader's hop-1 pressure is independent of which
+#    relay joins the feedback group, so the baseline number is the same for
+#    both relay arms).
 # -------------------------------------------------------------------------
 baseline_retx: Dict[tuple, Optional[float]] = {}
 relay_retx:    Dict[tuple, Optional[float]] = {}
 
 for key, rows_in_group in groups.items():
     speed, ivd, mcd, relay_node, is_baseline = key
-    subkey = (speed, ivd, mcd)
-    vals = [safe_float(r.get("hop1_retx")) for r in rows_in_group]
+    vals = [safe_float(r.get("storm_hop1_retx")) for r in rows_in_group]
     mean_val = safe_mean(vals)
     if is_baseline:
-        baseline_retx[subkey] = mean_val
+        baseline_retx[(speed, ivd, mcd)] = mean_val
     else:
-        prev = relay_retx.get(subkey)
-        relay_retx[subkey] = (prev or 0) + (mean_val or 0)
+        relay_retx[(speed, ivd, mcd, relay_node)] = mean_val
 
 storm_rows = []
-for subkey in sorted(set(list(baseline_retx.keys()) + list(relay_retx.keys()))):
-    speed, ivd, mcd = subkey
-    b = baseline_retx.get(subkey)
-    r = relay_retx.get(subkey)
+for (speed, ivd, mcd, relay_node) in sorted(relay_retx.keys()):
+    b = baseline_retx.get((speed, ivd, mcd))
+    r = relay_retx[(speed, ivd, mcd, relay_node)]
     ratio = (r / b) if (r is not None and b is not None and b > 0) else None
     storm_rows.append({
-        "speed": speed, "ivd": ivd, "mcd": mcd,
+        "speed": speed, "ivd": ivd, "mcd": mcd, "relay_node": relay_node,
         "baseline_hop1_retx_mean": b,
         "relay_hop1_retx_mean": r,
         "storm_ratio": ratio,  # >1 = storm amplification

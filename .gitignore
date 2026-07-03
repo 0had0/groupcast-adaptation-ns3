@@ -37,3 +37,8 @@ experiment*/
 nr_sidelink_visualizer/
 analytical_relay_model/
 results_relay_storm_eval/
+report_relay_mcs/
+dynamic-relay-trigger.md
+multirelay-algorithm.md
+stoa_psfch
+kpi_results/
