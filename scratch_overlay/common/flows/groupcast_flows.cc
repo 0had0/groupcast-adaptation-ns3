@@ -322,6 +322,21 @@ ParseFlowsSpec(const std::string& spec)
                     auto d = static_cast<uint32_t>(std::stoul(val));
                     fd.dstL2Id = d;
                 }
+                else if (key == "harq")
+                {
+                    static const std::map<std::string, HarqMode> kMap = {
+                        {"default",  HarqMode::Default},
+                        {"acknack",  HarqMode::AckNack},
+                        {"nackonly", HarqMode::NackOnly},
+                    };
+                    auto it = kMap.find(Trim(val));
+                    if (it == kMap.end())
+                    {
+                        throw std::runtime_error(
+                            "harq must be default|acknack|nackonly: " + val);
+                    }
+                    fd.harqMode = it->second;
+                }
                 else if (key == "rxNodes")
                 {
                     // Accepts colon-separated ids and/or ranges: "1:2:3" or
@@ -459,12 +474,27 @@ InstallGroupcastFlows(const NodeContainer& nodes,
             (fd.harqOverride < 0) ? harqEnabledDefault : (fd.harqOverride == 1);
 
         SidelinkInfo slInfo;
-        slInfo.m_castType = (harqEnabled) ? SidelinkInfo::CastType::Groupcast : SidelinkInfo::CastType::Broadcast;
+        // Additive: when the flow requests HARQ Option-1 (NACK-only), force
+        // castType=GroupcastNegativeOnly and HARQ on. The PHY-level ACK-drop
+        // behavior (option-1 silent-on-success) is enforced by
+        // common/mcd/mcr_nack_only_gate installed at the simulation level.
+        // All callers that don't set fd.harqMode keep the legacy behavior.
+        if (fd.harqMode == HarqMode::NackOnly)
+        {
+            slInfo.m_castType = SidelinkInfo::CastType::GroupcastNegativeOnly;
+            slInfo.m_harqEnabled = true;
+        }
+        else
+        {
+            slInfo.m_castType =
+                (harqEnabled) ? SidelinkInfo::CastType::Groupcast
+                              : SidelinkInfo::CastType::Broadcast;
+            slInfo.m_harqEnabled = harqEnabled;
+        }
         slInfo.m_dstL2Id = fd.dstL2Id;
         slInfo.m_rri = fd.rri;
         slInfo.m_dynamic = fd.dynamic;
         slInfo.m_pdb = fd.pdb;
-        slInfo.m_harqEnabled = harqEnabled;
         slInfo.m_priority = fd.priority;
 
         Ptr<LteSlTft> tft = Create<LteSlTft>(LteSlTft::Direction::BIDIRECTIONAL,

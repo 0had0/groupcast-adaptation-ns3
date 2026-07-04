@@ -50,6 +50,7 @@ add_library(scratch_common STATIC
   kpi/kpi_hooks.cc
   kpi/v2x-kpi.cc
   mcd/mcd_feedback_gate.cc
+  mcd/mcr_nack_only_gate.cc
   relay/boundary_relay_app.cc
   relay/fixed_relay_app.cc
   relay/same_l2id_relay_app.cc

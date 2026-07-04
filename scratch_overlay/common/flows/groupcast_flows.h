@@ -56,6 +56,23 @@ enum class TrafficClass : uint8_t
     Aperiodic2    = 5  // 10 ms + Exp(10 ms), uniform 10–30 kB, 4 kB step
 };
 
+// HARQ feedback mode selector (additive — defaults preserve original behavior).
+//   Default : follow the legacy global --harq flag (harqEnabled -> Groupcast /
+//             Broadcast). All existing callers are unaffected.
+//   AckNack : explicit Option-2 — same as default when harqEnabled=true
+//             (castType=Groupcast). Useful when the caller wants to override
+//             the per-flow value regardless of the global flag.
+//   NackOnly: Option-1 — castType=GroupcastNegativeOnly. The PHY-level ACK-drop
+//             is enforced by common/mcd/mcr_nack_only_gate (installed by the
+//             simulation binary on the MCR scope). All existing flows that do
+//             not set this field keep their original behavior.
+enum class HarqMode : uint8_t
+{
+    Default = 0,  //!< follow the global --harq flag (legacy)
+    AckNack = 1,  //!< explicit Option-2 (castType=Groupcast)
+    NackOnly = 2, //!< explicit Option-1 (castType=GroupcastNegativeOnly)
+};
+
 // Runtime traffic-profile descriptor for one flow.
 struct FlowDef
 {
@@ -72,6 +89,7 @@ struct FlowDef
     Time startTime;                // Time(0) sentinel = use bearerActivation default
     Time stopTime;                 // Time(0) sentinel = appStart + simTime (default)
     TrafficClass trafficClass{TrafficClass::OnOffConstant};
+    HarqMode harqMode{HarqMode::Default}; //!< HARQ feedback mode (additive; Default = legacy global --harq)
 
     // -- Split-groupcast extensions --
     //   dstL2Id : NR-SL groupcast L2 destination ID. Default 254 preserves
