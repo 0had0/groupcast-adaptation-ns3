@@ -1,0 +1,519 @@
+{
+  "schema_version": 1,
+  "eps_m": 0.5,
+  "speed_ivd_pairs": [
+    {
+      "speed": 80,
+      "ivd": 25
+    },
+    {
+      "speed": 90,
+      "ivd": 27
+    },
+    {
+      "speed": 100,
+      "ivd": 29
+    },
+    {
+      "speed": 110,
+      "ivd": 32
+    },
+    {
+      "speed": 120,
+      "ivd": 34
+    },
+    {
+      "speed": 130,
+      "ivd": 37
+    },
+    {
+      "speed": 140,
+      "ivd": 39
+    }
+  ],
+  "n_values": [
+    8,
+    10,
+    16,
+    20
+  ],
+  "quick": true,
+  "grid": [
+    {
+      "N": 8,
+      "speed": 80,
+      "ivd": 25,
+      "mcr_values": [
+        12.0,
+        24.5,
+        174.5,
+        175.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 90,
+      "ivd": 27,
+      "mcr_values": [
+        13.0,
+        26.5,
+        188.5,
+        189.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 100,
+      "ivd": 29,
+      "mcr_values": [
+        14.0,
+        28.5,
+        202.5,
+        203.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 110,
+      "ivd": 32,
+      "mcr_values": [
+        15.5,
+        31.5,
+        223.5,
+        224.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 120,
+      "ivd": 34,
+      "mcr_values": [
+        16.5,
+        33.5,
+        237.5,
+        238.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 130,
+      "ivd": 37,
+      "mcr_values": [
+        18.0,
+        36.5,
+        258.5,
+        259.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 8,
+      "speed": 140,
+      "ivd": 39,
+      "mcr_values": [
+        19.0,
+        38.5,
+        272.5,
+        273.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_7",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 80,
+      "ivd": 25,
+      "mcr_values": [
+        12.0,
+        24.5,
+        224.5,
+        225.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 90,
+      "ivd": 27,
+      "mcr_values": [
+        13.0,
+        26.5,
+        242.5,
+        243.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 100,
+      "ivd": 29,
+      "mcr_values": [
+        14.0,
+        28.5,
+        260.5,
+        261.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 110,
+      "ivd": 32,
+      "mcr_values": [
+        15.5,
+        31.5,
+        287.5,
+        288.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 120,
+      "ivd": 34,
+      "mcr_values": [
+        16.5,
+        33.5,
+        305.5,
+        306.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 130,
+      "ivd": 37,
+      "mcr_values": [
+        18.0,
+        36.5,
+        332.5,
+        333.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 10,
+      "speed": 140,
+      "ivd": 39,
+      "mcr_values": [
+        19.0,
+        38.5,
+        350.5,
+        351.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_9",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 80,
+      "ivd": 25,
+      "mcr_values": [
+        12.0,
+        24.5,
+        374.5,
+        375.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 90,
+      "ivd": 27,
+      "mcr_values": [
+        13.0,
+        26.5,
+        404.5,
+        405.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 100,
+      "ivd": 29,
+      "mcr_values": [
+        14.0,
+        28.5,
+        434.5,
+        435.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 110,
+      "ivd": 32,
+      "mcr_values": [
+        15.5,
+        31.5,
+        479.5,
+        480.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 120,
+      "ivd": 34,
+      "mcr_values": [
+        16.5,
+        33.5,
+        509.5,
+        510.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 130,
+      "ivd": 37,
+      "mcr_values": [
+        18.0,
+        36.5,
+        554.5,
+        555.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 16,
+      "speed": 140,
+      "ivd": 39,
+      "mcr_values": [
+        19.0,
+        38.5,
+        584.5,
+        585.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_15",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 80,
+      "ivd": 25,
+      "mcr_values": [
+        12.0,
+        24.5,
+        474.5,
+        475.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 90,
+      "ivd": 27,
+      "mcr_values": [
+        13.0,
+        26.5,
+        512.5,
+        513.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 100,
+      "ivd": 29,
+      "mcr_values": [
+        14.0,
+        28.5,
+        550.5,
+        551.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 110,
+      "ivd": 32,
+      "mcr_values": [
+        15.5,
+        31.5,
+        607.5,
+        608.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 120,
+      "ivd": 34,
+      "mcr_values": [
+        16.5,
+        33.5,
+        645.5,
+        646.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 130,
+      "ivd": 37,
+      "mcr_values": [
+        18.0,
+        36.5,
+        702.5,
+        703.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    },
+    {
+      "N": 20,
+      "speed": 140,
+      "ivd": 39,
+      "mcr_values": [
+        19.0,
+        38.5,
+        740.5,
+        741.5
+      ],
+      "mcr_labels": [
+        "admit_0",
+        "admit_1",
+        "admit_19",
+        "admit_all"
+      ]
+    }
+  ]
+}
