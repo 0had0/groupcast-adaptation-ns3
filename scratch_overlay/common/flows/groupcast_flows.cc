@@ -3,6 +3,7 @@
 #include "groupcast_flows.h"
 
 #include "common/mcd/mcr_feedback_gate.h"
+#include "common/psfch_kpi/psfch_kpi.h"
 #include "common/traffic/custom-traffic-helper.h"
 
 #include "ns3/log.h"
@@ -521,6 +522,28 @@ InstallGroupcastFlows(const NodeContainer& nodes,
                 gateCastType = 2;
             }
             RegisterDstL2IdCastType(fd.dstL2Id, gateCastType);
+        }
+
+        // Register dstL2Id group membership with the PSFCH KPI collector so
+        // silence detection can compute expected_rx = members - {sender}.
+        // Members = txNodes ∪ rxNodes (if either is non-empty), else all nodes.
+        // This only matters when sp.recordPsfchKpi is set; the registration
+        // is cheap and idempotent.
+        {
+            std::set<uint32_t> members;
+            if (fd.txNodes.empty() && fd.rxNodes.empty())
+            {
+                for (uint32_t i = 0; i < nodes.GetN(); ++i)
+                {
+                    members.insert(i);
+                }
+            }
+            else
+            {
+                members.insert(fd.txNodes.begin(), fd.txNodes.end());
+                members.insert(fd.rxNodes.begin(), fd.rxNodes.end());
+            }
+            PsfchKpiCollector::Instance().RegisterDstL2IdMembers(fd.dstL2Id, members);
         }
 
         Ptr<LteSlTft> tft = Create<LteSlTft>(LteSlTft::Direction::BIDIRECTIONAL,

@@ -51,6 +51,7 @@ add_library(scratch_common STATIC
   kpi/v2x-kpi.cc
   mcd/mcr_feedback_gate.cc
   mcd/mcr_nack_only_gate.cc
+  psfch_kpi/psfch_kpi.cc
   relay/boundary_relay_app.cc
   relay/fixed_relay_app.cc
   relay/same_l2id_relay_app.cc
@@ -82,6 +83,15 @@ build_exec(
   EXECNAME test-custom-traffic
   EXECNAME_PREFIX scratch_common_
   SOURCE_FILES traffic/test-custom-traffic.cc
+  LIBRARIES_TO_LINK scratch_common "${ns3-libs}" "${ns3-contrib-libs}"
+  EXECUTABLE_DIRECTORY_PATH ${CMAKE_OUTPUT_DIRECTORY}/scratch/common/
+)
+
+# Smoke-test executable for the PSFCH KPI module.
+build_exec(
+  EXECNAME test-psfch-kpi
+  EXECNAME_PREFIX scratch_common_
+  SOURCE_FILES psfch_kpi/test_psfch_kpi.cc
   LIBRARIES_TO_LINK scratch_common "${ns3-libs}" "${ns3-contrib-libs}"
   EXECUTABLE_DIRECTORY_PATH ${CMAKE_OUTPUT_DIRECTORY}/scratch/common/
 )

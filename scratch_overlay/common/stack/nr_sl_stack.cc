@@ -11,6 +11,7 @@
 #include "nr_sl_stack.h"
 
 #include "common/mcd/mcr_feedback_gate.h"
+#include "common/psfch_kpi/psfch_kpi.h"
 #include "common/stack/nr-sl-adaptive-mcs-scheduler.h"
 #include "common/stack/nr-sl-deterministic-scheduler.h"
 
@@ -488,6 +489,34 @@ BuildSlStack(const SlStackParams& p,
         NS_LOG_WARN("NrSlStack: harqOption=2 (Groupcast ACK/NACK) — MCR distance"
                     << " gate NOT installed (spec mechanism is Zone-ID, not distance)."
                     << " mcrMeters=" << p.mcrMeters << " m is ignored.");
+    }
+
+    // -----------------------------------------------------------------------
+    // PSFCH feedback KPI (HARQ Option-2 / Unicast measurement)
+    //
+    // Installs PsfchKpiShim on every UE spectrum phy's
+    // SetNrPhyRxSlPsfchCallback. Records ACK/NACK arrivals per
+    // (sender, dstL2Id, harqPid, rx) and emits SILENCE rows when a PSFCH
+    // opportunity closes without feedback from an expected group member.
+    //
+    // CastType filtering (in PsfchKpiCollector::RecordArrival):
+    //   - Broadcast dstL2Ids are skipped (spec has no PSFCH feedback).
+    //   - Option-1 NACK-only is OUT OF SCOPE for v1.
+    //   - Option-2 Groupcast and Unicast are recorded.
+    //
+    // For silence to work, groupcast_flows.cc must register dstL2Id members
+    // via PsfchKpiCollector::Instance().RegisterDstL2IdMembers(). That
+    // happens during InstallGroupcastFlows().
+    // -----------------------------------------------------------------------
+    if (p.recordPsfchKpi)
+    {
+        const bool mcrInstalled = (p.harqOption == 1 && p.mcrMeters > 0.0);
+        InstallPsfchKpiArrivals(ctx.ueNetDev, mcrInstalled);
+        PsfchKpiCollector::Instance().ScheduleCsvWrite(p.psfchKpiPath,
+                                                       p.psfchKpiSummaryOnly);
+        NS_LOG_INFO("NrSlStack: PSFCH KPI installed (post-gate) — path='"
+                    << (p.psfchKpiPath.empty() ? "<disabled>" : p.psfchKpiPath)
+                    << "' summaryOnly=" << (p.psfchKpiSummaryOnly ? "true" : "false"));
     }
 
     NS_LOG_INFO("NR-SL stack built: scenario=" << p.scenario

@@ -106,6 +106,20 @@ struct SlStackParams
     // Ignored when harqOption == 2 (no distance filter per spec).
     // 0.0 = disabled (Option-1 with no gate; full feedback from all RX nodes).
     double mcrMeters{0.0};
+
+    // -- PSFCH feedback KPI (HARQ Option-2 / Unicast measurement) --
+    // When recordPsfchKpi == true, BuildSlStack installs the PsfchKpiShim on
+    // every UE's sender-side PSFCH callback, recording ACK/NACK arrivals per
+    // (sender, dstL2Id, harqPid, rx) and emitting SILENCE rows when a PSFCH
+    // opportunity closes without feedback from an expected group member.
+    // See common/psfch_kpi/psfch_kpi.h for full semantics.
+    // This is a measurement-only module — it does not gate or modify feedback.
+    // CastType filtering: Broadcast dstL2Ids are skipped; Option-1 NACK-only
+    // is out of scope for v1; Option-2 Groupcast and Unicast are recorded.
+    // CSV is written at Simulator::Destroy via ScheduleDestroy.
+    bool        recordPsfchKpi{false};
+    std::string psfchKpiPath;       //!< Base CSV path. Empty = no write.
+    bool        psfchKpiSummaryOnly{false}; //!< Skip per-event CSV; emit summary only.
 };
 
 struct SlStackCtx
