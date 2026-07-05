@@ -157,6 +157,16 @@ main(int argc, char* argv[])
     std::string outputDir    = "./";
     std::string simTag;
 
+    // PSFCH KPI (per-opportunity ACK/NACK/SILENCE).
+    // For harqOption=2 (Groupcast ACK/NACK) this is in scope and meaningful.
+    // For harqOption=1 (NACK-only), the KPI is in scope by default but the
+    // recorded events will mostly be NACKs (since Option-1 sends only NACKs);
+    // SILENCE corresponds to out-of-range receivers whose NACK was dropped by
+    // the MCR distance gate — useful for measuring MCR coverage.
+    bool        psfchKpi          = true;
+    bool        psfchKpiSummaryOnly = false;
+    std::string psfchKpiPath;
+
     CommandLine cmd(__FILE__);
     cmd.AddValue("runId",         "Unique run identifier",                              runId);
     cmd.AddValue("seed",          "Random seed",                                        seed);
@@ -184,6 +194,9 @@ main(int argc, char* argv[])
     cmd.AddValue("warmup",        "Warm-up seconds discarded by V2xKpi",                warmup);
     cmd.AddValue("outputDir",     "Output directory for KPI SQLite DB",                 outputDir);
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",                  simTag);
+    cmd.AddValue("psfchKpi",        "Record per-PSFCH-opportunity ACK/NACK/SILENCE",   psfchKpi);
+    cmd.AddValue("psfchKpiSummaryOnly", "Emit only summary CSV (no per-event rows)",  psfchKpiSummaryOnly);
+    cmd.AddValue("psfchKpiPath",     "Override PSFCH KPI CSV path (default = outputDir/simTag_psfch_opps.csv)", psfchKpiPath);
     cmd.Parse(argc, argv);
 
     // -- validation ---------------------------------------------------------
@@ -267,6 +280,16 @@ main(int argc, char* argv[])
     sp.schedulerMode    = "sbsps";          // NR mode-2 SB-SPS only (scope)
     sp.harqOption       = static_cast<uint8_t>(harqOption);  // 1 = NACK-only (gate), 2 = ACK/NACK (no gate)
     sp.mcrMeters        = mcrMeters;        // (Option-1 only — ignored for Option-2 per spec)
+    sp.recordPsfchKpi   = psfchKpi;
+    sp.psfchKpiSummaryOnly = psfchKpiSummaryOnly;
+    if (psfchKpiPath.empty())
+    {
+        sp.psfchKpiPath = outputDir + "/" + simTag + "_psfch_opps.csv";
+    }
+    else
+    {
+        sp.psfchKpiPath = psfchKpiPath;
+    }
 
     // RRI list from the traffic profile (single leader RRI).
     const TrafficClass tc = ParseTrafficClass(trafficStr);
@@ -360,12 +383,13 @@ main(int argc, char* argv[])
         const std::string summaryPath = outputDir + "/" + simTag + "_summary.csv";
         std::ofstream sf(summaryPath);
         sf << "runId,seed,numUEs,speedKmh,ivd,mcrMeters,harqOption,traffic,"
-              "mu,numSubchannels,bwPRBs,mcs,psfchPeriod,simTime\n";
+              "mu,numSubchannels,bwPRBs,mcs,psfchPeriod,simTime,psfchKpi\n";
         sf << runId << "," << seed << "," << numUEs << ","
            << speedKmh << "," << ivd << "," << mcrMeters << ","
            << harqOption << "," << trafficStr << ","
            << mu << "," << numSubchannels << "," << bwPRBs << "," << mcs << ","
-           << static_cast<int>(psfchPeriod) << "," << simTime << "\n";
+           << static_cast<int>(psfchPeriod) << "," << simTime << ","
+           << (psfchKpi ? "true" : "false") << "\n";
     }
 
     NS_LOG_INFO("groupcast_mcr_baseline_eval done. DB: " << dbPath << ".db");

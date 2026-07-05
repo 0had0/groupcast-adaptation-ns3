@@ -140,6 +140,11 @@ main(int argc, char* argv[])
     std::string outputDir     = "./";
     std::string simTag;
 
+    // PSFCH KPI (per-opportunity ACK/NACK/SILENCE)
+    bool        psfchKpi          = false;
+    bool        psfchKpiSummaryOnly = false;
+    std::string psfchKpiPath;
+
     CommandLine cmd(__FILE__);
     cmd.AddValue("runId",         "Unique run identifier",                          runId);
     cmd.AddValue("seed",          "Random seed",                                    seed);
@@ -176,6 +181,9 @@ main(int argc, char* argv[])
     cmd.AddValue("warmup",        "Warm-up seconds discarded by V2xKpi",            warmup);
     cmd.AddValue("outputDir",     "Output directory for KPI SQLite DB",             outputDir);
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",              simTag);
+    cmd.AddValue("psfchKpi",        "Record per-PSFCH-opportunity ACK/NACK/SILENCE", psfchKpi);
+    cmd.AddValue("psfchKpiSummaryOnly", "Emit only summary CSV (no per-event rows)", psfchKpiSummaryOnly);
+    cmd.AddValue("psfchKpiPath",     "Override PSFCH KPI CSV path (default = outputDir/simTag_psfch_opps.csv)", psfchKpiPath);
     cmd.Parse(argc, argv);
 
     // -- validation ----------------------------------------------------------
@@ -269,6 +277,16 @@ main(int argc, char* argv[])
     sp.schedulerMode    = "sbsps";          // NR mode-2 SB-SPS only (scope)
     sp.harqOption       = 2;                // HARQ Option-2 (ACK/NACK groupcast)
     sp.mcrMeters        = 0.0;              // gate skipped for Option-2 per spec
+    sp.recordPsfchKpi   = psfchKpi;
+    sp.psfchKpiSummaryOnly = psfchKpiSummaryOnly;
+    if (psfchKpiPath.empty())
+    {
+        sp.psfchKpiPath = outputDir + "/" + simTag + "_psfch_opps.csv";
+    }
+    else
+    {
+        sp.psfchKpiPath = psfchKpiPath;
+    }
     sp.rriList          = {static_cast<uint16_t>(std::lround(leaderRriMs))};
 
     SlStackCtx ctx = BuildSlStack(sp, geom, ueNodes);
@@ -463,7 +481,7 @@ main(int argc, char* argv[])
         const std::string summaryPath = outputDir + "/" + simTag + "_summary.csv";
         std::ofstream sf(summaryPath);
         sf << "runId,seed,relayMode,relayNode,relayDstL2Id,numUEs,scenario,speedKmh,ivd,mcrMeters,"
-              "mu,numSubchannels,bwPRBs,mcs,adaptiveMcs,maxNumTx,psfchPeriod,simTime,harqOption\n";
+              "mu,numSubchannels,bwPRBs,mcs,adaptiveMcs,maxNumTx,psfchPeriod,simTime,harqOption,psfchKpi\n";
         sf << runId << "," << seed << "," << relayMode << ","
            << (relayOn ? static_cast<int>(relayNode) : -1) << ","
            << ((relayMode == "fixed" || relayMode == "broadcast")
@@ -472,7 +490,8 @@ main(int argc, char* argv[])
            << speedKmh << "," << ivd << "," << mcrMeters << ","
            << mu << "," << numSubchannels << "," << bwPRBs << "," << mcs << ","
            << (adaptiveMcs ? "true" : "false") << ","
-           << static_cast<int>(maxNumTx) << "," << psfchPeriod << "," << simTime << "\n";
+           << static_cast<int>(maxNumTx) << "," << psfchPeriod << "," << simTime << ","
+           << 2 << "," << (psfchKpi ? "true" : "false") << "\n";
     }
 
     NS_LOG_INFO("relay_l2id_compare done. DB: " << dbPath << ".db");
