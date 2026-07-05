@@ -13,7 +13,7 @@
 // Sweep parameters:
 //   --speed  km/h (sets platoon velocity and IVD)
 //   --ivd    inter-vehicle distance (m)
-//   --mcd    maximum communication distance for PSFCH feedback (m)
+//   --mcr    min communication range for PSFCH feedback (m, HARQ Option-1 only)
 //   --relayNode  which node is the relay (4 or 6, never both at once)
 //
 // KPIs:
@@ -22,7 +22,9 @@
 // Orchestration (7 steps):
 //   1. CLI + validation
 //   2. InstallMobility (ConstantVelocityMobilityModel)
-//   3. BuildSlStack (20 MHz / mu=2 / 10 subch / PSFCH-4 / MCD gate)
+//   3. BuildSlStack (20 MHz / mu=2 / 10 subch / PSFCH-4 / HARQ Option-2 /
+//      no MCR gate — spec-faithful: Zone-ID mechanism not modeled, all UEs
+//      are group members in our single-dstL2Id setup so no gate = no filter)
 //   4. InstallGroupcastFlows (node 0 leader, all platoon RX)
 //   5. InstallSameL2IdRelay (relay at relayNode)
 //   6. KpiHooks + trace connect
@@ -81,8 +83,15 @@ main(int argc, char* argv[])
     bool        harqEnabled  = true;   // Option 2 = ACK + NACK
     bool        shadowing    = true;
 
-    // MCD
-    double      mcdMeters    = 150.0;  // feedback suppressed beyond MCD
+    // MCR (HARQ Option-1 only — Option-2 ignores per 3GPP TS 38.321)
+    // Spec-faithful behavior: HARQ Option-2 (Groupcast) gates PSFCH feedback by
+    // Zone-ID membership (sl-ZoneConfig), NOT by distance. Since we don't model
+    // Zone-IDs and our single-dstL2Id deployment has all UEs as group members,
+    // the spec-faithful Option-2 has no distance filter. BuildSlStack therefore
+    // ignores mcrMeters when harqOption == 2.
+    // Historical runs of this campaign used the now-deprecated MCD distance gate
+    // applied unconditionally; numbers in current CSVs carry that bias.
+    double      mcrMeters    = 150.0;  // (Option-1 only) feedback suppressed beyond MCR
 
     // Relay
     uint32_t    relayNode    = 4;      // 4 or 6 (single relay per run)
@@ -117,7 +126,7 @@ main(int argc, char* argv[])
     cmd.AddValue("psfchPeriod",   "PSFCH period in slots (4=Option-2)",              psfchPeriod);
     cmd.AddValue("harq",          "Enable HARQ (true=Option-2 ACK+NACK)",            harqEnabled);
     cmd.AddValue("shadowing",     "Enable shadowing",                                shadowing);
-    cmd.AddValue("mcd",           "Max communication distance for PSFCH gate (m)",   mcdMeters);
+    cmd.AddValue("mcr",           "Min communication range for PSFCH gate (m, Option-1 only)",   mcrMeters);
     cmd.AddValue("relayNode",     "Relay node index (4 or 6; 0 = no relay)",        relayNode);
     cmd.AddValue("relayEnabled",  "Enable same-L2ID relay",                         relayEnabled);
     cmd.AddValue("pktBytes",      "Leader packet size (bytes)",                      leaderPktBytes);
@@ -154,7 +163,7 @@ main(int argc, char* argv[])
     NS_LOG_INFO("=== relay_storm_eval ==="
                 << " speed=" << speedKmh << " km/h"
                 << " ivd=" << ivd << " m"
-                << " mcd=" << mcdMeters << " m"
+                << " mcr=" << mcrMeters << " m (Option-1 only)"
                 << " relay=" << (relayEnabled ? std::to_string(relayNode) : "none")
                 << " seed=" << seed);
 
@@ -175,7 +184,10 @@ main(int argc, char* argv[])
     const NodeContainer& ueNodes = mob.ueNodes;
 
     // -----------------------------------------------------------------------
-    // 3. NR-SL stack: 20 MHz / mu=2 / 10 subchannels / PSFCH-4 / MCD gate
+    // 3. NR-SL stack: 20 MHz / mu=2 / 10 subchannels / PSFCH-4 / no MCR gate
+    //    (HARQ Option-2 — spec-faithful: no distance gate, Zone-ID mechanism
+    //    not modeled but in single-dstL2Id deployments all UEs are members
+    //    so the spec-faithful behavior is no gate at all.)
     // -----------------------------------------------------------------------
     GeomChannelCfg geom;
     // Static collinear platoon → no SUMO blocker IDs needed. The NLOSv model
@@ -196,7 +208,8 @@ main(int argc, char* argv[])
     sp.scenario         = BandwidthPartInfo::V2V_Highway;
     sp.adaptiveMcs      = false; // fixed MCS sweep
     sp.schedulerMode    = "sbsps";
-    sp.mcdMeters        = mcdMeters;
+    sp.harqOption       = 2;            // HARQ Option-2 (ACK/NACK groupcast)
+    sp.mcrMeters        = 0.0;          // gate skipped for Option-2 per spec
     // Build RRI list: only the leader RRI (10 ms)
     sp.rriList          = {static_cast<uint16_t>(std::lround(leaderRriMs))};
 
@@ -273,10 +286,10 @@ main(int argc, char* argv[])
     }
 
     // Set V2xKpi DB path and TX duration. Range = 0 disables IP-position lookup
-    // (range-gating is done at the PSFCH level via the MCD gate, not here).
+    // (no range gate at any layer for HARQ Option-2 — spec-faithful).
     kpi.v2xKpi.SetDbPath(dbPath);
     kpi.v2xKpi.SetTxAppDuration(simTime);
-    kpi.v2xKpi.SetRangeForV2xKpis(0); // 0 = no range gate (PSFCH gate handles MCD)
+    kpi.v2xKpi.SetRangeForV2xKpis(0); // 0 = no range gate (no PSFCH gate for Option-2)
 
     // -----------------------------------------------------------------------
     // 7. Run
@@ -297,13 +310,13 @@ main(int argc, char* argv[])
     {
         const std::string summaryPath = outputDir + "/" + simTag + "_summary.csv";
         std::ofstream sf(summaryPath);
-        sf << "runId,seed,speedKmh,ivd,mcdMeters,relayNode,relayEnabled,mu,"
-              "channelBwMHz,numSubchannels,mcs,psfchPeriod,simTime\n";
+        sf << "runId,seed,speedKmh,ivd,mcrMeters,relayNode,relayEnabled,mu,"
+              "channelBwMHz,numSubchannels,mcs,psfchPeriod,simTime,harqOption\n";
         sf << runId << "," << seed << "," << speedKmh << "," << ivd << ","
-           << mcdMeters << "," << relayNode << ","
+           << mcrMeters << "," << relayNode << ","
            << (relayEnabled ? "true" : "false") << ","
            << mu << "," << channelBwMHz << "," << numSubchannels << ","
-           << mcs << "," << psfchPeriod << "," << simTime << "\n";
+           << mcs << "," << psfchPeriod << "," << simTime << "," << 2 << "\n";
     }
 
     NS_LOG_INFO("relay_storm_eval done. DB: " << dbPath << ".db");

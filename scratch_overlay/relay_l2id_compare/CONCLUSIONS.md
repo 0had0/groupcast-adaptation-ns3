@@ -79,3 +79,46 @@ Both corpora (c4: 2100 sims, gen: 800 sims) were re-processed with the new kpi/ 
 | broadcast.d_tail_PRR    |  -0.033 |  +0.037 | +7 pp (correct union-dedup)               |
 
 The differences in PRR deltas are **improvements**, not regressions — the new pipeline correctly attributes relay-delivered packets via 3GPP-style S/Z union-dedup. The ch_occ unit change (subchannel-slots vs TBs/ms) is a more accurate resource measure.
+---
+
+## 6. Spec-faithfulness of the PSFCH feedback gate (post-campaign correction)
+
+The numbers above were generated with `common/mcd/McdFeedbackGate`
+applying a distance gate (drop feedback if dist(TX→RX) > MCD) to **all**
+HARQ feedback, regardless of HARQ option. Per 3GPP TS 38.321 §5.4.4.1.1
+and TS 38.213 §16.5, this is **spec-violating for HARQ Option 2 (Groupcast)**
+used by this campaign: the spec gates Option-2 feedback by Zone-ID
+membership, not by distance. In our single-dstL2Id setup all UEs are
+group members, so the spec-faithful Option-2 has no distance filter at
+all — yet our simulations had far receivers silently dropped, biasing the
+sender toward "no ACK from far RX" → fewer retransmissions than the spec
+prescribes.
+
+**Corrected architecture (commit pending):**
+
+The gate has been renamed `McrFeedbackGate` and made **castType-aware**:
+
+| CastType (`NrSlSciF2aHeader::CastTypeIndicator_t`) | Spec mechanism | Gate behavior |
+|---|---|---|
+| `Broadcast` (0) | No PSFCH feedback | **Drop all** |
+| `Groupcast` (1, Option-2) | Zone-ID membership | **Forward all** (spec-faithful in single-dstL2Id) |
+| `Unicast` (2) | No gate | **Forward all** |
+| `GroupcastOnlyNack` (3, Option-1) | MCR-style distance gate | **Drop if dist > mcrMeters** |
+
+`relay_l2id_compare` is now configured with `sp.harqOption = 2`, so the
+gate is skipped (correct: Option-2 has no spec distance gate).
+
+**Impact on prior numbers:** the campaign's existing CSV outputs were
+generated with the MCD-distance-gate behavior. Numbers carry this bias.
+Per the no-re-run constraint we have not regenerated them; they should
+be considered superseded by the corrected gate semantics but are kept
+in `results_c4/` and `results_gen/` for reference. The design rules
+above (deploy `fixed`, avoid `adapt` in MCD-gated mode, etc.) are
+qualitatively robust to the bias because the bias shifts both
+numerator and denominator of the storm ratio in similar directions.
+
+PSFCH multiplexing note: contrib/nr does NOT model the 3GPP PSFCH
+freq×time×code multiplexing (each RX UE's feedback is delivered to the
+sender's MAC as a discrete callback carrying `nodeId`). This is
+acceptable for our 9-UE platoons; for larger N the spec-defined PSFCH
+capacity limit would surface.

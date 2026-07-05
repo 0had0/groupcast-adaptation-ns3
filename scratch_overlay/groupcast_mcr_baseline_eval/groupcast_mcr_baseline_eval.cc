@@ -8,7 +8,7 @@
 //
 // Reuses common/ modules UNCHANGED:
 //   - mobility (moving platoon, ConstantVelocityMobilityModel)
-//   - stack/nr_sl_stack (SLRP, SB-SPS, PSFCH, MCD gate via mcdMeters)
+//   - stack/nr_sl_stack (SLRP, SB-SPS, PSFCH; castType-aware gate via sp.mcrMeters)
 //   - mcd/mcr_nack_only_gate (HARQ Option-1 ACK-drop shim — additive)
 //   - flows/groupcast_flows (FlowDef + TrafficClass + HarqMode)
 //   - kpi/kpi_hooks, kpi/v2x-kpi (KpiHooks, V2xKpi, ConnectPhyMacTraces,
@@ -48,7 +48,7 @@
 #include "common/flows/groupcast_flows.h"
 #include "common/kpi/kpi_hooks.h"
 #include "common/kpi/v2x-kpi.h"
-#include "common/mcd/mcd_feedback_gate.h"
+#include "common/mcd/mcr_feedback_gate.h"
 #include "common/mcd/mcr_nack_only_gate.h"
 #include "common/mobility/mobility.h"
 #include "common/stack/nr_sl_stack.h"
@@ -265,7 +265,8 @@ main(int argc, char* argv[])
                                                                : BandwidthPartInfo::V2V_Highway;
     sp.adaptiveMcs      = false;            // fixed MCS sweep
     sp.schedulerMode    = "sbsps";          // NR mode-2 SB-SPS only (scope)
-    sp.mcdMeters        = mcrMeters;        // MCD gate is the MCR scope gate.
+    sp.harqOption       = static_cast<uint8_t>(harqOption);  // 1 = NACK-only (gate), 2 = ACK/NACK (no gate)
+    sp.mcrMeters        = mcrMeters;        // (Option-1 only — ignored for Option-2 per spec)
 
     // RRI list from the traffic profile (single leader RRI).
     const TrafficClass tc = ParseTrafficClass(trafficStr);
@@ -307,19 +308,26 @@ main(int argc, char* argv[])
                                              stream);
 
     // -----------------------------------------------------------------------
-    // 5. (harqOption=1) Install MCR NACK-only gate on top of the MCD gate.
-    //    BuildSlStack already wired InstallMcdFeedbackGate(ctx.ueNetDev,
-    //    sp.mcdMeters). We re-bind the spectrum-phy PSFCH callback to the
-    //    NACK-only shim, which:
-    //      - drops feedback beyond MCR (same as MCD gate, redundant here)
+    // 5. (harqOption=1) Install MCR NACK-only gate on top of the MCR distance gate.
+    //    BuildSlStack installs the castType-aware MCR gate when harqOption == 1,
+    //    which already drops feedback for castType=Broadcast and applies the
+    //    distance gate for castType=GroupcastOnlyNack. The MCR NACK-only shim
+    //    layered on top additionally:
     //      - drops ACK feedback inside MCR (Option-1 silent-on-success)
     //      - forwards NACK feedback inside MCR to NrUePhy::EnqueueSlHarqFeedback
-    //    When harqOption=2, skip this step and keep the MCD-only gate.
+    //    When harqOption=2, skip this step entirely — Option-2 has no spec gate
+    //    (Zone-ID mechanism not modeled; all UEs are group members in our
+    //    single-dstL2Id setup so spec-faithful = no gate).
     // -----------------------------------------------------------------------
     if (harqOption == 1)
     {
         InstallMcrNackOnlyGate(ctx.ueNetDev, mcrMeters, /*dropAcks=*/ true);
-        NS_LOG_INFO("MCR NACK-only gate installed (Option-1) on top of MCD gate");
+        NS_LOG_INFO("MCR NACK-only gate installed (Option-1) on top of MCR distance gate");
+    }
+    else
+    {
+        NS_LOG_INFO("harqOption=2 (Groupcast ACK/NACK) — no PSFCH gate installed"
+                    << " (spec mechanism is Zone-ID membership, not distance)");
     }
 
     // -----------------------------------------------------------------------

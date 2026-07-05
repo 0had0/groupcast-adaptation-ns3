@@ -114,3 +114,46 @@ cell) reported Δstorm = +0.139 / ΔprrW = +0.004 — qualitatively identical.
   paths separately. The legacy AoI was "earliest RX across all paths" —
   semantically different. We keep the per-(tx, rx) decomposition because
   it lets you see which path is paying the latency cost.
+
+## 7. Spec-faithfulness of the PSFCH feedback gate (post-campaign correction)
+
+The numbers above were generated with `common/mcd/McdFeedbackGate`
+applying a distance gate (drop feedback if dist(TX→RX) > MCD) to **all**
+HARQ feedback, regardless of HARQ option. Per 3GPP TS 38.321 §5.4.4.1.1
+and TS 38.213 §16.5, this is **spec-violating for HARQ Option 2 (Groupcast)**
+used by this campaign: the spec gates Option-2 feedback by Zone-ID
+membership, not by distance. In our single-dstL2Id setup all UEs are
+group members, so the spec-faithful Option-2 has no distance filter at
+all — yet our simulations had far receivers silently dropped, biasing the
+sender toward "no ACK from far RX" → fewer retransmissions than the spec
+prescribes.
+
+**Corrected architecture (commit pending):**
+
+The gate has been renamed `McrFeedbackGate` and made **castType-aware**:
+
+| CastType (`NrSlSciF2aHeader::CastTypeIndicator_t`) | Spec mechanism | Gate behavior |
+|---|---|---|
+| `Broadcast` (0) | No PSFCH feedback | **Drop all** |
+| `Groupcast` (1, Option-2) | Zone-ID membership | **Forward all** (spec-faithful in single-dstL2Id) |
+| `Unicast` (2) | No gate | **Forward all** |
+| `GroupcastOnlyNack` (3, Option-1) | MCR-style distance gate | **Drop if dist > mcrMeters** |
+
+`relay_storm_eval` is now configured with `sp.harqOption = 2`, so the
+gate is skipped (correct: Option-2 has no spec distance gate). The castType
+routing itself is still active (Broadcast would be silently dropped if
+ever used; Unicast / Groupcast passes through unchanged).
+
+**Impact on prior numbers:** the campaign's existing CSV outputs were
+generated with the MCD-distance-gate behavior, which biased sender HARQ
+state for Option-2. Numbers carry this bias. Per the no-re-run
+constraint we have not regenerated them; they should be considered
+superseded by the corrected gate semantics but are kept in
+`results_relay_storm_eval/` for reference. The storm-ignition threshold
+(mechanism, not magnitude) is geometry-driven and is robust to the bias.
+
+PSFCH multiplexing note: contrib/nr does NOT model the 3GPP PSFCH
+freq×time×code multiplexing (each RX UE's feedback is delivered to the
+sender's MAC as a discrete callback carrying `nodeId`). This is
+acceptable for our 7-UE platoons; for larger N the spec-defined PSFCH
+capacity limit would surface.

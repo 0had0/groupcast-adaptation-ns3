@@ -168,19 +168,65 @@ results/analysis_executed.ipynb       # the executed notebook
 results/cells/<cellTag>/              # 812 finalized cells (each ~250 KB)
 ```
 
+## Spec-faithfulness of the PSFCH feedback gate (post-campaign correction)
+
+The headline numbers above were generated with a feedback gate that applied
+**MCD-style distance filtering to BOTH HARQ options** (legacy behavior of
+`common/mcd/McdFeedbackGate`). Per 3GPP TS 38.321 §5.4.4.1.1 and TS 38.213 §16.5,
+this was spec-violating for HARQ Option 2 (Groupcast), which uses Zone-ID
+membership — not distance — as its gating mechanism. The campaign's
+Option-2 arm was therefore biased toward "fewer retransmissions than the
+spec prescribes" (far RXs were silenced, sender saw no ACK from them and
+incorrectly assumed coverage).
+
+**Corrected architecture (commit pending):**
+
+The gate has been renamed `McrFeedbackGate` and made **castType-aware**:
+
+| CastType (`NrSlSciF2aHeader::CastTypeIndicator_t`) | Spec mechanism | Gate behavior |
+|---|---|---|
+| `Broadcast` (0) | No PSFCH feedback of any kind | **Drop all feedback unconditionally** |
+| `Groupcast` (1, Option-2 ACK/NACK) | Zone-ID membership (`sl-ZoneConfig`) | **Forward all feedback** (Zone-ID not modeled; in our single-dstL2Id setup all UEs are members, so no gate is spec-faithful) |
+| `Unicast` (2) | No gate | **Forward all feedback** |
+| `GroupcastOnlyNack` (3, Option-1 NACK-only) | MCR-style distance gate | **Drop feedback if dist(TX→RX) > mcrMeters** |
+
+`SlStackParams::harqOption == 1` installs the MCR gate (Option-1 use case);
+`harqOption == 2` skips it (Option-2 — Zone-ID not modeled, no gate is
+spec-faithful). The castType routing itself is unconditional: the gate
+shim always looks up `dstL2Id → castType` from `DstL2IdCastTypeRegistry`,
+populated at flow install time via `InstallGroupcastFlows`.
+
+**Impact on prior numbers:** the Option-1 numbers are spec-faithful (MCR
+gate is the spec mechanism) and unchanged. The Option-2 numbers carry
+hidden re-TX bias; a re-run of the Option-2 arm only (~2000 sims) would
+yield spec-faithful numbers. Per the no-re-run constraint we have not
+regenerated them; they should be considered superseded by the corrected
+gate semantics but are kept in `results/` for reference.
+
+PSFCH multiplexing note: contrib/nr does NOT model the 3GPP PSFCH
+freq×time×code multiplexing (each RX UE's feedback is delivered to the
+sender's MAC as a discrete callback carrying `nodeId`). This is acceptable
+for small-N sweeps (≤20 RX per TB); for larger N the spec-defined PSFCH
+capacity limit (typically 4-8 sequences per PSFCH RB) would surface.
+
 ## What was added vs the upstream tree (all additive)
 
 ```
-common/mcd/mcr_nack_only_gate.{h,cc}              # HARQ option-1 ACK-drop shim
-common/CMakeLists.txt                             # +1 source file in scratch_common
-common/flows/groupcast_flows.h                    # +FlowDef::harqMode enum (Default|AckNack|NackOnly)
-common/flows/groupcast_flows.cc                   # +1 line to map NackOnly → castType
-common/flows/flow_parser_yaml.cc                  # +1 line to parse harq=...
-scratch_overlay/groupcast_mcr_baseline_eval/      # entire new directory (15 files)
-ns-3-dev/scratch/groupcast_mcr_baseline_eval      # symlink (per scratch_overlay convention)
+common/mcd/mcr_feedback_gate.{h,cc}                  # castType-aware feedback gate (renamed from mcd_)
+common/mcd/mcr_nack_only_gate.{h,cc}                # HARQ Option-1 ACK-drop shim (Option-1 only)
+common/CMakeLists.txt                               # +1 source file in scratch_common
+common/stack/nr_sl_stack.h                          # +SlStackParams::harqOption (1=Option-1 with gate, 2=Option-2 no gate)
+common/stack/nr_sl_stack.cc                         # gate-install path now conditional on harqOption
+common/flows/groupcast_flows.h                      # +FlowDef::harqMode enum (Default|AckNack|NackOnly)
+common/flows/groupcast_flows.cc                     # +castType registration at flow install time
+common/flows/flow_parser_yaml.cc                    # +1 line to parse harq=...
+scratch_overlay/groupcast_mcr_baseline_eval/        # entire new directory (15 files)
+ns-3-dev/scratch/groupcast_mcr_baseline_eval        # symlink (per scratch_overlay convention)
 ```
 
-The `mcr_nack_only_gate` is a parallel additive module to the existing
-`McdFeedbackGate` and is only installed when `--harqOption=1`. Both
+The `mcr_nack_only_gate` is a parallel additive module to the renamed
+`McrFeedbackGate` and is only installed when `--harqOption=1`. Both
 `relay_l2id_compare` and `relay_storm_eval` paths still build cleanly
-without modification.
+without modification; they now also pass `sp.harqOption = 2` explicitly
+so the castType-aware MCR gate is correctly skipped for their
+Option-2-only setups.

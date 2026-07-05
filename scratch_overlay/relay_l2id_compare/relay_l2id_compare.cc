@@ -20,7 +20,7 @@
 //               NACK / no retx) -> lowest hop-2 cost, no hop-2 reliability net.
 //
 // This binary REUSES the existing common/ modules unchanged (SameL2IdRelayApp,
-// FixedRelayApp, BoundaryRelayApp, McdFeedbackGate, the NR-SL stack, flows, and
+// FixedRelayApp, BoundaryRelayApp, McrFeedbackGate, the NR-SL stack, flows, and
 // KPI hooks). It edits no existing source. Scheduler is NR mode-2 SB-SPS only.
 //
 // Defaults are matched to results_relay_storm_eval (mu=2, 10 subchannels,
@@ -107,8 +107,14 @@ main(int argc, char* argv[])
     bool        shadowing     = true;
     std::string scenarioStr   = "V2V_Highway"; // V2V_Highway | V2V_Urban | UMi_StreetCanyon | UMa
 
-    // MCD feedback gate
-    double      mcdMeters     = 150.0;
+    // MCR feedback gate (HARQ Option-1 only — Option-2 ignores per 3GPP TS 38.321)
+    // Spec-faithful: HARQ Option-2 (Groupcast) gates PSFCH feedback by Zone-ID
+    // membership (sl-ZoneConfig), NOT by distance. Since we don't model Zone-IDs
+    // and our single-dstL2Id deployment has all UEs as group members, the
+    // spec-faithful Option-2 has no distance filter.
+    // Historical runs of this campaign used the now-deprecated MCD distance gate
+    // applied unconditionally; numbers in current CSVs carry that bias.
+    double      mcrMeters     = 150.0;
 
     // Relay design
     std::string relayMode     = "sameL2"; // none | sameL2 | fixed | broadcast
@@ -153,7 +159,7 @@ main(int argc, char* argv[])
     cmd.AddValue("harq",          "Enable HARQ (true=Option-2 ACK+NACK)",           harqEnabled);
     cmd.AddValue("shadowing",     "Enable shadowing",                               shadowing);
     cmd.AddValue("scenario",      "3GPP scenario: V2V_Highway|V2V_Urban|UMi_StreetCanyon|UMa", scenarioStr);
-    cmd.AddValue("mcd",           "Max communication distance for PSFCH gate (m)",  mcdMeters);
+    cmd.AddValue("mcr",           "Min communication range for PSFCH gate (m, Option-1 only)", mcrMeters);
     cmd.AddValue("relayMode",     "Relay design: none | sameL2 | fixed | broadcast", relayMode);
     cmd.AddValue("relayNode",     "Relay node id / front-tail partition boundary",  relayNode);
     cmd.AddValue("relayPort",     "Hop-2 UDP port (fixed/broadcast)",               relayPort);
@@ -220,7 +226,7 @@ main(int argc, char* argv[])
                 << " mode=" << relayMode
                 << " relayNode=" << (relayOn ? std::to_string(relayNode) : "none")
                 << " speed=" << speedKmh << " km/h ivd=" << ivd << " m"
-                << " mcd=" << mcdMeters << " m adaptiveMcs=" << adaptiveMcs
+                << " mcr=" << mcrMeters << " m (Option-1 only) adaptiveMcs=" << adaptiveMcs
                 << " seed=" << seed);
 
     // -----------------------------------------------------------------------
@@ -240,7 +246,9 @@ main(int argc, char* argv[])
     const NodeContainer& ueNodes = mob.ueNodes;
 
     // -----------------------------------------------------------------------
-    // 3. NR-SL stack: mu=2 / 10 subch / PSFCH-4 / MCD gate / SB-SPS
+    // 3. NR-SL stack: mu=2 / 10 subch / PSFCH-4 / HARQ Option-2 / SB-SPS
+    //    Spec-faithful: no MCR gate for Option-2 (Zone-ID mechanism not
+    //    modeled, all UEs are group members so no gate = no filter).
     // -----------------------------------------------------------------------
     GeomChannelCfg geom;
     geom.blockerLengthM = 4.5;
@@ -259,7 +267,8 @@ main(int argc, char* argv[])
     sp.scenario         = ParseScenario(scenarioStr);
     sp.adaptiveMcs      = adaptiveMcs;      // installs adaptive scheduler when true
     sp.schedulerMode    = "sbsps";          // NR mode-2 SB-SPS only (scope)
-    sp.mcdMeters        = mcdMeters;
+    sp.harqOption       = 2;                // HARQ Option-2 (ACK/NACK groupcast)
+    sp.mcrMeters        = 0.0;              // gate skipped for Option-2 per spec
     sp.rriList          = {static_cast<uint16_t>(std::lround(leaderRriMs))};
 
     SlStackCtx ctx = BuildSlStack(sp, geom, ueNodes);
@@ -382,7 +391,7 @@ main(int argc, char* argv[])
 
     kpi.v2xKpi.SetDbPath(dbPath);
     kpi.v2xKpi.SetTxAppDuration(simTime);
-    kpi.v2xKpi.SetRangeForV2xKpis(0); // PSFCH-level MCD gate handles range, not here
+    kpi.v2xKpi.SetRangeForV2xKpis(0); // no PSFCH gate for Option-2 (spec-faithful)
 
     // -----------------------------------------------------------------------
     // 6b. Optional worst-RX NACK-driven adaptive MCS controller (leader = node 0).
@@ -453,14 +462,14 @@ main(int argc, char* argv[])
     {
         const std::string summaryPath = outputDir + "/" + simTag + "_summary.csv";
         std::ofstream sf(summaryPath);
-        sf << "runId,seed,relayMode,relayNode,relayDstL2Id,numUEs,scenario,speedKmh,ivd,mcdMeters,"
-              "mu,numSubchannels,bwPRBs,mcs,adaptiveMcs,maxNumTx,psfchPeriod,simTime\n";
+        sf << "runId,seed,relayMode,relayNode,relayDstL2Id,numUEs,scenario,speedKmh,ivd,mcrMeters,"
+              "mu,numSubchannels,bwPRBs,mcs,adaptiveMcs,maxNumTx,psfchPeriod,simTime,harqOption\n";
         sf << runId << "," << seed << "," << relayMode << ","
            << (relayOn ? static_cast<int>(relayNode) : -1) << ","
            << ((relayMode == "fixed" || relayMode == "broadcast")
                    ? static_cast<int>(relayDstL2Id) : 254) << ","
            << numUEs << "," << scenarioStr << ","
-           << speedKmh << "," << ivd << "," << mcdMeters << ","
+           << speedKmh << "," << ivd << "," << mcrMeters << ","
            << mu << "," << numSubchannels << "," << bwPRBs << "," << mcs << ","
            << (adaptiveMcs ? "true" : "false") << ","
            << static_cast<int>(maxNumTx) << "," << psfchPeriod << "," << simTime << "\n";
