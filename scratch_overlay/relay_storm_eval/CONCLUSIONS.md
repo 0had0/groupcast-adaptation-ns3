@@ -115,7 +115,74 @@ cell) reported Δstorm = +0.139 / ΔprrW = +0.004 — qualitatively identical.
   semantically different. We keep the per-(tx, rx) decomposition because
   it lets you see which path is paying the latency cost.
 
-## 7. Spec-faithfulness of the PSFCH feedback gate (post-campaign correction)
+
+## 7. Per-PSFCH-opportunity ACK / NACK / SILENCE KPI (new module)
+
+The campaign now emits per-PSFCH-opportunity feedback state via the
+`common/psfch_kpi` module. This is **measurement-only**: it observes the
+sender-side `SetNrPhyRxSlPsfchCallback` slot independently of the McrGate
+(McrGate is on the RX-UE `SetPhySlHarqFeedbackCallback` slot — a different
+callback path) and never modifies feedback behavior. Verified by sha256:
+`--psfchKpi=true` vs `--psfchKpi=false` produce byte-identical `.db`.
+
+**CLI**
+
+| Flag                  | Default | Notes                                                |
+|-----------------------|--------:|------------------------------------------------------|
+| `--psfchKpi`          | false (this campaign; **true** in mcr_baseline) | Master switch         |
+| `--psfchKpiSummaryOnly`| false  | If true, suppress the per-event CSV                  |
+| `--psfchKpiPath`      | `<outputDir>/<simTag>_psfch_opps.csv` | Override |
+
+**Outputs** (next to the run's `.db`)
+
+- `<path>.csv` — one row per `(sender_node, dst_l2id, harq_pid, rx_node, sfn)`:
+  `sim_time_s, sender_node, dst_l2id, harq_pid, rx_node, status, sfn`.
+  `status`: 0=ACK, 1=NACK, 2=SILENCE (PSFCH not received at the sender's
+  spectrum phy for this RX UE in this opportunity).
+- `<path>.csv.summary.csv` — one row per `(sender_node, dst_l2id, harq_pid)`:
+  counts and rates of ACK / NACK / SILENCE, plus first/last PSFCH slot.
+
+**Semantics.** A PSFCH opportunity is bucketed to a 1 ms window (`sfn`
+column = `floor(simtime_us / 1000)`). A new sfn for the same
+`(sender, dst, pid)` tuple closes the previous opportunity; missing RXs in
+that window are emitted as SILENCE. CastType filtering: `Broadcast` and
+`GroupcastOnlyNack` are skipped (no PSFCH feedback / Option-1 NACK-only
+out of scope for v1); `Groupcast` and `Unicast` are recorded.
+
+**Why a shim, not a hook in NrSlUeMac.** The sender-side PHY RX callback
+(`SetNrPhyRxSlPsfchCallback`) is the *only* point where a PSFCH signal
+that has been demodulated is delivered up the stack. Wiring there captures
+exactly what the sender's MAC will use, with no double counting. The
+original callback is preserved (rebound on the shim's forwarding slot) so
+the MAC's HARQ state machine is unchanged.
+
+**Smoke-run signal (relay_storm_eval, N=8, 2 s, Option-2, no relay).**
+Sender 0 (the only TB sender) over 4 harq pids:
+
+| harq_pid | n_opps | n_ack | n_nack | n_silence | silence_rate |
+|---------:|-------:|------:|-------:|----------:|-------------:|
+| 0        |    406 |   396 |      7 |         3 |       0.74 % |
+| 1        |    518 |   514 |      4 |         0 |       0.00 % |
+| 2        |    399 |   380 |      6 |        13 |       3.26 % |
+| 3        |     91 |    90 |      0 |         1 |       1.10 % |
+
+Total silence rate: **1.20 %** across 1414 recorded RX-opps. Cross-checked
+against the existing `slHarqFeedback` SQLite hook: the per-event rows
+agree on RX set, ACK/NACK verdict, and simtime — confirming SILENCE events
+are real (RX UEs that did not transmit PSFCH in the window), not a
+shim/install artifact.
+
+**Spec note.** Per 3GPP TS 38.213 §16.5, an RX UE that did not decode the
+PSSCH shall not transmit PSFCH; that absence is the spec mechanism for
+implicit NACK. The KPI's "SILENCE" status therefore captures implicit
+NACK events at the *air-interface* level — a strictly richer signal than
+the sender's per-process ACK/NACK state (which only records explicit
+feedback for HARQ pids in the sender's TX window). This is why the
+**`silence_rate` column** is the headline metric for HARQ Option-2
+evaluation: it directly measures the rate at which RX UEs fail to send
+PSFCH, regardless of whether the sender has a harq process to attribute
+the loss to.
+## 8. Spec-faithfulness of the PSFCH feedback gate (post-campaign correction)
 
 The numbers above were generated with `common/mcd/McdFeedbackGate`
 applying a distance gate (drop feedback if dist(TX→RX) > MCD) to **all**
