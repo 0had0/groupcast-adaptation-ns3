@@ -2,7 +2,7 @@
 //
 // Implementation of the MCR NACK-only feedback gate — see mcr_nack_only_gate.h.
 //
-// Design follows McdFeedbackGate (mcd_feedback_gate.cc): re-bind the spectrum
+// Design follows McrFeedbackGate (mcr_feedback_gate.cc): re-bind the spectrum
 // PHY PSFCH feedback callback on every UE to a shim that:
 //   - resolves TX mobility from the shared RntiMobilityRegistry
 //   - drops feedback when distance > MCR (out-of-range)
@@ -10,7 +10,7 @@
 //   - forwards NACK feedback in-range to the original NrUePhy::EnqueueSlHarqFeedback
 //
 // The shim is an ns3::Object subclass so it participates in Ptr<> ref-counting
-// exactly like McdGateShim.
+// exactly like McrGateShim.
 
 #include "mcr_nack_only_gate.h"
 
@@ -58,7 +58,7 @@ class McrNackOnlyShim : public Object
 
     // Re-bound callback — invoked by NrSpectrumPhy in place of the previous
     // PSFCH feedback callback (which is NrUePhy::EnqueueSlHarqFeedback or
-    // McdGateShim::OnFeedback depending on stack order).
+    // McrGateShim::OnFeedback depending on stack order).
     void OnFeedback(const SlHarqInfo& info)
     {
         Ptr<MobilityModel> txMob =
@@ -106,7 +106,7 @@ NS_OBJECT_ENSURE_REGISTERED(McrNackOnlyShim);
 
 // ---------------------------------------------------------------------------
 // InstallMcrNackOnlyGate — re-bind the PSFCH feedback callback on every
-// UE device to the shim. Same looping pattern as InstallMcdFeedbackGate.
+// UE device to the shim. Same looping pattern as InstallMcrFeedbackGate.
 // ---------------------------------------------------------------------------
 
 void

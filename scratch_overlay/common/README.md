@@ -53,6 +53,22 @@ bool     adaptiveMcs{true};// use NrSlAdaptiveMcsScheduler on TX node 0
 std::string schedulerMode{"sbsps"}; // "sbsps" | "deterministic"
 ```
 
+### `mcd/` — castType-aware PSFCH feedback gates
+| File | Purpose |
+|------|---------|
+| `mcr_feedback_gate.h/.cc` | `McrFeedbackGate` (renamed from `McdFeedbackGate`): castType-aware PSFCH feedback shim. Per 3GPP TS 38.321 §5.4.4.1.1: Broadcast=no PSFCH, Groupcast(Option-2)=no distance gate (Zone-ID membership, not modeled; spec-faithful=no gate), Unicast=no gate, GroupcastOnlyNack(Option-1)=MCR distance gate. Installed by `BuildSlStack` only when `SlStackParams::harqOption == 1`. |
+| `mcr_nack_only_gate.h/.cc` | `McrNackOnlyShim`: HARQ Option-1 (NACK-only) ACK-drop shim. Layered on top of the MCR distance gate when `--harqOption=1`; drops ACK feedback inside MCR (silent-on-success) while leaving NACK feedback forwarding intact. |
+
+**HARQ feedback option behavior:**
+| `SlStackParams::harqOption` | CastType | Gate behavior |
+|---|---|---|
+| 1 (default) | GroupcastOnlyNack | MCR distance gate applied (out-of-range RXs are silent) + ACK-drop shim |
+| 2 | Groupcast | No distance gate (spec mechanism is Zone-ID; spec-faithful = no gate) |
+| 1 or 2 | Broadcast | No PSFCH feedback (gate unconditionally suppresses) |
+| 1 or 2 | Unicast | No gate (spec allows all feedback) |
+
+**Flow install side:** `InstallGroupcastFlows` registers `(dstL2Id → castType)` in `DstL2IdCastTypeRegistry` so the gate shim can route per-castType at PSFCH feedback time. No contrib/nr edits required.
+
 ### `flows/` — Groupcast bearer + app installation
 | File | Purpose |
 |------|---------|

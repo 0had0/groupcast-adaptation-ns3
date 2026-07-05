@@ -84,12 +84,28 @@ struct SlStackParams
     double   channelBwMHz{0.0};    //!< 0 = legacy (200<<mu); >0 = explicit MHz
     uint32_t numSubchannels{0};    //!< 0 = legacy (pool uses bwPRBs); >0 = explicit
 
-    // -- MCD feedback gate --
-    // When mcdMeters > 0, InstallMcdFeedbackGate() is called on all UE devices
-    // after the SL bearer/pre-config wiring, suppressing PSFCH from receivers
-    // farther than mcdMeters from the TB's transmitter.
-    // 0.0 = disabled (no gate installed; full feedback from all RX nodes).
-    double mcdMeters{0.0};
+    // -- HARQ feedback option --
+    // 1 = GroupcastOnlyNack (3GPP Option-1, NACK-only feedback).
+    //     BuildSlStack installs the MCR feedback gate so out-of-range
+    //     receivers are silent (spec mechanism for Option-1).
+    // 2 = Groupcast (3GPP Option-2, ACK/NACK feedback).
+    //     BuildSlStack does NOT install the MCR feedback gate. Spec uses
+    //     Zone-ID membership (sl-ZoneConfig) for Option-2, not distance;
+    //     in our single-dstL2Id setup with all UEs as group members, the
+    //     spec-faithful behavior is no distance filter.
+    // Default 1 preserves backward compatibility with prior campaigns that
+    // ran with HARQ Option-1 semantics; set to 2 for HARQ Option-2 setups.
+    uint8_t harqOption{1};
+
+    // -- MCR feedback gate (HARQ Option-1 only) --
+    // When harqOption == 1 AND mcrMeters > 0, BuildSlStack calls
+    // InstallMcrFeedbackGate() on all UE devices, suppressing PSFCH from
+    // receivers farther than mcrMeters from the TB's transmitter.
+    // This implements the spec's MCR distance gate for Option-1 (out-of-range
+    // receivers are silent, treated as NACK by the sender).
+    // Ignored when harqOption == 2 (no distance filter per spec).
+    // 0.0 = disabled (Option-1 with no gate; full feedback from all RX nodes).
+    double mcrMeters{0.0};
 };
 
 struct SlStackCtx

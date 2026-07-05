@@ -2,6 +2,7 @@
 
 #include "groupcast_flows.h"
 
+#include "common/mcd/mcr_feedback_gate.h"
 #include "common/traffic/custom-traffic-helper.h"
 
 #include "ns3/log.h"
@@ -496,6 +497,31 @@ InstallGroupcastFlows(const NodeContainer& nodes,
         slInfo.m_dynamic = fd.dynamic;
         slInfo.m_pdb = fd.pdb;
         slInfo.m_priority = fd.priority;
+
+        // Register the castType for this dstL2Id so the MCR feedback gate
+        // shim can apply the per-castType rule (Broadcast=no feedback,
+        // GroupcastOnlyNack=MCR gate, Groupcast=no gate, Unicast=no gate).
+        // See common/mcd/mcr_feedback_gate.h for the registry contract.
+        {
+            uint8_t gateCastType = 1; // default = Groupcast (Option-2 ACK/NACK)
+            if (slInfo.m_castType == SidelinkInfo::CastType::Broadcast)
+            {
+                gateCastType = 0;
+            }
+            else if (slInfo.m_castType == SidelinkInfo::CastType::GroupcastNegativeOnly)
+            {
+                gateCastType = 3;
+            }
+            else if (slInfo.m_castType == SidelinkInfo::CastType::Groupcast)
+            {
+                gateCastType = 1;
+            }
+            else if (slInfo.m_castType == SidelinkInfo::CastType::Unicast)
+            {
+                gateCastType = 2;
+            }
+            RegisterDstL2IdCastType(fd.dstL2Id, gateCastType);
+        }
 
         Ptr<LteSlTft> tft = Create<LteSlTft>(LteSlTft::Direction::BIDIRECTIONAL,
                                              groupAddr,

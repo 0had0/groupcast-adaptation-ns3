@@ -15,7 +15,7 @@
 //
 // We emulate Option 1 with a NO-EDIT shim layered on top of the existing
 // `SetPhySlHarqFeedbackCallback` machinery — the same pattern used by
-// McdFeedbackGate (see common/mcd/mcd_feedback_gate.h):
+// McrFeedbackGate (see common/mcd/mcr_feedback_gate.h):
 //
 //   1. RntiMobilityRegistry — reused unchanged (registered by BuildSlStack).
 //   2. InstallMcrNackOnlyGate() — re-binds the spectrum-phy PSFCH callback on
@@ -38,7 +38,7 @@
 //
 // No edits to ns-3-dev/contrib/nr are required.
 
-#include "common/mcd/mcd_feedback_gate.h"
+#include "common/mcd/mcr_feedback_gate.h"
 
 #include "ns3/net-device-container.h"
 
@@ -53,12 +53,12 @@ namespace ns3
 // Must be called AFTER:
 //   ctx.sl->PrepareUeForSidelink(...)
 //   ctx.sl->InstallNrSlPreConfiguration(...)
-//   InstallMcdFeedbackGate() (if used) — OR instead of it
+//   InstallMcrFeedbackGate() (if used) — OR instead of it
 // so that NrSlHelper has already set the original SetPhySlHarqFeedbackCallback
 // and the RntiMobilityRegistry is populated.
 //
 // For each UE in ueNetDev, for each BWP:
-//   - Retrieves the current callback (which may be McdGateShim::OnFeedback
+//   - Retrieves the current callback (which may be McrGateShim::OnFeedback
 //     or NrUePhy::EnqueueSlHarqFeedback).
 //   - Re-binds to a shim that emulates Option-1 ACK-drop semantics inside
 //     the MCR range.

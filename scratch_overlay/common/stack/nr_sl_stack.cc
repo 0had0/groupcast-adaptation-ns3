@@ -10,7 +10,7 @@
 
 #include "nr_sl_stack.h"
 
-#include "common/mcd/mcd_feedback_gate.h"
+#include "common/mcd/mcr_feedback_gate.h"
 #include "common/stack/nr-sl-adaptive-mcs-scheduler.h"
 #include "common/stack/nr-sl-deterministic-scheduler.h"
 
@@ -439,10 +439,25 @@ BuildSlStack(const SlStackParams& p,
     }
 
     // -----------------------------------------------------------------------
-    // 10. MCD feedback gate (optional).
-    //     The InstallMcdFeedbackGate() shim wires into the spectrum-phy
-    //     callback regardless of whether RNTIs are assigned yet — the gate
-    //     only needs to resolve TX mobility when feedback fires at runtime.
+    // 10. MCR feedback gate (HARQ Option-1 only — spec-faithful).
+    //
+    //     Per 3GPP TS 38.321 §5.4.4.1.1, the receiver-side gating of PSFCH
+    //     feedback depends on the HARQ feedback option:
+    //
+    //     * HARQ Option 1 (GroupcastOnlyNack): receivers send NACK only when
+    //       they fail to decode AND are within MCR of the transmitter. The
+    //       MCR distance gate IS the spec mechanism for Option-1.
+    //
+    //     * HARQ Option 2 (Groupcast): receivers send ACK/NACK gated by
+    //       Zone-ID membership (sl-ZoneConfig in RRC), NOT by distance. We do
+    //       not implement Zone-ID filtering; in our single-dstL2Id deployment
+    //       all UEs are group members, so the spec-faithful behavior is to
+    //       let all feedback flow without any distance filter.
+    //
+    //     InstallMcrFeedbackGate() implements the Option-1 MCR gate. We
+    //     install it only when harqOption == 1. For harqOption == 2, no
+    //     distance gate is installed regardless of mcrMeters.
+    //
     //     RegisterRntiMobility() is SIMULATOR-SCHEDULED here because the
     //     NR RRC assigns RNTIs via asynchronous events that run during
     //     Simulator::Run() (e.g. StartContentionResolution scheduled from
@@ -451,14 +466,28 @@ BuildSlStack(const SlStackParams& p,
     //     The poll interval (1 ms) is well below the RACH response time so
     //     all UEs will have valid RNTIs by the time the sidelink actually
     //     starts transmitting at ~100 ms.
+    //
+    //     Note: contrib/nr does not implement the actual PSFCH freq×time×code
+    //     multiplexing defined by 3GPP — each RX UE's feedback is delivered to
+    //     the sender's MAC as a discrete callback carrying nodeId. This
+    //     sidesteps the spec-defined PSFCH capacity limit and is acceptable
+    //     for small-N sweeps (≤20 RX per TB); for large-N, capacity-bias
+    //     would surface.
     // -----------------------------------------------------------------------
-    if (p.mcdMeters > 0.0)
+    if (p.harqOption == 1 && p.mcrMeters > 0.0)
     {
-        InstallMcdFeedbackGate(ctx.ueNetDev, p.mcdMeters);
+        InstallMcrFeedbackGate(ctx.ueNetDev, p.mcrMeters);
         Simulator::Schedule(MilliSeconds(0),
                             &RegisterRntiMobilityPoll,
                             ctx.ueNetDev);
-        NS_LOG_INFO("NrSlStack: MCD feedback gate installed, mcd=" << p.mcdMeters << " m");
+        NS_LOG_INFO("NrSlStack: MCR feedback gate installed (Option-1), mcr="
+                    << p.mcrMeters << " m");
+    }
+    else if (p.harqOption == 2 && p.mcrMeters > 0.0)
+    {
+        NS_LOG_WARN("NrSlStack: harqOption=2 (Groupcast ACK/NACK) — MCR distance"
+                    << " gate NOT installed (spec mechanism is Zone-ID, not distance)."
+                    << " mcrMeters=" << p.mcrMeters << " m is ignored.");
     }
 
     NS_LOG_INFO("NR-SL stack built: scenario=" << p.scenario
