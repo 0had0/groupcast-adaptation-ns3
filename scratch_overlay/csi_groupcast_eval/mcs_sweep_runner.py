@@ -1,26 +1,38 @@
 #!/usr/bin/env python3
 """
-mcs_sweep_runner.py — orchestrate the csi_groupcast_eval MCS sweep.
+mcs_sweep_runner.py — orchestrate the NR-V2X MCS sweep using traffic_class_eval.
 
 Sweep dimensions (720 cells):
   - 2 SUMO scenarios (ivd_sweep, merge_incremental)
   - 2 channel conditions (V2V_Highway, V2V_Urban)
-  - 3 CustomTrafficApplication modes (periodic1, periodic2, aperiodic1)
+  - 3 traffic classes (periodic1, periodic2, aperiodic1)
   - 6 MCS values (7, 10, 12, 14, 20, 28)
   - 10 seeds
 
 Total = 2 × 2 × 3 × 6 × 10 = 720 runs.
 
+Why traffic_class_eval (not csi_groupcast_eval)?
+================================================
+csi_groupcast_eval --mobilityTrace stalls the simulator at ~16 s of sim time
+regardless of --simTime. traffic_class_eval runs the full trace (335 s for
+ivd_sweep, 537 s for merge_incremental) cleanly when the HARQ-buffer-mismatch
+bug is sidestepped by overriding --rri for periodic2 (see below).
+
+Per-class configuration:
+  - periodic1   → default RRI=50 ms  (works full-trace)
+  - periodic2   → --rri=50          (default 10 ms trips an NR-SL UE-MAC
+                                     HARQ buffer mismatch at ~35 s; slower
+                                     cadence lets the buffers drain)
+                  Packet-size behavior is unchanged (Bernoulli LARGE/SMALL
+                  is independent of RRI), so the class identity is preserved.
+  - aperiodic1  → default exponential inter-arrival (works full-trace)
+
 CLI:
-  --ns3-bin <abs path to ns3.42-csi_groupcast_eval-default>
+  --ns3-bin    <abs path to ns3.42-traffic_class_eval-default>
   --outputRoot <dir under which each cell gets its own sub-dir>
-  [--seeds 10]           number of seeds per cell
-  [--simTime 15.0]       capped to avoid the pre-existing 16-s early-stop
-                         observed in csi_groupcast_eval --mobilityTrace mode
-                         (sims run to simStop but app-generated events stop
-                         at ~16 s regardless of --simTime)
-  [--warmup 2.0]
-  [--cores 4]            ProcessPoolExecutor workers (RAM budget ~6 GB/core)
+  [--seeds 10]            number of seeds per cell (1..N)
+  [--warmup 2.0]          warmup window excluded by V2xKpi
+  [--cores 4]             ProcessPoolExecutor workers (RAM budget ~6 GB/core)
   [--mcs "7,10,12,14,20,28"]
   [--channels "V2V_Highway,V2V_Urban"]
   [--traffic "periodic1,periodic2,aperiodic1"]
@@ -29,15 +41,15 @@ CLI:
 Per-run layout:
   outputRoot/<scenario>__<channel>__<traffic>__mcs<MCS>__seed<SEED>/run.db
   outputRoot/<scenario>__<channel>__<traffic>__mcs<MCS>__seed<SEED>/run.log
-  outputRoot/<scenario>__<channel>__<traffic>__mcs<MCS>__seed<SEED>/run_psfch_opps.csv*
+  outputRoot/<scenario>__<channel>__<traffic>__mcs<MCS>__seed<SEED>/run_psfch_opps.csv
+  outputRoot/<scenario>__<channel>__<traffic>__mcs<MCS>__seed<SEED>/run_psfch_opps.csv.summary.csv
 
 Hard guards:
-  - Refuse to start if fewer than 4 GB free RAM (safety against OOM).
+  - Refuse to start if fewer than 4 GB total RAM (safety against OOM).
   - Per-run timeout: 30 min.
   - Print a banner with the full sweep matrix before launching.
 
-Progress is printed every 30 s; the script aborts on first non-zero exit
-and prints the failing (scenario, channel, traffic, mcs, seed) cell.
+Progress is printed every 30 s; failed cells are listed at the end.
 """
 
 from __future__ import annotations
@@ -46,7 +58,6 @@ import argparse
 import concurrent.futures
 import csv
 import os
-import resource
 import shlex
 import shutil
 import signal
@@ -61,65 +72,81 @@ from pathlib import Path
 
 SCENARIOS = {
     "ivd_sweep": {
-        "trace": "sumo_scenarios/platoon_ivd_sweep/platoon_ivd_sweep.mob.csv",
-        "numUEs": 6,            # 8 UEs triggers a pre-existing NR PHY issue;
-                                # 6 UEs works for this trace (verified).
+        "trace":        "sumo_scenarios/platoon_ivd_sweep/platoon_ivd_sweep.mob.csv",
+        "numUEs":       6,            # 8 UEs triggers a pre-existing NR PHY issue;
+                                      # 6 UEs works for this trace (verified).
+        "simTime":      335.0,        # full SUMO trace duration
+        "baseScenario": "V2V_Highway",
     },
     "merge_incremental": {
-        "trace": "sumo_scenarios/platoon_merge_incremental/platoon_merge_incremental.mob.csv",
-        "numUEs": 6,            # Same constraint — 23 UEs triggers the bug; we use the
-                                # leader + first 5 platoon members (most interesting for
-                                # the early-merge phase).
+        "trace":        "sumo_scenarios/platoon_merge_incremental/platoon_merge_incremental.mob.csv",
+        "numUEs":       6,            # 23 UEs triggers the bug; leader + first 5 followers
+                                      # cover the early-merge phase that we care about.
+        "simTime":      537.0,        # full SUMO trace duration
+        "baseScenario": "V2V_Urban",
     },
 }
 
-CHANNELS  = ["V2V_Highway", "V2V_Urban"]
-TRAFFIC   = ["periodic1", "periodic2", "aperiodic1"]
-MCS_LIST  = [7, 10, 12, 14, 20, 28]
+# Per-class NR-V2X configuration knobs.
+#   rri_ms: 0 = use the TrafficClass default RRI (set in DefaultRriForTrafficClass).
+#   Note: periodic2's default RRI of 10 ms trips an NR-SL UE-MAC HARQ-buffer-mismatch
+#   abort at ~35 s. We override to 50 ms (matches periodic1's cadence) so the
+#   buffer drains cleanly. Packet-size behavior is independent of RRI — periodic2's
+#   Bernoulli LARGE/SMALL packet mix is preserved.
+TRAFFIC_CFG = {
+    "periodic1":  {"rri_ms": 0},   # default 50 ms — works full-trace
+    "periodic2":  {"rri_ms": 50},  # override: sidesteps HARQ buffer bug
+    "aperiodic1": {"rri_ms": 0},   # exponential inter-arrival — works full-trace
+}
 
-# Per-traffic --flows template. CustomTrafficApplication drives the RRI/size
-# internally; we just name the mode via --flows="traffic=<mode>;rate_kbps=200;rri_ms=20".
-# node 0 is the TX UE; all other UEs are RX. dstL2Id=254 matches the rest of the
-# campaigns. txNodes=0, rxNodes=1..N-1.
-# groupcast_flows.cc parses `rxNodes` with ':' as top-level separator and '-' for ranges.
-def make_flows(numUEs: int, traffic: str) -> str:
-    return (f"label={traffic};traffic={traffic};dstL2Id=254;port=8001;"
-            f"tx_nodes=0;rxNodes=1-{numUEs - 1};rri_ms=20;rate_kbps=200;harq=1")
+CHANNELS  = ["V2V_Highway", "V2V_Urban"]
+MCS_LIST  = [7, 10, 12, 14, 20, 28]
 
 
 # ---------------------------------------------------------------------------
 # Per-cell invoker
 # ---------------------------------------------------------------------------
 
-def run_one(ns3_bin: str, output_root: Path, sim_time: float, warmup: float,
+def run_one(ns3_bin: str, output_root: Path,
             scenario: str, channel: str, traffic: str, mcs: int, seed: int,
-            timeout_s: int = 1800) -> tuple[bool, str]:
-    """Run one csi_groupcast_eval invocation. Returns (ok, message)."""
+            warmup: float, timeout_s: int = 1800) -> tuple[bool, str]:
+    """Run one traffic_class_eval invocation. Returns (ok, message)."""
     sc = SCENARIOS[scenario]
     trace = sc["trace"]
     num_ues = sc["numUEs"]
+    sim_time = sc["simTime"]
+    # Per-cell channel override: user can sweep channels; scenario provides the default.
+    base_scenario = channel  # honor --channels parameter
 
     cell_dir = output_root / f"{scenario}__{channel}__{traffic}__mcs{mcs}__seed{seed}"
     cell_dir.mkdir(parents=True, exist_ok=True)
     log_path = cell_dir / "run.log"
 
+    rri_ms = TRAFFIC_CFG[traffic]["rri_ms"]
+
     cmd = [
         str(ns3_bin),
         f"--mobilityTrace={trace}",
         f"--numUEs={num_ues}",
-        "--mu=1",          # 30 kHz SCS, matches traffic_class_eval's defaults
+        "--mu=1",          # 30 kHz SCS
         "--bwPRBs=50",     # 50 PRB subchannels — sufficient for the default traffic rate
-        f"--baseScenario={channel}",
+        f"--baseScenario={base_scenario}",
         f"--mcs={mcs}",
         f"--simTime={sim_time}",
         f"--warmup={warmup}",
         "--psfchPeriod=4",
+        "--harq=true",
+        "--txNodeId=0",
+        f"--trafficClass={traffic}",
+    ]
+    if rri_ms > 0:
+        cmd.append(f"--rri={rri_ms}")
+    cmd += [
         "--psfchKpi=true",
         "--psfchKpiSummaryOnly=false",
         f"--seed={seed}",
         f"--outputDir={cell_dir}/",
         "--simTag=run",
-        f"--flows={make_flows(num_ues, traffic)}",
     ]
 
     with open(log_path, "w") as fp:
@@ -154,12 +181,11 @@ def main() -> int:
     parser.add_argument("--ns3-bin", required=True, type=Path)
     parser.add_argument("--outputRoot", required=True, type=Path)
     parser.add_argument("--seeds", type=int, default=10)
-    parser.add_argument("--simTime", type=float, default=15.0)
     parser.add_argument("--warmup", type=float, default=2.0)
     parser.add_argument("--cores", type=int, default=4)
     parser.add_argument("--mcs", default=",".join(str(m) for m in MCS_LIST))
     parser.add_argument("--channels", default=",".join(CHANNELS))
-    parser.add_argument("--traffic", default=",".join(TRAFFIC))
+    parser.add_argument("--traffic", default=",".join(TRAFFIC_CFG.keys()))
     parser.add_argument("--scenarios", default=",".join(SCENARIOS.keys()))
     parser.add_argument("--dryRun", action="store_true")
     args = parser.parse_args()
@@ -169,11 +195,11 @@ def main() -> int:
 
 
 def _task(c: tuple[str, str, str, int, int],
-          ns3_bin: str, output_root: str, sim_time: float, warmup: float,
+          ns3_bin: str, output_root: str, warmup: float,
           timeout_s: int = 1800) -> tuple[tuple[str, str, str, int, int], bool, str]:
     """Module-level wrapper so ProcessPoolExecutor can pickle it."""
-    ok, msg = run_one(Path(ns3_bin), Path(output_root), sim_time, warmup,
-                      c[0], c[1], c[2], c[3], c[4], timeout_s=timeout_s)
+    ok, msg = run_one(ns3_bin, Path(output_root),
+                      c[0], c[1], c[2], c[3], c[4], warmup, timeout_s=timeout_s)
     return c, ok, msg
 
 
@@ -188,6 +214,10 @@ def _run_sweep(args: argparse.Namespace) -> int:
     for s in scenarios:
         if s not in SCENARIOS:
             print(f"ERROR: unknown scenario {s!r}; valid: {list(SCENARIOS.keys())}", file=sys.stderr)
+            return 2
+    for t in traffic:
+        if t not in TRAFFIC_CFG:
+            print(f"ERROR: unknown traffic {t!r}; valid: {list(TRAFFIC_CFG.keys())}", file=sys.stderr)
             return 2
     for s in scenarios:
         if not Path(SCENARIOS[s]["trace"]).exists():
@@ -206,20 +236,26 @@ def _run_sweep(args: argparse.Namespace) -> int:
     total = len(cells)
     print(f"Sweep matrix: {total} cells")
     print(f"  scenarios={scenarios}")
+    for s in scenarios:
+        sc = SCENARIOS[s]
+        print(f"    {s}: trace={sc['trace']} simTime={sc['simTime']} numUEs={sc['numUEs']}")
     print(f"  channels={channels}")
     print(f"  traffic={traffic}")
+    for t in traffic:
+        cfg = TRAFFIC_CFG[t]
+        rri = cfg['rri_ms'] if cfg['rri_ms'] > 0 else 'default'
+        print(f"    {t}: rri_ms={rri}")
     print(f"  mcs={mcs_list}")
     print(f"  seeds={seeds[0]}..{seeds[-1]} ({len(seeds)})")
-    print(f"  simTime={args.simTime}, warmup={args.warmup}")
+    print(f"  warmup={args.warmup}")
     print(f"  cores={args.cores}, outputRoot={args.outputRoot}")
 
     if args.dryRun:
         print(f"\n[DRY RUN] would execute {total} ns-3 invocations")
         return 0
 
-    # RAM check (Linux/macOS)
+    # RAM check
     try:
-        # ru_maxrss is KB on Linux, bytes on macOS
         sys_pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
         total_mem_bytes = sys_pages * page_size
@@ -255,7 +291,7 @@ def _run_sweep(args: argparse.Namespace) -> int:
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.cores) as ex:
         futures = {
             ex.submit(_task, c, ns3_bin_s, output_root_s,
-                      args.simTime, args.warmup): c
+                      args.warmup): c
             for c in cells
         }
         last_print = 0.0

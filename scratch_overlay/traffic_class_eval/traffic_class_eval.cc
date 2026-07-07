@@ -112,6 +112,10 @@ main(int argc, char* argv[])
     double      blockerL    = 4.5;
     double      blockerW    = 2.0;
 
+    bool        psfchKpi           = false;
+    bool        psfchKpiSummaryOnly = false;
+    std::string psfchKpiPath;
+
     CommandLine cmd(__FILE__);
     cmd.AddValue("trafficClass",  "Traffic class: periodic1..3 | aperiodic1..2 | onoff",
                                                                               trafficClassStr);
@@ -138,6 +142,10 @@ main(int argc, char* argv[])
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",          simTag);
     cmd.AddValue("blockerL",      "Blocker AABB length (m)",                    blockerL);
     cmd.AddValue("blockerW",      "Blocker AABB width (m)",                     blockerW);
+    cmd.AddValue("psfchKpi",          "Record per-PSFCH-opportunity ACK/NACK/SILENCE [false]", psfchKpi);
+    cmd.AddValue("psfchKpiSummaryOnly","Emit only the summary CSV (no per-event rows) [false]", psfchKpiSummaryOnly);
+    cmd.AddValue("psfchKpiPath",      "Override PSFCH KPI CSV path (default = outputDir/simTag_psfch_opps.csv)",
+                  psfchKpiPath);
     cmd.Parse(argc, argv);
 
     // ── Validate ───────────────────────────────────────────────────────────
@@ -225,6 +233,16 @@ main(int argc, char* argv[])
     stackParams.psfchPeriod      = static_cast<uint16_t>(psfchPeriod);
     stackParams.shadowingEnabled = shadowing;
     stackParams.scenario         = baseScenario;
+    stackParams.recordPsfchKpi   = psfchKpi;
+    if (psfchKpi && psfchKpiPath.empty())
+    {
+        stackParams.psfchKpiPath = outputDir + "/" + simTag + "_psfch_opps.csv";
+    }
+    else
+    {
+        stackParams.psfchKpiPath = psfchKpiPath;
+    }
+    stackParams.psfchKpiSummaryOnly = psfchKpiSummaryOnly;
 
     SlStackCtx stack = BuildSlStack(stackParams, geomCfg, ueNodes);
 
