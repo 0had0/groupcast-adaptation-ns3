@@ -117,6 +117,14 @@ main(int argc, char* argv[])
     std::string outPacketsCsv;
     std::string simTag;
 
+    // PSFCH per-opportunity ACK/NACK/SILENCE KPI (additive, default off).
+    // See scratch_overlay/common/psfch_kpi/ for the module. The KPI shim
+    // installs inside BuildSlStack when sp.psfchKpiPath is non-empty; we
+    // leave it empty by default to preserve prior behavior.
+    bool        psfchKpi           = false;
+    bool        psfchKpiSummaryOnly = false;
+    std::string psfchKpiPath;
+
     CommandLine cmd(__FILE__);
     cmd.AddValue("runId",         "Unique run identifier",                          runId);
     cmd.AddValue("seed",          "Random seed",                                    seed);
@@ -157,6 +165,10 @@ main(int argc, char* argv[])
     cmd.AddValue("outRunCsv",     "One-line per-run summary CSV path",              outRunCsv);
     cmd.AddValue("outPacketsCsv", "Per-packet CSV path",                            outPacketsCsv);
     cmd.AddValue("simTag",        "DB filename tag (default = runId)",              simTag);
+    cmd.AddValue("psfchKpi",          "Record per-PSFCH-opportunity ACK/NACK/SILENCE [false]", psfchKpi);
+    cmd.AddValue("psfchKpiSummaryOnly","Emit only the summary CSV (no per-event rows) [false]", psfchKpiSummaryOnly);
+    cmd.AddValue("psfchKpiPath",      "Override PSFCH KPI CSV path (default = outputDir/simTag_psfch_opps.csv)",
+                  psfchKpiPath);
     cmd.Parse(argc, argv);
 
     // Validate
@@ -248,6 +260,19 @@ main(int argc, char* argv[])
     stackParams.psfchPeriod      = static_cast<uint16_t>(psfchPeriod);
     stackParams.shadowingEnabled = shadowing;
     stackParams.scenario         = baseScenario;
+
+    // PSFCH per-opportunity KPI — only enabled when --psfchKpi is set.
+    // Empty psfchKpiPath disables the install inside BuildSlStack.
+    stackParams.recordPsfchKpi    = psfchKpi;
+    stackParams.psfchKpiSummaryOnly = psfchKpiSummaryOnly;
+    if (psfchKpi && psfchKpiPath.empty())
+    {
+        stackParams.psfchKpiPath = outputDir + "/" + simTag + "_psfch_opps.csv";
+    }
+    else
+    {
+        stackParams.psfchKpiPath = psfchKpiPath;
+    }
 
     // Per-destination fixed-MCS overrides: any flow carrying an explicit mcs=
     // pins its dstL2Id to that MCS (dual-MCS redundant groupcast). Flows without
