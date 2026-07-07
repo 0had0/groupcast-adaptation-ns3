@@ -39,7 +39,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Library sources (all module .cc; the adaptive-MCS controller is header-only).
 # ---------------------------------------------------------------------------
-add_library(scratch_common STATIC
+add_library(scratch_common OBJECT
   channel/geometric_channel.cc
   channel/three-gpp-geometric-nlosv.cc
   mobility/mobility.cc
