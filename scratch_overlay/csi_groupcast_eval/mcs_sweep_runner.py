@@ -119,6 +119,21 @@ def run_one(ns3_bin: str, output_root: Path,
     base_scenario = channel  # honor --channels parameter
 
     cell_dir = output_root / f"{scenario}__{channel}__{traffic}__mcs{mcs}__seed{seed}"
+
+    # Resume support: if a previous run already produced a valid run.db + summary.csv,
+    # skip re-invocation. Valid = both files exist, run.db is non-trivial size,
+    # and the summary CSV has the expected sender/dst/harq_pid header.
+    db = cell_dir / "run.db"
+    sum_csv = cell_dir / "run_psfch_opps.csv.summary.csv"
+    if db.exists() and db.stat().st_size > 1024 and sum_csv.exists() and sum_csv.stat().st_size > 0:
+        try:
+            with open(sum_csv, newline="") as fp:
+                first = fp.readline().strip()
+            if first.startswith("sender_node,dst_l2id,harq_pid"):
+                return True, "resumed (already complete)"
+        except OSError:
+            pass  # fall through to re-run
+
     cell_dir.mkdir(parents=True, exist_ok=True)
     log_path = cell_dir / "run.log"
 
