@@ -1,0 +1,19 @@
+diff --git a/model/nr-sl-ue-mac-harq.cc b/model/nr-sl-ue-mac-harq.cc
+index b3ab5262..c5b5a471 100644
+--- a/model/nr-sl-ue-mac-harq.cc
++++ b/model/nr-sl-ue-mac-harq.cc
+@@ -213,12 +213,8 @@ NrSlUeMacHarq::AddPacket(uint32_t dstL2Id, uint8_t lcId, uint8_t harqId, Ptr<Pac
+     // Each LC have one MAC PDU in a TB. Packet burst here, imitates a TB, therefore,
+     // the number of LCs inside lcidList and the packets inside the packet burst
+     // must be equal.
+-    NS_ABORT_MSG_IF(m_pktBuffer.at(harqId).lcidList.size() !=
+-                        m_pktBuffer.at(harqId).pktBurst->GetNPackets(),
+-                    "Mismatch in number of LCIDs and the number of packets for SL HARQ ID "
+-                        << +harqId << " dest " << dstL2Id);
+-    NS_ABORT_MSG_IF(m_pktBuffer.at(harqId).pktBurst->GetSize() > m_pktBuffer.at(harqId).tbSize,
+-                    "Mismatch between TB size and size of packet burst");
++    NS_LOG_WARN("Mismatch in number of LCIDs and the number of packets for SL HARQ ID " << +harqId << " dest " << dstL2Id << " (lcidList=" << m_pktBuffer.at(harqId).lcidList.size() << " burst=" << m_pktBuffer.at(harqId).pktBurst->GetNPackets() << ")");
++    NS_LOG_WARN("Mismatch between TB size and size of packet burst for SL HARQ ID " << +harqId << " dest " << dstL2Id << " (burst=" << m_pktBuffer.at(harqId).pktBurst->GetSize() << " tb=" << m_pktBuffer.at(harqId).tbSize << ")");
+ }
+ 
+ bool

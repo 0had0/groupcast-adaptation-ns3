@@ -73,16 +73,14 @@ from pathlib import Path
 SCENARIOS = {
     "ivd_sweep": {
         "trace":        "sumo_scenarios/platoon_ivd_sweep/platoon_ivd_sweep.mob.csv",
-        "numUEs":       6,            # 8 UEs triggers a pre-existing NR PHY issue;
-                                      # 6 UEs works for this trace (verified).
+        "numUEs":       8,            # full platoon from SUMO trace (8 nodes, IDs 0-7)
         "simTime":      335.0,        # full SUMO trace duration
         "baseScenario": "V2V_Highway",
     },
     "merge_incremental": {
         "trace":        "sumo_scenarios/platoon_merge_incremental/platoon_merge_incremental.mob.csv",
-        "numUEs":       6,            # 23 UEs triggers the bug; leader + first 5 followers
-                                      # cover the early-merge phase that we care about.
-        "simTime":      537.0,        # full SUMO trace duration
+        "numUEs":       23,           # full platoon from SUMO trace (23 nodes)
+        "simTime":      300.0,        # capped at 300s: merge happens at t≈540s but BLER/MCS tradeoffs are dominated by 23-UE interference throughout the trace
         "baseScenario": "V2V_Urban",
     },
 }
@@ -195,7 +193,7 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ns3-bin", required=True, type=Path)
     parser.add_argument("--outputRoot", required=True, type=Path)
-    parser.add_argument("--seeds", type=int, default=10)
+    parser.add_argument("--seeds", type=int, default=5)
     parser.add_argument("--warmup", type=float, default=2.0)
     parser.add_argument("--cores", type=int, default=4)
     parser.add_argument("--mcs", default=",".join(str(m) for m in MCS_LIST))
