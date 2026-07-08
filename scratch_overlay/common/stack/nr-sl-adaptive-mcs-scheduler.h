@@ -94,7 +94,16 @@ class NrSlAdaptiveMcsScheduler : public NrSlUeMacSchedulerFixedMcs
                           const AllocationInfo& allocationInfo) override;
 
   private:
-    uint8_t m_adaptiveMcs{14};
+    // m_adaptiveMcs holds the *current* MCS that the scheduler will apply. It
+    // starts at 0 (uninitialised sentinel) and is seeded from the inherited
+    // FixedMcs "Mcs" attribute inside DoNrSlAllocation the first time it is
+    // called — so when the caller does
+    //     adaptSched->SetAttribute("Mcs", UintegerValue(p.mcs));
+    // the adaptive scheduler still emits at p.mcs instead of a stale 14. After
+    // that first call, SetCurrentMcs() / SetFlowMcs() overwrite it from the
+    // adaptive controller.
+    uint8_t m_adaptiveMcs{0};
+    bool m_adaptiveMcsSeeded{false};
     // Tracks every dstInfo seen via DoNrSlAllocation so SetCurrentMcs
     // can push the new MCS into it eagerly (before next LCP sizing loop).
     std::map<uint32_t, std::weak_ptr<NrSlUeMacSchedulerDstInfo>> m_seenDsts;

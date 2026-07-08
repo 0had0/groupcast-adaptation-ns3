@@ -88,6 +88,19 @@ NrSlAdaptiveMcsScheduler::DoNrSlAllocation(
     std::set<SlGrantResource>& slotAllocList,
     const AllocationInfo& allocationInfo)
 {
+    // ── First-call seed: if no adaptive controller has touched us yet, the
+    // inherited "Mcs" attribute (set by the caller via SetAttribute("Mcs", …))
+    // is the only source of truth — copy it into our private m_adaptiveMcs.
+    // This is what restores parity with the FixedMcs path: callers that only
+    // configure "Mcs" get that value emitted, not a stale default.
+    if (!m_adaptiveMcsSeeded)
+    {
+        UintegerValue seedMcs;
+        GetAttribute("Mcs", seedMcs);
+        m_adaptiveMcs = seedMcs.Get();
+        m_adaptiveMcsSeeded = true;
+    }
+
     // ── Static per-destination MCS override (set via SetDstMcsOverride) ──
     // This takes highest priority and bypasses all adaptive / per-flow logic.
     // The MCS is applied to dstInfo BEFORE calling the parent so that

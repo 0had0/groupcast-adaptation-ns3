@@ -35,9 +35,14 @@ struct SlStackParams
     uint16_t psfchPeriod{0};
     bool     shadowingEnabled{true};
     BandwidthPartInfo::Scenario scenario{BandwidthPartInfo::V2V_Urban};
-    // When true (default), TX node 0 gets NrSlAdaptiveMcsScheduler.
-    // Set false for fixed-MCS experiments so --mcs is honoured on the TX node.
-    bool adaptiveMcs{true};
+    // When true, TX node 0 gets NrSlAdaptiveMcsScheduler (per-RX NACK-driven
+    // adaptation). Defaults to false so that fixed-MCS sweeps / sweeps that
+    // only set --mcs via the inherited FixedMcs attribute work correctly:
+    // the adaptive scheduler's private m_adaptiveMcs field has a separate
+    // default and would silently override --mcs. Callers wanting the
+    // adaptive controller must opt in explicitly (see csi_groupcast_eval
+    // and traffic_class_adaptive_eval for usage patterns).
+    bool adaptiveMcs{false};
     // Allowed RRI values (ms) advertised in the resource pool.
     // Empty = use the full NR-V2X set: {0} ∪ {1..99} ∪ {100,200,...,1000}.
     std::list<uint16_t> rriList{};

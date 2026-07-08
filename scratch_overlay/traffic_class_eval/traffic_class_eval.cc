@@ -243,6 +243,14 @@ main(int argc, char* argv[])
         stackParams.psfchKpiPath = psfchKpiPath;
     }
     stackParams.psfchKpiSummaryOnly = psfchKpiSummaryOnly;
+    // CRITICAL: SlStackParams::adaptiveMcs defaults to {true}, which causes
+    // NrSlAdaptiveMcsScheduler to be installed on TX node 0 with its own
+    // private m_adaptiveMcs{14} field that ignores the inherited Mcs
+    // attribute set via SetUeSlSchedulerAttribute("Mcs", ...). The result
+    // is that --mcs is silently overridden to 14 inside traffic_class_eval
+    // runs. Mirror csi_groupcast_eval's explicit disable to keep the
+    // FixedMcs scheduler in charge and let --mcs flow through.
+    stackParams.adaptiveMcs = false;
 
     SlStackCtx stack = BuildSlStack(stackParams, geomCfg, ueNodes);
 

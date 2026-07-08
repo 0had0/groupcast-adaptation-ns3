@@ -299,6 +299,10 @@ main(int argc, char* argv[])
     stackParams.psfchPeriod      = static_cast<uint16_t>(psfchPeriod);
     stackParams.shadowingEnabled = shadowing;
     stackParams.scenario         = baseScenario;
+    // Adaptive eval always installs the adaptive scheduler on TX node 0.
+    // (SlStackParams::adaptiveMcs now defaults to false; this opt-in restores
+    // the original behaviour of this binary.)
+    stackParams.adaptiveMcs      = adaptiveMcs;
 
     SlStackCtx stack = BuildSlStack(stackParams, geomCfg, ueNodes);
 
