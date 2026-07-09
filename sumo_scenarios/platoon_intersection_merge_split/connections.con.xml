@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  platoon_intersection_merge_split — connection definitions
+  =========================================================
+  J1:
+    e_south_in → e_j1_j2   (platoon right turn)
+    e_west_in  → e_j1_j2   (joiners straight, merge in)
+    e_south_in → e_j1_j2   left turn not used
+  J2:
+    e_j1_j2   → e_j2_north  (platoon left turn)
+    e_j1_j2   → e_j2_east   (leavers straight)
+-->
+<connections xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/connections_file.xsd">
+
+    <!-- J1 — right turn for the platoon, straight for joiners -->
+    <connection from="e_south_in" to="e_j1_j2" fromLane="0" toLane="0"/>
+    <connection from="e_west_in"  to="e_j1_j2" fromLane="0" toLane="0"/>
+
+    <!-- J2 — left turn for the platoon, straight for leavers -->
+    <connection from="e_j1_j2"    to="e_j2_north" fromLane="0" toLane="0"/>
+    <connection from="e_j1_j2"    to="e_j2_east"  fromLane="0" toLane="0"/>
+
+</connections>

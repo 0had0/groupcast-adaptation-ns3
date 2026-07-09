@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  platoon_intersection_merge_split — vehicle & route definitions
+  ===============================================================
+  8-vehicle platoon (v0..v7) approaches from south, turns right at J1.
+  2 joiners (j0, j1) come from the west, merge between v3 and v4.
+  At J2, v1, v3, v6 peel off straight east; the rest turn left north.
+-->
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+
+    <!-- ── vehicle types ─────────────────────────────────────────────────── -->
+    <vType id="car"
+           vClass="passenger"
+           length="4.5" width="2.0"
+           maxSpeed="13.89" accel="3.0" decel="6.0"
+           tau="0.5" minGap="0.5" sigma="0.0" speedFactor="1.0"
+           guiShape="passenger" color="0.2,0.6,1.0"/>
+
+    <vType id="joiner"
+           vClass="passenger"
+           length="4.5" width="2.0"
+           maxSpeed="13.89" accel="3.0" decel="6.0"
+           tau="0.5" minGap="0.5" sigma="0.0" speedFactor="1.0"
+           guiShape="passenger" color="1.0,0.5,0.0"/>
+
+    <vType id="leaver"
+           vClass="passenger"
+           length="4.5" width="2.0"
+           maxSpeed="13.89" accel="3.0" decel="6.0"
+           tau="0.5" minGap="0.5" sigma="0.0" speedFactor="1.0"
+           guiShape="passenger" color="0.2,0.9,0.2"/>
+
+    <!-- ── routes ────────────────────────────────────────────────────────── -->
+    <!-- Platoon that turns right then left (stays with platoon) -->
+    <route id="r_platoon_continue" edges="e_south_in e_j1_j2 e_j2_north"/>
+    <!-- Leaver: enters from south, turns right at J1, straight at J2 (east) -->
+    <route id="r_leaver"           edges="e_south_in e_j1_j2 e_j2_east"/>
+    <!-- Joiner: comes from west, straight at J1, stays with platoon to J2 then north -->
+    <route id="r_joiner"           edges="e_west_in e_j1_j2 e_j2_north"/>
+
+    <!-- ── platoon: 8 vehicles, IVD=15m → spacing=19.5m.  Leader v0 is
+           at the FRONT (closest to J1), so v0 has the highest
+           departPos on e_south_in (= 156.5, 30.3m before J1).  The
+           last follower v7 trails behind at lane_pos 20.             ── -->
+    <vehicle id="v0" type="car" route="r_platoon_continue"
+             depart="0" departLane="0" departPos="156.5" departSpeed="10.0"
+             insertionChecks="none" color="1.0,0.0,0.0"/>
+
+    <vehicle id="v1" type="leaver" route="r_leaver"
+             depart="0" departLane="0" departPos="137.0" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v2" type="car" route="r_platoon_continue"
+             depart="0" departLane="0" departPos="117.5" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v3" type="leaver" route="r_leaver"
+             depart="0" departLane="0" departPos="98.0" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v4" type="car" route="r_platoon_continue"
+             depart="0" departLane="0" departPos="78.5" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v5" type="car" route="r_platoon_continue"
+             depart="0" departLane="0" departPos="59.0" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v6" type="leaver" route="r_leaver"
+             depart="0" departLane="0" departPos="39.5" departSpeed="10.0"
+             insertionChecks="none"/>
+    <vehicle id="v7" type="car" route="r_platoon_continue"
+             depart="0" departLane="0" departPos="20.0" departSpeed="10.0"
+             insertionChecks="none"/>
+
+    <!-- ── joiners: spawned at runtime by gen_trace.py (not declared here) ── -->
+
+</routes>

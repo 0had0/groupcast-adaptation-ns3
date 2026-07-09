@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  platoon_intersection_merge_split — edge definitions
+  ====================================================
+  All edges single-lane, speed 13.89 m/s (50 km/h).  TraCI controller
+  enforces actual speeds; the network just needs the topology.
+-->
+<edges xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/edges_file.xsd">
+
+    <!-- Platoon approach (south → J1, northbound) -->
+    <edge id="e_south_in" from="n_south" to="n_j1"
+          numLanes="1" speed="13.89" priority="3"/>
+
+    <!-- Joiner approach (west → J1, eastbound) -->
+    <edge id="e_west_in" from="n_west" to="n_j1"
+          numLanes="1" speed="13.89" priority="2"/>
+
+    <!-- J1 → J2 eastbound (100 m, merge + drive segment) -->
+    <edge id="e_j1_j2" from="n_j1" to="n_j2"
+          numLanes="1" speed="13.89" priority="3"/>
+
+    <!-- J2 → north (platoon continues after left turn) -->
+    <edge id="e_j2_north" from="n_j2" to="n_north"
+          numLanes="1" speed="13.89" priority="3"/>
+
+    <!-- J2 → east (leavers continue straight) -->
+    <edge id="e_j2_east" from="n_j2" to="n_j2east"
+          numLanes="1" speed="13.89" priority="2"/>
+
+</edges>

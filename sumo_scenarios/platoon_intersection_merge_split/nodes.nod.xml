@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  platoon_intersection_merge_split — node definitions
+  ===================================================
+  Geometry:
+       (joiner west)         J2 (100,0)
+       (-200,0)──┐         ┌─ e_j2_north → (100,200)
+                │         │  platoon continues north
+                J1 (0,0)──J2──── e_j2_east → (300,0)
+                │   ↑              leavers continue straight
+                │   e_south_in
+                │   platoon approaches from south
+                (0,-200)
+
+  J1 is a 3-way intersection (south, west, east). J2 is a T (east, north, east-out).
+-->
+<nodes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/nodes_file.xsd">
+
+    <!-- Approach road endpoints -->
+    <node id="n_south"  x="0"    y="-200" type="dead_end"/>
+    <node id="n_west"   x="-200" y="0"    type="dead_end"/>
+    <node id="n_j2east" x="300"  y="0"    type="dead_end"/>
+    <node id="n_north"  x="100"  y="200"  type="dead_end"/>
+
+    <!-- Intersections (priority junctions for turns) -->
+    <node id="n_j1"     x="0"    y="0"    type="priority" radius="10.0"/>
+    <node id="n_j2"     x="100"  y="0"    type="priority" radius="10.0"/>
+
+</nodes>
