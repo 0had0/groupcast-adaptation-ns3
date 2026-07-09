@@ -1,0 +1,49 @@
+# Relay selection summary  (1077 time-steps)
+# Input:  distances_classified.csv
+# Output: relay_selection.csv
+# Leader: v0 (id=0); leavers=[1, 3, 6]; joiners=[8, 9]
+
+Time-steps with a relay       : 935
+Time-steps without a relay    : 142
+  ↳ of which leader gone      : 142
+  ↳ of which no eligible relay: 0
+
+Relay selection counts:
+          v2:   770
+  (none — gap):   142
+          v1:    91
+          v8:    40
+          v9:    18
+          v3:    11
+          v4:     5
+
+Relay link quality:
+     LOS:   906
+   (gap):   142
+   NLOSv:    29
+
+Relay timeline (one entry per run of identical relay):
+  t=   0.0 –    3.7 s  (  3.8s)  relay=   v1  link=  LOS  snr=  43.7 dB  dist=  19.5 m  n_elig=7
+  t=   3.8 –    4.2 s  (  0.5s)  relay=   v2  link=NLOSv  snr=  29.7 dB  dist=  38.8 m  n_elig=7
+  t=   4.3 –    4.4 s  (  0.2s)  relay=   v3  link=NLOSv  snr=  26.9 dB  dist=  56.7 m  n_elig=6
+  t=   4.5 –    4.6 s  (  0.2s)  relay=   v4  link=NLOSv  snr=  24.9 dB  dist=  74.8 m  n_elig=5
+  t=   4.7 –    5.9 s  (  1.3s)  relay=   v8  link=  LOS  snr=  33.1 dB  dist=  83.5 m  n_elig=5
+  t=   6.0 –    6.2 s  (  0.3s)  relay=   v4  link=  LOS  snr=  34.6 dB  dist=  67.8 m  n_elig=6
+  t=   6.3 –    7.1 s  (  0.9s)  relay=   v3  link=  LOS  snr=  36.3 dB  dist=  54.1 m  n_elig=7
+  t=   7.2 –    8.8 s  (  1.7s)  relay=   v2  link=  LOS  snr=  37.4 dB  dist=  46.2 m  n_elig=8
+  t=   8.9 –   13.6 s  (  4.8s)  relay=   v1  link=  LOS  snr=  38.1 dB  dist=  42.1 m  n_elig=9
+  t=  13.7 –   13.8 s  (  0.2s)  relay=   v8  link=NLOSv  snr=  23.0 dB  dist=  97.6 m  n_elig=2
+  t=  13.9 –   15.6 s  (  1.8s)  relay=   v9  link=NLOSv  snr=  22.6 dB  dist= 103.4 m  n_elig=1
+  t=  15.7 –   16.5 s  (  0.9s)  relay=   v8  link=  LOS  snr=  31.9 dB  dist=  98.1 m  n_elig=4
+  t=  16.6 –   17.4 s  (  0.9s)  relay=   v2  link=  LOS  snr=  36.2 dB  dist=  54.2 m  n_elig=4
+  t=  17.5 –   18.4 s  (  1.0s)  relay=   v8  link=  LOS  snr=  32.3 dB  dist=  93.2 m  n_elig=5
+  t=  18.5 –   18.9 s  (  0.5s)  relay=   v1  link=  LOS  snr=  36.5 dB  dist=  52.2 m  n_elig=8
+  t=  19.0 –   19.5 s  (  0.6s)  relay=   v8  link=  LOS  snr=  32.7 dB  dist=  88.2 m  n_elig=6
+  t=  19.6 –   93.4 s  ( 73.9s)  relay=   v2  link=  LOS  snr=  35.5 dB  dist=  60.5 m  n_elig=7
+  t=  93.5 –  107.6 s  ( 14.2s)  relay=(gap)  link= None  snr=  nan  dB  dist=  nan  m  n_elig=0
+
+Coverage gaps — leader not in scenario (142 frames):
+  no-leader:   93.5 –  107.6 s  (142 frames, 14.2 s)
+
+Coverage gaps — leader present but no eligible relay (0 frames):
+  (none)
