@@ -21,15 +21,15 @@ The network is a single 4-way L-then-reverse-L path with two intersections:
 * **J1** at (200, 200): the 8-vehicle platoon (`v0..v7`) drives north and
   turns **right**; two joiners (`j0, j1`) enter from the **west** and merge
   in.
-* **J2** at (300, 200): 100 m later, the platoon turns **left** to go north.
+* **J2** at (300, 200): 76.8 m later, the platoon turns **left** to go north.
   Three vehicles peel off **straight east**: `v1`, `v3`, `v6` (the 2nd, 4th,
   and 7th positions). The remaining vehicles (`v0, v2, v4, v5, v7`) plus
-  the joiners (`j0, j1`) continue north.
+  the joiners (`j0, j1`) continue north on the extended 790 m north leg.
 
 The full path of the leader (`v0`) is:
 
 ```
-south leg (200 m) → right at J1 → east leg (100 m) → left at J2 → north leg (200 m)
+south leg (186.8 m) → right at J1 → east leg (76.8 m) → left at J2 → north leg (790 m)
 ```
 
 ## Files
@@ -86,8 +86,9 @@ Key constants:
 | `IVD`         | 15 m  | Time-headway-equivalent gap (≈ 1.5 s at 10 m/s) |
 | `SPACING`     | 19.5 m| `L + IVD = 4.5 + 15` |
 | `MIN_SPEED`   | 2 m/s | Lowest allowed command (intersection slowdowns) |
-| `K_P, K_D`    | 1.6, 2.0 | CACC gains |
+| `K_P, K_D`    | 3.0, 1.5 | CACC gains |
 | `MAX_ACCEL/DECEL` | 2.5 / -5.0 m/s² | Comfort limits |
+| `V_CRUISE_BOOST` | 15 m/s | Allowed when the chain has a large gap to close *and* the successor is at SPACING or further behind.  Leavers are not boosted. |
 
 State machine:
 
@@ -98,14 +99,20 @@ APPROACH  →  MERGE  →  SPLIT  →  CRUISE_N  →  DONE
 
 * **APPROACH**: platoon on south leg.
 * **MERGE**:  triggered when both joiners are on `e_west_in` and approaching
-  J1.  They are inserted into `platoon_order` between `v3` and `v4` when
-  their `p` closes to within 2 m of their predecessor.  Their CACC
-  predecessor in `platoon_order` becomes `v3` (for `j0`) and `j0` (for
-  `j1`); the rest of the platoon re-orders accordingly.
+  J1.  When a joiner's `p` closes to within 2 m of its predecessor and
+  *both* the joiner and the slot-pred (`v3`) are past J1, the joiner is
+  inserted into `platoon_order` **at the position that matches its
+  geometric position in p** — typically *in front of* `v3` on `e_j1_j2`,
+  since the joiner entered the east leg first.  This makes the CACC
+  chain follow the actual p-space order, so `v3` ends up following the
+  joiner (not `v2`, which is way ahead on the north leg).  The joiner
+  is braked to `MIN_SPEED` at the slot event so it can re-accelerate
+  to cruise without overshooting the slot.
 * **SPLIT**: triggered when `v0` is past J1 and the joiners are slotted.
   Leavers (`v1, v3, v6`) are released as their `p > SOUTH + EAST + 1`; they
   are removed from `platoon_order` and given `V_CRUISE`.
-* **CRUISE_N**: `v0` is well past J2; the rest follow.
+* **CRUISE_N**: `v0` is well past J2; the rest follow and the chain
+  compresses to `SPACING` on the extended north leg.
 
 ## Assertions (all passing)
 
@@ -117,12 +124,26 @@ APPROACH  →  MERGE  →  SPLIT  →  CRUISE_N  →  DONE
 2. **`no_collision`**: no two vehicles closer than 0.1 m at any sampled
    time-step (SUMO guarantees no overlap; we just enforce a sane
    near-collision floor).
-3. **`merge_order`**: at t=28 s, leavers are on `e_j2_east` and the rest
+3. **`merge_order`**: at t=60 s, leavers are on `e_j2_east` and the rest
    are past J1 heading north.
-4. **`split_order`**: at t=40 s, leavers (v1, v3, v6) are east of J2, all
+4. **`split_order`**: at t=90 s, leavers (v1, v3, v6) are east of J2, all
    other vehicles are on `e_j2_north`.
 5. **`leader_geometry`**: `v0` starts on the south leg (x≈201.6, y<200)
-   and ends on the north leg (x≈301.6, y≈399).
+   and ends on the north leg (x≈301.6, y≈999.5).
+6. **`j1_no_collision`**: minimum distance between the south-bound
+   platoon and the west-joiner (`j0`, `j1`) is ≥ 0.5 m — no J1 collision
+   during the merge.
+7. **`back_slows_for_joiner`**: back-of-platoon vehicles (`v4..v7`)
+   drop below 0.8 · V_CRUISE (= 8 m/s) during the merge window,
+   demonstrating the merge-IVD slowdown.
+8. **`joiner_maintains_ivd`**: at t=90 s, the gaps between consecutive
+   vehicles in the back of the merged platoon are within ±5 m of
+   `SPACING` (19.5 m).
+9. **`ivd_readapts`**: at t=90 s, after the three leavers and two
+   joiners have settled, every consecutive pair in the merged
+   platoon (`v0, v2, j0, j1, v4, v5, v7`) is within ±5 m of
+   `SPACING` — the IVD has been re-adapted after all leaver/joiner
+   changes.
 
 A summary is written to `summary.txt`.  `plot_scenario.py` exits non-zero
 if any assertion fails.
@@ -132,12 +153,11 @@ if any assertion fails.
 ```
 [t=0.0]   deploy j0 lp=81.7 target_p=167.3
 [t=0.0]   deploy j1 lp=62.2 target_p=147.8
-[t=14.6]  j0 SLOTTED  v3_p=218.2 j0_p=188.7 v4_p=190.5  order=['v0', 'v1', 'v2', 'v3', 'j0', 'v4', 'v5', 'v6', 'v7']
-[t=16.6]  j1 SLOTTED  v3_p=233.3 j1_p=198.4 j0_p=196.9 v4_p=212.0  order=['v0', 'v1', 'v2', 'v3', 'j0', 'j1', 'v4', 'v5', 'v6', 'v7']
-[t=16.6]  SPLIT phase (J2 left turn)
-[t=19.4]  LEAVER v1 released at J2
-[t=21.5]  LEAVER v3 released at J2
-[t=40.8]  LEAVER v6 released at J2
+[t=15.5]  j0 SLOTTED  v3_p=186.9 j0_p=190.4 v4_p=155.9  order=['v0', 'v1', 'v2', 'j0', 'v3', 'v4', 'v5', 'v6', 'v7']
+[t=15.8]  j1 SLOTTED  v3_p=187.3 j1_p=187.0 j0_p=191.3 v4_p=157.6  order=['v0', 'v1', 'v2', 'j0', 'j1', 'v3', 'v4', 'v5', 'v6', 'v7']
+[t=16.6]  LEAVER v1 released at J2
+[t=30.1]  LEAVER v3 released at J2
+[t=40.9]  LEAVER v6 released at J2
 ```
 
 Min speeds per vehicle:
@@ -149,7 +169,9 @@ j0: 2.0 m/s     j1: 2.0 m/s
 ```
 
 (v0 is the only vehicle that *never* slows below 10 m/s; the others have
-to brake when crossing J1, the joiners, or J2.)
+to brake when crossing J1, the joiners, or J2.  The `v3` min speed is
+the slot-instant brake; all vehicles that slow to 2 m/s do so only
+for a fraction of a second at the joiner slot or junction corner.)
 
 ## Notes for ns-3
 
