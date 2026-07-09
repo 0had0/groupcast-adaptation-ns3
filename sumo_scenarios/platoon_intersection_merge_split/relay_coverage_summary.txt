@@ -1,0 +1,21 @@
+# Relay downstream-coverage summary  (1077 time-steps)
+# Input:  distances_classified.csv, relay_selection.csv
+# Output: relay_coverage.csv
+
+Leader active               : 935
+Leader exited               : 142
+100 % coverage              : 698
+Partial coverage            : 237
+No-coverage (leader gone)   : 142
+Mean coverage (active only) : 95.06 %
+
+Frames where the single relay cannot reach everyone:
+  Total frames                : 237
+  Max unreachable recipients  : 3
+  Mean unreachable            : 0.35
+  Worst frames (n_unreachable = 3):
+    t=  16.1s  relay=   v8  unreachable=[3;4;5]
+    t=  22.6s  relay=   v2  unreachable=[4;5;8]
+    t=  22.7s  relay=   v2  unreachable=[4;5;8]
+    t=  22.8s  relay=   v2  unreachable=[4;5;8]
+    t=  22.9s  relay=   v2  unreachable=[4;5;8]

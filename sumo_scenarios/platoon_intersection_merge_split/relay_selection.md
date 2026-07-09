@@ -33,7 +33,10 @@ For each simulation time `t` (one row per ordered `(tx, rx)` pair in
 3. **Recipients** = active vehicles, minus
    - the leader itself (no self-relay),
    - leavers (`v1`, `v3`, `v6`) that have already departed — i.e.
-     `x > 320 m` **and** `y < 195 m` (on the east leg well past J2),
+     `x > 310 m` (on the east leg, well past the J2 corner at
+     `x = 300`).  The leaver's lane sits at `y ≈ 198.4`, the same y
+     as the leader's east-bound approach, so a y-cutoff cannot
+     disambiguate — an x-cutoff is required.
    - off-map vehicles (`x > 510 m` or `y > 1010 m`).
    Joiners (`j0` = `8`, `j1` = `9`) are recipients from the moment
    they appear on the west approach; once merged they stay in the

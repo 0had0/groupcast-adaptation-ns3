@@ -37,8 +37,10 @@ JOINERS   = frozenset({8, 9})       # j0, j1
 
 # Leavers "have departed" once they are on the east leg, well past J2.
 # J2 is at (300, 200); the leaver exit lane heads east at y ≈ 198.4.
-LEAVER_DEPARTED_X    = 320.0
-LEAVER_DEPARTED_YMAX = 195.0
+# We use an x-threshold rather than y because the leaver's lane sits
+# at y=198.4 — the same y as the leader's east-bound approach — so a
+# y-cutoff cannot disambiguate.
+LEAVER_DEPARTED_X = 310.0   # > 300 = past the J2 corner
 
 # Off-map clamp — vehicles that have left the network entirely.
 X_MAX, Y_MAX = 510.0, 1010.0
@@ -57,15 +59,14 @@ def is_recipient(nid: int, x: float, y: float) -> bool:
     Filtering rules (see `relay_selection.md` for justification):
       * nid == LEADER_ID    → False   (no self-relay)
       * off-map             → False   (x > X_MAX or y > Y_MAX)
-      * departed leaver     → False   (y < LEAVER_DEPARTED_YMAX
-                                       AND x > LEAVER_DEPARTED_X)
+      * departed leaver     → False   (x > LEAVER_DEPARTED_X)
       * otherwise           → True
     """
     if nid == LEADER_ID:
         return False
     if x > X_MAX or y > Y_MAX or x < -5 or y < -5:
         return False
-    if nid in LEAVERS and y < LEAVER_DEPARTED_YMAX and x > LEAVER_DEPARTED_X:
+    if nid in LEAVERS and x > LEAVER_DEPARTED_X:
         return False
     return True
 
