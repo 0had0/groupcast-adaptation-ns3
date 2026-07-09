@@ -21,7 +21,7 @@
     <node id="n_south"  x="0"    y="-200" type="dead_end"/>
     <node id="n_west"   x="-200" y="0"    type="dead_end"/>
     <node id="n_j2east" x="300"  y="0"    type="dead_end"/>
-    <node id="n_north"  x="100"  y="200"  type="dead_end"/>
+    <node id="n_north"  x="100"  y="800"  type="dead_end"/>
 
     <!-- Intersections (priority junctions for turns) -->
     <node id="n_j1"     x="0"    y="0"    type="priority" radius="10.0"/>

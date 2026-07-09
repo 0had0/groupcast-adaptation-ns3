@@ -63,7 +63,7 @@ SUMO_TOOLS  = Path("/Users/hadih/Documents/groupcast-adaptation-ns3/sumo/tools")
 # nominal values in nodes.nod.xml.  Keep them in sync with build_net.sh.
 SOUTH_LENGTH  = 186.80   # e_south_in
 EAST_LENGTH   = 76.80    # e_j1_j2
-NORTH_LENGTH  = 190.00   # e_j2_north
+NORTH_LENGTH  = 790.00   # e_j2_north
 WEST_LENGTH   = 190.00   # e_west_in
 J1 = (0.0,   0.0)
 J2 = (100.0, 0.0)
@@ -74,12 +74,28 @@ VEH_LENGTH  = 4.5
 PLATOON_IVD = 15.0        # m — safe time-headway-based gap
 SPACING     = VEH_LENGTH + PLATOON_IVD   # 19.5 m front-to-front
 V_CRUISE    = 10.0        # m/s  (36 km/h)
+V_CRUISE_BOOST = 15.0    # m/s  allowed when gap > SPACING to close ranks
 V_TURN      = 5.0         # m/s  through the junction corners
+
+# Slotted joiners try to cruise at this speed so the back of the platoon
+# doesn't get stuck at MIN_SPEED while the joiner is still mid-merge.
+# It is strictly less than V_CRUISE so the joiner will slow slightly
+# if it gets too close to its leader, but high enough to give the back
+# of the platoon forward progress.
+V_JOIN_CRUISE = 6.0       # m/s
+
+# During a joiner merge, the back of the platoon (the vehicles
+# following the joiner in platoon_order) will slow down to let the
+# joiner catch up.  V_MERGE_BACK is the *minimum* speed they drop to
+# (so they keep making forward progress and the merge finishes in a
+# reasonable time).
+V_MERGE_BACK = 4.0       # m/s
+
 V_JOINER    = 10.0        # m/s  joiner cruise
-T_SIM       = 90.0
+T_SIM       = 150.0
 DT          = 0.1
-KP          = 1.6
-KD          = 2.0
+KP          = 3.0
+KD          = 1.5
 MAX_ACCEL   = 2.5
 MAX_DECEL   = -5.0
 MIN_SPEED   = 2.0         # never let a vehicle stop (also = leaver hold speed)
@@ -143,17 +159,19 @@ def xy_to_p(x: float, y: float) -> float:
       e_south_in : x≈201.6, y in [13.20, 200.0]    (lane_pos 0 at y=13.2, length 186.8)
       e_west_in  : y≈198.4, x in [10.00, 200.0]    (lane_pos 0 at x=10, length 190.0)
       e_j1_j2    : y≈198.4, x in [213.20, 290.0]   (length 76.8)
-      e_j2_north : x≈301.6, y in [210.0, 400.0]    (length 190.0)
+      e_j2_north : x≈301.6, y in [210.0, 1000.0]   (length 790.0)
       e_j2_east  : y≈198.4, x in [313.20, 500.0]   (length 186.8)
 
     Cumulative p:
       south leg: 0..186.8
       east leg : 186.8..263.6
-      north leg: 263.6..453.6
+      north leg: 263.6..1053.6
       leaver east (J2 straight): 263.6..450.4
     """
-    # south leg
-    if 200.0 < x < 203.5 and 0.0 <= y <= 200.0:
+    # south leg (but NOT the J1 internal corner region; check
+    # J1 internal first to avoid mis-mapping joiners that are
+    # in the J1 internal corner as "south leg")
+    if 200.0 < x < 203.5 and 0.0 <= y <= 187.0:
         return y
     # J1 internal corner (right turn from south to east)
     if 200.0 < x < 214.0 and 187.0 < y < 200.0:
@@ -165,7 +183,7 @@ def xy_to_p(x: float, y: float) -> float:
     if 289.0 < x < 315.0 and 195.0 < y < 211.0:
         return 186.80 + 76.80 + (x - 290.0)
     # north leg
-    if 300.0 < x < 304.0 and 210.0 <= y <= 400.0:
+    if 300.0 < x < 304.0 and 210.0 <= y <= 1000.0:
         return 263.60 + (y - 210.0)
     # leaver east (past J2)
     if 313.0 < x < 510.0 and abs(y - 198.4) < 5.0:
@@ -252,13 +270,54 @@ def set_spd(vid: str, v: float, traci) -> None:
 # ── CACC law ───────────────────────────────────────────────────────────────
 
 def cacc_step(self_vid: str, self_p: float, self_v: float,
-              pred_p: float, pred_v: float, traci) -> float:
+              pred_p: float, pred_v: float, succ_p: float, succ_v: float,
+              traci, leaver: bool = False) -> float:
+    """Compute CACC speed for a single vehicle.
+
+    `succ_p` is the position of the immediate successor in
+    platoon_order, or -inf if there is no successor.  This is used
+    so the CACC chain doesn't run away: when the chain has a gap
+    that needs closing, only the LAST vehicle in the chain boosts
+    above V_CRUISE; the earlier ones stay at V_CRUISE so the last
+    vehicle can actually catch up.
+
+    `succ_v` is the speed of the successor (or 0 if no successor).
+    """
     gap = pred_p - self_p - VEH_LENGTH
-    acc = KP * (gap - PLATOON_IVD) + KD * (pred_v - self_v)
+    succ_gap = (succ_p - self_p - VEH_LENGTH) if succ_p > 0 else -float("inf")
+    # If we're at or below the desired IVD, we should NEVER chase
+    # the pred — that just closes the gap further.  Disable KD in
+    # that regime so we don't accelerate into the pred's bumper.
+    if gap < PLATOON_IVD:
+        acc = KP * (gap - PLATOON_IVD)        # only KP, brake-only
+    elif gap > SPACING:
+        acc = KP * (gap - PLATOON_IVD) + KD * (pred_v - self_v)
+    else:
+        acc = 0.0                              # hold speed
     acc = max(MAX_DECEL, min(MAX_ACCEL, acc))
     new_v = max(MIN_SPEED, self_v + acc * DT)
-    # Cap to leader cruise — don't let followers overshoot the leader
-    new_v = min(new_v, V_CRUISE)
+    # V_CRUISE_BOOST when the gap to pred is large AND the successor
+    # is at SPACING or further behind (succ_gap <= -SPACING).  If
+    # the successor is too close or ahead of us, boosting would
+    # risk rear-ending / overtaking them — so stay at V_CRUISE
+    # and let the car-following brake if needed.
+    # V_CRUISE_BOOST when the gap to pred is large AND the successor
+    # is at SPACING or further behind (succ_gap <= -SPACING).  If
+    # the successor is too close or ahead of us, boosting would
+    # risk rear-ending / overtaking them — so stay at V_CRUISE
+    # and let the car-following brake if needed.
+    if gap > SPACING and succ_gap <= -SPACING and not leaver:
+        v_cap = V_CRUISE_BOOST
+    else:
+        v_cap = V_CRUISE
+    # If we're already at proper distance from our pred AND our
+    # successor is too close (or ahead of us), cap our speed at
+    # theirs so we don't rear-end them.  We DON'T cap when gap to
+    # pred is large — in that case we have legitimate room to
+    # boost and the succ will catch up later.
+    if gap < SPACING and succ_p > 0 and succ_gap > -SPACING:
+        v_cap = min(v_cap, succ_v)
+    new_v = min(new_v, v_cap)
     return new_v
 
 
@@ -364,6 +423,12 @@ def run_simulation() -> None:
     traci.simulationStep()
     step = 1
 
+    # Per-vehicle "brake hold" — if a vehicle is in this dict with a
+    # future time, the CACC loop will force it to MIN_SPEED until that
+    # time passes.  Currently unused (the geometric platoon-order fix
+    # below makes it unnecessary), but kept as an escape hatch.
+    brake_hold: dict[str, float] = {}
+
     # Deploy joiners on e_west_in at t≈0.
     for k, jid in enumerate(joiner_vids):
         target_p_jk = (joiner_target_p_j0 if k == 0 else joiner_target_p_j1)
@@ -397,14 +462,16 @@ def run_simulation() -> None:
         #    edges where we can't read lane position.  ──
         leader = "v0"
         vL_cmd = leader_speed(t)
-        # small proportional nudge to track target p
+        # Track the target p exactly at V_CRUISE — no 5% boost on
+        # the leader, otherwise the gap from the leader to the
+        # rest of the chain grows and the chain can't compress.
         try:
             edge_L, lp_L, _, _ = get_state(leader)
             if edge_L and not edge_L.startswith(":"):
                 pL_cur = get_p(leader, edge_L, lp_L)
                 pL_tgt = leader_p_target(t)
                 vL_cmd = max(MIN_SPEED,
-                             min(V_CRUISE * 1.05,
+                             min(V_CRUISE,
                                  vL_cmd + 0.6 * (pL_tgt - pL_cur)))
         except Exception:
             pass
@@ -451,9 +518,30 @@ def run_simulation() -> None:
         # ── Platoon CACC: each non-leader follows its immediate predecessor
         #    in the *platoon_order* list (not the nearest in p, which
         #    could be a joiner or a leaver that we're passing). ──
+        # Two cases:
+        #   (a) pred is AHEAD in p (normal CACC): maintain SPACING.
+        #   (b) pred is BEHIND in p (merge transient, the joiner is
+        #       closing the gap from behind to slot in): slow down
+        #       proportional to (behind_gap + IVD) so the joiner can
+        #       catch up and slot in.  This is what makes the back of
+        #       the platoon "reduce their speed to maintain a safe
+        #       IVD" while the joiner slots in. ──
+        # When the self is a freshly-slotted joiner, we override the
+        # CACC to V_CRUISE: the joiner needs to make forward progress
+        # so the back of the platoon doesn't lock at MIN_SPEED
+        # waiting for it. ──
         order_index = {vid: i for i, vid in enumerate(platoon_order)}
+        slotted_joiners = {"j0", "j1"} & set(platoon_order)
         for vid in platoon_order:
             if vid == leader or vid not in cur:
+                continue
+            # Brake-hold: if this vehicle is in a brake_hold window
+            # (e.g. v3 right after j0 slotted in front of it), force
+            # MIN_SPEED and skip the CACC calculation entirely.
+            if vid in brake_hold and brake_hold[vid] > t:
+                v_cmd = MIN_SPEED
+                last_cmd[vid] = v_cmd
+                set_spd(vid, v_cmd, traci)
                 continue
             self_p, self_v, _, _ = cur[vid]
             # Find predecessor in platoon_order
@@ -467,12 +555,61 @@ def run_simulation() -> None:
             if pred_vid is None:
                 continue
             pred_p, pred_v, _, _ = cur[pred_vid]
-            if pred_p <= self_p + 0.05:
-                # Predecessor is not actually ahead in p (geometry
-                # weirdness); fall back to small cruise.
-                v_cmd = V_CRUISE
+            # Find successor in platoon_order (for "boost only at the back")
+            succ_vid = None
+            for j in range(my_idx + 1, len(platoon_order)):
+                cand = platoon_order[j]
+                if cand in cur:
+                    succ_vid = cand
+                    break
+            succ_p = cur[succ_vid][0] if succ_vid else -1.0
+            succ_v = cur[succ_vid][1] if succ_vid else 0.0
+            # Slotted joiners: only force V_JOIN_CRUISE if we're comfortably
+            # behind our pred (gap >= SPACING).  If we're too close
+            # to (or ahead of) our pred, we MUST let the brake logic
+            # fire — otherwise we oscillate between V_JOIN_CRUISE
+            # and MIN_SPEED and can collide with the pred.
+            if vid in slotted_joiners and self_v < V_JOIN_CRUISE and pred_p + SPACING <= self_p:
+                v_cmd = V_JOIN_CRUISE
+            elif pred_p > self_p + 0.05:
+                # (a) Pred ahead: normal CACC, but for the back of
+                # the platoon (vehicles following a slotted joiner
+                # or a slowed vehicle) we relax the IVD floor so
+                # they don't keep cascading down to MIN_SPEED.
+                if vid in slotted_joiners or pred_vid in slotted_joiners:
+                    # Follow with a more lenient CACC: don't go
+                    # below V_MERGE_BACK even if the gap is small
+                    # (the joiner is still settling into place).
+                    raw = cacc_step(vid, self_p, self_v, pred_p, pred_v, succ_p, succ_v,
+                                    traci, leaver=vid in leaver_ids)
+                    v_cmd = max(V_MERGE_BACK, raw)
+                else:
+                    v_cmd = cacc_step(vid, self_p, self_v, pred_p, pred_v, succ_p, succ_v,
+                                      traci, leaver=vid in leaver_ids)
             else:
-                v_cmd = cacc_step(vid, self_p, self_v, pred_p, pred_v, traci)
+                # (b) Pred behind (or coincident): merge case — slow
+                # down so the pred can catch up.  Brake proportional
+                # to the behind-gap + IVD so the back of the platoon
+                # "reduces speed to maintain a safe IVD from the
+                # joiner".  As the pred catches up, the brake
+                # releases and we naturally transition back to
+                # case (a) once the pred is in front of us. ──
+                behind_gap = self_p - pred_p - VEH_LENGTH
+                if behind_gap > 0.0:
+                    # Pred is behind: mild brake proportional to the
+                    # gap, capped so we never go below
+                    # V_MERGE_BACK (= 4 m/s) — this is the lowest
+                    # speed the back of the platoon will drop to
+                    # while the joiner slots in.
+                    brake = 0.05 * KP * (behind_gap + PLATOON_IVD)
+                    v_cmd = max(V_MERGE_BACK, V_CRUISE - brake)
+                else:
+                    # Pred is right at or past our rear bumper:
+                    # close-quarters merge.  SUMO's car-following
+                    # can only brake so fast (MAX_DECEL), so we
+                    # force our desired speed to MIN_SPEED so the
+                    # controller's command matches the physics.
+                    v_cmd = MIN_SPEED
             last_cmd[vid] = v_cmd
             set_spd(vid, v_cmd, traci)
 
@@ -491,7 +628,7 @@ def run_simulation() -> None:
                     set_spd(jid, V_JOINER, traci)
                     continue
                 target_p = v3_p - (k + 1) * SPACING
-                v_cmd = cacc_step(jid, j_p, j_v, target_p, V_CRUISE, traci)
+                v_cmd = cacc_step(jid, j_p, j_v, target_p, V_CRUISE, -1.0, 0.0, traci)
                 last_cmd[jid] = v_cmd
                 set_spd(jid, v_cmd, traci)
 
@@ -508,11 +645,13 @@ def run_simulation() -> None:
             state = State.MERGE
             print(f"[t={t:.1f}] → MERGE phase (joiners on e_west_in)")
 
-        # Once joiners are in p between v3 and v4 → slot them in.
-        # Use the unified p coordinate (works across internal edges).
-        # The slot fires when j0 has closed the gap to v4 (j0_p ≈ v4_p)
-        # from behind, so that inserting j0 between v3 and v4 in the
-        # CACC chain corresponds to j0 actually being between them in p.
+        # ── Slot the joiners into the platoon early: when the
+        #    joiner is still on the WEST APPROACH and approaching J1
+        #    (within ~SPACING of the intersection).  This gives the
+        #    back of the platoon (v4, v5, v6, v7) enough time to
+        #    slow down so the joiner can catch up and slot in
+        #    seamlessly with a SPACING gap.  We slot j0 first, then
+        #    j1 once j0 has made enough progress. ──
         if state == State.MERGE and insert_pending:
             j0_state = cur.get("j0")
             j1_state = cur.get("j1")
@@ -520,23 +659,61 @@ def run_simulation() -> None:
             v4_state2 = cur.get("v4")
             if v3_state2 and v4_state2:
                 v3_p, v4_p = v3_state2[0], v4_state2[0]
-                # j0 must be on e_j1_j2 (or past J2) AND have closed
-                # the gap to v4 to be BUFFER or less.  BUFFER = 2 m
-                # (i.e. j0 is right behind v4 and ready to slot in).
-                BUFFER = 2.0
+                # j0 slot: when j0 is on the west approach or just
+                # past J1, and v4 is approaching J1 (so v4 will be
+                # the one to brake).  Condition: j0 is "close to
+                # entering" the platoon — within SPACING of v3's
+                # position, OR on the west approach within 5m of J1.
                 if j0_state and "j0" not in platoon_order:
                     j0_p = j0_state[0]
-                    if j0_p > SOUTH_LENGTH and v4_p - BUFFER <= j0_p <= v4_p + BUFFER:
-                        idx_v3 = platoon_order.index("v3")
-                        platoon_order.insert(idx_v3 + 1, "j0")
+                    j0_e = j0_state[2]
+                    # Slot only after v3 has crossed J1 too.  Otherwise
+                    # j0 (already past J1 on e_j1_j2) ends up in front
+                    # of v3 (still on south leg) and v3 at V_CRUISE
+                    # catches j0 from behind.  v3_p > SOUTH_LENGTH
+                    # ensures v3 is on e_j1_j2.
+                    j0_close = (j0_e == "e_west_in" and j0_p > SOUTH_LENGTH - 5 and
+                                v3_p > SOUTH_LENGTH) or \
+                                (j0_e != "e_west_in" and j0_p > SOUTH_LENGTH and
+                                 v3_p > SOUTH_LENGTH and
+                                 abs(v3_p - j0_p) < 2 * SPACING)
+                    if j0_close:
+                        # j0's p can be ahead of v3 (j0 entered
+                        # e_j1_j2 first) or behind (v3 entered
+                        # first).  Insert j0 at the correct
+                        # position in platoon order so the CACC
+                        # chain reflects p-space proximity.
+                        if j0_p > v3_p:
+                            # j0 geometrically ahead of v3 on
+                            # e_j1_j2 — insert j0 before v3.
+                            idx = platoon_order.index("v3")
+                            platoon_order.insert(idx, "j0")
+                        else:
+                            # j0 behind v3 (rare) — insert after.
+                            idx = platoon_order.index("v3")
+                            platoon_order.insert(idx + 1, "j0")
+                        # IMMEDIATELY brake the just-slotted joiner so
+                        # it doesn't overshoot v3 (which can happen if
+                        # the slot fires when j0 is already past v3).
+                        set_spd("j0", MIN_SPEED, traci)
+                        run_simulation._last_cmd["j0"] = MIN_SPEED
                         print(f"[t={t:.1f}] j0 SLOTTED  v3_p={v3_p:.1f} j0_p={j0_p:.1f} v4_p={v4_p:.1f}  order={platoon_order}")
-                # j1 must have closed the gap to j0 similarly.
+                # j1 slot: after j0 has progressed past J1.
                 if "j0" in platoon_order and j1_state and "j1" not in platoon_order:
                     j0_p = cur["j0"][0]
                     j1_p = j1_state[0]
-                    if j1_p > SOUTH_LENGTH and j0_p - BUFFER <= j1_p <= j0_p + BUFFER:
+                    j1_e = j1_state[2]
+                    j1_close = (j1_e == "e_west_in" and j1_p > SOUTH_LENGTH - 5 and
+                                v3_p > SOUTH_LENGTH) or \
+                                (j1_e != "e_west_in" and j1_p > SOUTH_LENGTH and
+                                 v3_p > SOUTH_LENGTH and
+                                 abs(j0_p - j1_p) < 2 * SPACING)
+                    if j1_close:
                         j0_idx = platoon_order.index("j0")
                         platoon_order.insert(j0_idx + 1, "j1")
+                        # IMMEDIATELY brake the just-slotted joiner
+                        set_spd("j1", MIN_SPEED, traci)
+                        run_simulation._last_cmd["j1"] = MIN_SPEED
                         insert_pending = False
                         print(f"[t={t:.1f}] j1 SLOTTED  v3_p={v3_p:.1f} j1_p={j1_p:.1f} j0_p={j0_p:.1f} v4_p={v4_p:.1f}  order={platoon_order}")
 
