@@ -1,0 +1,107 @@
+═══════════════════════════════════════════════════════════════════════════
+MULTI-RELAY SELECTION ALGORITHM  (pseudocode, V2V groupcast over a
+platoon with a single leader, single-TX at the leader, TDMA-style relay
+chain for downstream coverage)
+═══════════════════════════════════════════════════════════════════════════
+
+INPUTS
+  V         : set of vehicles in the scenario  (V = {v0, v1, ..., vN})
+  L         : leader id                        (L = v0)
+  T         : simulation time steps            (T = {1, 2, ..., T_max})
+  active(v,t): predicate — vehicle v is in the scenario at time t
+               (excludes leavers post-departure, joiners pre-entry, …)
+  link(a,b,t): LOS | NLOSv | NLOS   — geometry-classified link from
+               a to b at time t
+  SINR(a,b,t): received SINR (or SNR in single-TX model) at b when a
+               transmits at t
+  SINR_min  : minimum SINR for successful decoding
+               (default 5 dB  =  802.11p QPSK 1/2)
+  K_max     : maximum allowed hop count (default 2)
+  Δt        : relay slot duration (default 100 µs ≪ beacon period)
+
+OUTPUT
+  R_t        : ordered list of transmitters scheduled at step t
+               (R_t[0] = L always, R_t[i] = chosen relay for hop i)
+  coverage(t): count of recipients reached (direct + via relay chain)
+  unreachable(t): recipients with no usable path from L within K_max
+
+────────────────────────────────────────────────────────────────────────
+ALGORITHM
+────────────────────────────────────────────────────────────────────────
+  for each time step t ∈ T do
+    ── 1.  Candidate recipient set ──────────────────────────────────
+    Rcp ← { v ∈ V : v ≠ L  ∧  active(v, t) }
+    A   ← Rcp                                  # active recipients
+
+    ── 2.  Direct coverage (1 hop from leader) ──────────────────────
+    D   ← { v ∈ A : link(L, v, t) ∈ {LOS, NLOSv}
+                 ∧ SINR(L, v, t) ≥ SINR_min }
+    U   ← A \ D                                # uncovered so far
+
+    ── 3.  Build relay set greedily, hop by hop ─────────────────────
+    Relay ← [L]                # scheduled transmitters, hop 0 = leader
+    Hop   ← 0
+    while U ≠ ∅  and  Hop < K_max do
+      Hop ← Hop + 1
+      Tx  ← Relay[Hop − 1]     # last hop transmitter
+      Best ← ⊥
+      for each candidate c ∈ A \ Relay do
+        # Reach: which currently-uncovered receivers can c cover?
+        Reach_c ← { v ∈ U : link(c, v, t) ∈ {LOS, NLOSv}
+                             ∧ SINR(c, v, t) ≥ SINR_min }
+        # Cost: does c itself have a usable link from the previous hop?
+        if Reach_c ≠ ∅  and  SINR(Tx, c, t) ≥ SINR_min then
+          # Greedy score: marginal coverage gain / 1 (each hop costs 1 slot)
+          Score_c ← |Reach_c|
+          if Best = ⊥  or  Score_c > Score_Best then
+            Best ← c ;  Reach_Best ← Reach_c ;  Score_Best ← Score_c
+      if Best = ⊥ then
+        break                   # no candidate adds coverage; stop
+      Relay.append(Best)
+      U ← U \ Reach_Best        # remove newly-covered receivers
+    end while
+
+    ── 4.  Emit schedule for step t ─────────────────────────────────
+    Schedule[t] ← [ (r, t + i·Δt)  for i, r in enumerate(Relay) ]
+    coverage(t) ← |A| − |U|        # reachable this step
+    unreachable(t) ← U
+  end for
+
+  return Schedule, coverage, unreachable
+
+────────────────────────────────────────────────────────────────────────
+NOTES
+────────────────────────────────────────────────────────────────────────
+1.  Link class (LOS / NLOSv / NLOS) is geometry-based and identical
+    across the single-TX (5.9 GHz, 28 GHz) and all-TX models; only
+    the SINR value varies.
+
+2.  The greedy step is O(|A|²) per hop; |A| ≤ 9 in the current
+    scenario, so this is trivially fast.  For larger platoons, sort
+    candidates by Score before the inner loop and early-exit on the
+    first non-zero score.
+
+3.  Tie-breaks (in priority order):
+        a) higher SINR margin to the previous hop
+        b) lower hop index   (favours shorter paths)
+        c) lower vehicle id  (deterministic across runs)
+
+4.  Extension to K_max > 2: outer while-loop is unchanged; the greedy
+    inner loop reuses Relay[Hop − 1] as the next-hop source.
+    Worst case: K_max = |A| (pure store-and-forward).
+
+5.  TDMA constraint: each scheduled transmitter is silent in the
+    other hops, so there is no self-interference between hops — every
+    hop is single-TX in its own slot.
+
+6.  Coverage gap: if unreachable(t) ≠ ∅, the groupcast cannot reach
+    those vehicles within K_max hops.  Options:
+        - increase K_max        (more hops, more latency)
+        - use beamforming       (narrower beam, longer LOS reach)
+        - re-route via a different leader (out of scope here)
+
+7.  In the platoon_intersection_merge_split scenario the algorithm
+    converges in 1 hop for the leader's outgoing groupcast (the
+    relay is chosen from {v_i : LOS/NLOSv to v0}); K_max = 1 is the
+    baseline, K_max = 2 covers the J2-crossing window where a south-
+    leg secondary relay would reach the trailers that v2 cannot.
