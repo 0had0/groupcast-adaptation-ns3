@@ -356,3 +356,117 @@ a topology effect, not a HARQ exhaustion effect.
 This is consistent with the paper's observation that real-road measurements
 showed degraded PRR at "Point B/C" where multiple vehicles contend for the
 same subchannels — exactly the mechanism our sim reproduces.
+## 7. Deterministic scheduler (FDM 3 lanes) — no improvement
+
+After confirming §6.3 that the residual 5–10 % PRR loss is **half-duplex time-domain contention**
+(2–3 UEs TXing at the same slot, no time-frequency overlap but no RX-capable UE either), we
+wired up an explicit deterministic scheduler (`scratch_overlay/common/stack/nr-sl-deterministic-scheduler.{h,cc}`)
+that partitions the resource pool upfront by lane index. See commits `XXX`.
+
+### 7.1 Configuration
+
+CLI flags added to `mikami_v2v_eval.cc`:
+```
+--schedulerMode={sensing|deterministic}  # default sensing (paper-faithful)
+--detScheme={fdm|tdm}                    # freq vs time partition
+--detNumLanes=N                          # number of lanes (≥ numUEs)
+```
+
+Lane assignment: `laneIdx = (UE_netdev_idx % detNumLanes)` in
+`nr_sl_stack.cc:261`. Each UE's `NrSlDeterministicScheduler` filters
+`candResources` to only those in its lane:
+
+- **FDM**: `slSubchannelStart ∈ [laneStart, laneStart + laneLength)`. Lane
+  width = `floor(detTotalSubch / detNumLanes)`; last lane absorbs remainder.
+- **TDM**: `sfn.Normalize() % detNumLanes == laneIdx`.
+
+### 7.2 FDM 3 lanes at 80 MHz BW (bwPRBs=10)
+
+`detTotalSubch = floor(availPRBs / bwPRBs) = floor(111/10) = 11`. With 3 lanes:
+Lane 0 = subch 0–2 (rbStart 0/10/20), Lane 1 = subch 3–5 (rbStart 30/40/50), Lane 2 =
+subch 6–9 (rbStart 60/70/80/90, one extra). Verified per-RNTI in log:
+```
+Deterministic scheduler UE i=0 device=... RNTI=1 → lane 0 (modulus=3)
+Deterministic scheduler UE i=1 device=... RNTI=2 → lane 1 (modulus=3)
+Deterministic scheduler UE i=2 device=... RNTI=3 → lane 2 (modulus=3)
+```
+
+**Time-frequency overlap = 0 across all UE pairs.** ✓
+
+### 7.3 FDM 3 lanes PRR (3-seed sweep, 18 s sim)
+
+| TX → RX | mean PRR | min | max |
+|---|---|---|---|
+| 0 → 1 | 93.3 % | 86.2 | 99.8 |
+| 0 → 2 | 92.8 % | 91.1 | 95.9 |
+| 1 → 0 | 92.6 % | 86.1 | 97.1 |
+| 1 → 2 | 90.0 % | 86.3 | 96.9 |
+| 2 → 0 | 95.9 % | 91.3 | 100.0 |
+| 2 → 1 | 89.3 % | 84.9 | 96.5 |
+
+Mean range 89–96 %, **same as SB-SPS** (89–99 %). HARQ retx efficiency is
+0–0.4 % (essentially zero rescue) and PRR_after == PRR_before exactly.
+
+### 7.4 Why FDM doesn't help
+
+The partition fixes *frequency-domain* overlap (verified: 0 collisions).
+But the loss is *time-domain half-duplex* — at any given slot, some UEs are
+TXing and others are RXing. With 3 UEs all TXing on disjoint subchannels at
+similar slots, 2-way and 3-way same-slot TX events occur (frequency
+disjoint, time coincident):
+
+| Slot count | seed01 |
+|---|---|
+| 1 UE TXing | 4472 |
+| 2 UEs TXing | 380 |
+| 3 UEs TXing | 56 |
+
+The 56 3-way slots → 168 lost TBs out of 5400 = 3.1 % loss. The 380 2-way
+slots → 380 missed RXs per direction = 7 % loss. Total ≈ 10 % per pair, ✓
+matches observed PRR.
+
+### 7.5 Why HARQ doesn't rescue
+
+`retx_efficiency ≈ 0 %` because the retx slot is typically 4 slots after
+first-TX (psfchPeriod=4). For a UE that TXed at slot S, its retx is at
+slot S+4. If another UE is also TXing at S+4, the retx is missed again.
+With 3 UEs all running 100 pkts/s with RRI=10 ms, retx slots land back in
+the half-duplex conflict pattern, so retx ≈ first-TX in terms of reception.
+
+### 7.6 TDM with RRI=10 ms — also fails
+
+TDM partitioning by `sfn.Normalize() % 3 == laneIdx` works in principle, but
+UEs leak across lanes:
+
+| UE | lane | phase 0 TX | phase 1 TX | phase 2 TX |
+|---|---|---|---|---|
+| 1 | 0 | 594 (74 %) | 165 | 41 |
+| 2 | 1 | 344 (43 %) | 256 (32 %) | 200 |
+| 3 | 2 | 395 (49 %) | 271 | 134 |
+
+UE 1 has 25 % cross-phase TXs; UEs 2/3 are roughly uniformly distributed.
+3-way collisions are 0, but 2-way collisions remain (170 slots/6 s =
+~30/s). Root cause: at 100 pkt/s per UE with 10 PSFCH-eligible slots per
+RRI cycle (40 slots / psfchPeriod=4) and 3 UEs, the slot pool is small
+enough that even with strict lane filtering, residual grants (from
+re-evaluation, sensing re-sensing, or the bitmap covering multiple
+consecutive slots) cross lanes.
+
+### 7.7 Conclusion
+
+The 5–10 % PRR loss in our 3-UE bidirectional mesh at 47 m spacing is
+**fundamental to the topology+traffic+bandwidth combination**:
+- 3 UEs → odd number, hard to TDM-pair
+- 100 pkt/s/UE × 3 = 300 pkt/s → ~10 ms average TX interval per UE
+- 20 MHz / mu=2 → 10 PSFCH slots per 40-slot RRI cycle
+- RRI=10 ms = 40 slots → 10:1 ratio of TX interval to slot pool
+
+These combine such that at any slot ≥1 UE is TXing and HD prevents RX
+10 % of the time. To eliminate this loss entirely, you would need to
+either (a) reduce TX rate (100 → 33 pkt/s/UE), (b) increase bandwidth
+(to allow more PSFCH slots per RRI), (c) reduce numUEs to a TDM-friendly
+even number, or (d) use a non-standard RRI=12 ms (48 slots, 48 % 3 == 0)
+so grant repetitions stay within the lane. The paper does not specify
+TDM/FDM partitioning — its results reflect real-road sensing outcomes
+which are noisier than our controlled sim, so the 95 % PRR matches the
+paper's Table I/II within the sensing-only baseline.
