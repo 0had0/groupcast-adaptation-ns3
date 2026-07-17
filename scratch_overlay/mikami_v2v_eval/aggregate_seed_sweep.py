@@ -240,6 +240,8 @@ def main():
                                    "harq_retx_efficiency",
                                    "first_tx_tx", "first_tx_rx",
                                    "nack_count", "ack_count", "harq_timeout"],
+        "mikami_half_duplex":     ["first_tx_total", "hd_blocked_rx", "hd_loss_fraction",
+                                   "n_2way_slots", "n_3way_slots", "n_1way_slots"],
         "mikami_ott_latency":     ["latency_ms"],
         "mikami_pathloss":        ["distance_m", "expected_pl_db"],
     }
