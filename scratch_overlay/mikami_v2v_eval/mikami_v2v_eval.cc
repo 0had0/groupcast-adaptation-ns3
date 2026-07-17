@@ -86,6 +86,7 @@ main(int argc, char* argv[])
     // -- Traffic (paper TABLE II: 32 B / 10 ms) --
     uint32_t    pktSizeBytes = 32;
     uint32_t    pktIntervalMs = 10;        // 100 packets/s
+    uint32_t    rriMs        = 10;         // SPS reservation period (paper = pktInterval)
     uint32_t    port         = 8001;
 
     // -- Timing --
@@ -123,6 +124,7 @@ main(int argc, char* argv[])
     cmd.AddValue("psfchPeriod",    "PSFCH period (0=off, 1/2/4=on); HARQ feedback only flows when >0", psfchPeriod);
     cmd.AddValue("pktSizeBytes",   "Application-layer payload size (B)",             pktSizeBytes);
     cmd.AddValue("pktIntervalMs",  "Application-layer packet interval (ms)",        pktIntervalMs);
+    cmd.AddValue("rriMs",          "SPS reservation period (ms); HARQ retx is scheduled this many ms after first-TX. Defaults to pktIntervalMs (paper-faithful).", rriMs);
     cmd.AddValue("port",           "UDP destination port",                           port);
     cmd.AddValue("simTime",        "Traffic duration per flow (s)",                  simTime);
     cmd.AddValue("warmup",         "Warm-up seconds discarded by KPI",               warmup);
@@ -254,9 +256,14 @@ main(int argc, char* argv[])
     //    both UE#1→{UE#2,UE#3} and {UE#2,UE#3}→UE#1 directions).
     //
     //    Rate = 32 * 8 / 0.01 = 25 600 bps = 25.6 kb/s per UE (matches paper).
-    //    RRI = 10 ms — must be advertised in the pool's allowed RRI list.
+    //    pktIntervalMs = 10 ms is the application traffic cadence.
+    //    rriMs is the SPS reservation period (defaults to pktIntervalMs but can be
+    //    reduced below pktIntervalMs to give HARQ retx a faster turnaround —
+    //    CTTC accepts RRI >= 1 ms; the reservation interval just needs to fit in
+    //    the pool's allowed RRI list).
     //    HARQ = groupcast (castType=Groupcast, harqEnabled=true).
     // ------------------------------------------------------------------------
+    const uint32_t effectiveRriMs = (rriMs > 0) ? rriMs : pktIntervalMs;
     const double rateKbps = static_cast<double>(pktSizeBytes) * 8.0
                             / static_cast<double>(pktIntervalMs) * 1000.0 / 1000.0;
 
@@ -264,7 +271,7 @@ main(int argc, char* argv[])
     flowsSpec << "label=veh_ctrl_msg"
               << ";port="    << port
               << ";prio=1"
-              << ";rri_ms=" << pktIntervalMs
+              << ";rri_ms=" << effectiveRriMs
               << ";pdb_ms=" << pktIntervalMs
               << ";rate_kbps=" << rateKbps
               << ";harq=1"

@@ -613,6 +613,141 @@ class MikamiPathLoss(KpiBase):
         return [ScalarResult(rows, filename="mikami_pathloss.csv")]
 
 
+# ---------- 7. Half-duplex accounting ----------------------------------
+# Counts how many first-TX attempts were lost because the target RX UE was
+# itself transmitting at the same slot (and therefore couldn't RX). This is
+# the dominant cause of the residual 5-10% PRR loss in a 3-UE bidirectional
+# mesh — see VALIDATION_REPORT.md §6.3.
+#
+# Definition:
+#   For each first-TX TB at (tx_rnti, frame, subFrame, slot):
+#     count how many OTHER UEs were also TXing at that exact (frame, subFrame, slot).
+#     If 1 other UE TXs → 1 RX direction is half-duplex blocked.
+#     If 2 other UEs TXs → 2 RX directions are half-duplex blocked.
+#     If 0 other UEs → no half-duplex loss for this TX.
+#   Total "hd_blocked_rx_directions" = sum over all first-TX of (# other TX UEs).
+#   Each (tx_rnti, rx_rnti) pair counts how many first-TXs were HD-blocked
+#   at the RX side specifically.
+@register(
+    id="mikami_half_duplex",
+    title="Half-duplex loss accounting (Mikami diagnostic)",
+    spec_ref="diagnostic",
+    output_kind="scalar",
+    output_columns=(
+        KpiOutputColumn("tx_node_id", "", "TX node id"),
+        KpiOutputColumn("rx_node_id", "", "RX node id"),
+        KpiOutputColumn("first_tx_total", "", "# first-TX TBs transmitted by TX node"),
+        KpiOutputColumn("hd_blocked_rx", "", "# first-TX TBs where RX node was itself TXing at the same slot"),
+        KpiOutputColumn("hd_loss_fraction", "", "hd_blocked_rx / first_tx_total"),
+        KpiOutputColumn("n_2way_slots", "", "# first-TX slots where exactly 2 UEs were TXing"),
+        KpiOutputColumn("n_3way_slots", "", "# first-TX slots where all 3 UEs were TXing"),
+        KpiOutputColumn("n_1way_slots", "", "# first-TX slots where only this UE was TXing"),
+    ),
+)
+class MikamiHalfDuplex(KpiBase):
+    """Half-duplex loss diagnostic.
+
+    Counts first-TX TBs that could NOT be RX'd because the target RX UE was
+    itself transmitting on the same slot. This is the time-domain half-duplex
+    loss — the only kind of loss in our FDM-clean / sensing-disabled scenario.
+    """
+    def compute(self, ctx: KpiContext):
+        pssch_tx = ctx.cache.pssch_tx()
+        if pssch_tx is None or len(pssch_tx) == 0:
+            return [ScalarResult([], filename="mikami_half_duplex.csv")]
+        imsi_to_node = ctx.cache.imsi_to_node()
+        rnti_to_node = {imsi % 65535: nid for imsi, nid in imsi_to_node.items()}
+
+        # Filter to first-TX, time window
+        first_tx = pssch_tx[pssch_tx["ndi"] == 1].copy()
+        first_tx = first_tx[
+            (first_tx["timeMs"] / 1000.0 >= ctx.t_start)
+            & (first_tx["timeMs"] / 1000.0 <= ctx.t_end)
+        ]
+        if len(first_tx) == 0:
+            return [ScalarResult([], filename="mikami_half_duplex.csv")]
+
+        # Map rnti → node
+        def to_node(r):
+            try:
+                return rnti_to_node[int(r)]
+            except (KeyError, ValueError, TypeError):
+                return -1
+
+        first_tx["tx_node"] = first_tx["rnti"].apply(to_node)
+
+        # Per (frame, subFrame, slot): set of TX node ids
+        slot_groups = first_tx.groupby(["frame", "subFrame", "slot"])["tx_node"].apply(set)
+        # slot_groups is indexed by (frame, subFrame, slot), values are sets of node ids TXing
+
+        # Per-link counters
+        all_nodes = sorted(first_tx["tx_node"].unique())
+        per_link: Dict[Tuple[int, int], Dict[str, int]] = defaultdict(
+            lambda: {"first_tx_total": 0, "hd_blocked_rx": 0,
+                     "n_1way": 0, "n_2way": 0, "n_3way": 0}
+        )
+        # Aggregate slot counts: how many first-TX slots are 1-way/2-way/3-way
+        n_1way_total = 0
+        n_2way_total = 0
+        n_3way_total = 0
+
+        for (frame, subFrame, slot), txing_nodes in slot_groups.items():
+            n = len(txing_nodes)
+            if n == 1:
+                n_1way_total += 1
+            elif n == 2:
+                n_2way_total += 1
+            elif n == 3:
+                n_3way_total += 1
+
+            # For each TX node in this slot:
+            for tx_node in txing_nodes:
+                # All other nodes TXing at the same slot
+                other_tx_nodes = txing_nodes - {tx_node}
+                # The "other TXing" set is the half-duplex blocked RX set
+                blocked_rx_nodes = other_tx_nodes  # any other UE TXing = potential HD loss
+                # Each TX node sent first-TX at this slot
+                for rx_node in all_nodes:
+                    if rx_node == tx_node: continue
+                    per_link[(tx_node, rx_node)]["first_tx_total"] += 1
+                    if rx_node in blocked_rx_nodes:
+                        per_link[(tx_node, rx_node)]["hd_blocked_rx"] += 1
+                # Slot classification (per-TX node attribution):
+                if n == 1:
+                    per_link[(tx_node, tx_node)]["n_1way"] += 1  # place holder
+                # Better: classify at the link level
+            # Re-classify: assign slot class to ALL (tx, rx) pairs that were active
+            # (the TX side's slot is the same regardless of which RX pair we look at)
+            slot_class = "n_1way" if n == 1 else ("n_2way" if n == 2 else "n_3way")
+            for tx_node in txing_nodes:
+                for rx_node in all_nodes:
+                    if rx_node == tx_node: continue
+                    per_link[(tx_node, rx_node)][slot_class] += 1
+
+        # Build output rows
+        rows: List[Dict] = []
+        for tx_node in all_nodes:
+            for rx_node in all_nodes:
+                if tx_node == rx_node: continue
+                a = per_link.get((tx_node, rx_node),
+                                 {"first_tx_total": 0, "hd_blocked_rx": 0,
+                                  "n_1way": 0, "n_2way": 0, "n_3way": 0})
+                total = a["first_tx_total"]
+                hd_frac = (a["hd_blocked_rx"] / total) if total > 0 else 0.0
+                rows.append({
+                    "tx_node_id": tx_node,
+                    "rx_node_id": rx_node,
+                    "first_tx_total": total,
+                    "hd_blocked_rx": a["hd_blocked_rx"],
+                    "hd_loss_fraction": hd_frac,
+                    "n_2way_slots": a["n_2way"],
+                    "n_3way_slots": a["n_3way"],
+                    "n_1way_slots": a["n_1way"],
+                })
+        rows.sort(key=lambda r: (r["tx_node_id"], r["rx_node_id"]))
+        return [ScalarResult(rows, filename="mikami_half_duplex.csv")]
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -623,6 +758,7 @@ MIKAMI_KPIS = (
     "mikami_prr_before_harq",
     "mikami_prr_after_harq",
     "mikami_harq_efficiency",
+    "mikami_half_duplex",
     "mikami_pathloss",
 )
 
