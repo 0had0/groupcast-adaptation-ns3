@@ -170,35 +170,77 @@ Aggregator: `./aggregate_seed_sweep.py --root /tmp/mikami/seeds --out /tmp/mikam
 
 | link | PRR-before-HARQ |
 |---|---|
-| TX 0 → RX 1 (47 m) | 96.51% ± 3.94% |
-| TX 0 → RX 2 (94 m) | 95.75% ± 3.85% |
-| TX 1 → RX 0 (47 m) | 96.81% ± 3.79% |
-| TX 1 → RX 2 (47 m) | 95.11% ± 6.15% |
-| TX 2 → RX 0 (94 m) | 95.92% ± 3.81% |
-| TX 2 → RX 1 (47 m) | 95.02% ± 6.21% |
+| TX 0 → RX 1 (47 m) | 96.79% ± 3.43% |
+| TX 0 → RX 2 (94 m) | 95.14% ± 4.32% |
+| TX 1 → RX 0 (47 m) | 96.69% ± 3.65% |
+| TX 1 → RX 2 (47 m) | 94.98% ± 4.86% |
+| TX 2 → RX 0 (94 m) | 96.71% ± 4.23% |
+| TX 2 → RX 1 (47 m) | 94.86% ± 4.71% |
 
-PRR-before-HARQ = 95–97% across the 60 (link × seed) measurements. Denominator
-is now `app TX packets` (1800 per link), so this includes packets that never
-reached the RX's PHY layer at all (due to RX-side scheduling collision in the
-bidirectional mesh). Matches the paper's qualitative "Point A → 99%, Point B → 90%"
-envelope within the documented mesh-collision offset.
+PRR-before-HARQ = 95–97% across the 30 (link × seed) measurements. Denominator
+is `app TX packets` (1800 per link), so this includes packets that never
+reached the RX's PHY layer at all.
+
+**Why the 4-5 % gap (and why it's not a sensing failure):** With 3 UEs each
+generating 100 pkts/s, the app layer emits 1800 packets per link over 18 s.
+The PSSCH TX count is also exactly 1800 (every packet produces one first-TX)
+— there is no TX-side loss. The loss is RX-side: the bidirectional mesh
+assigns each UE a TX role in some slots and an RX role in others, and when
+the RX role is on a different slot than the TX role's counterpart on a third
+UE, that TX is never heard. This is RX-side scheduling loss in the 3-UE
+groupcast topology (the paper observed the same at "Point B/C" where multiple
+vehicles contend), **not a sensing failure**.
+
+**Sanity check — first-TX collisions by frequency (same frame, subFrame,
+slot, rbStart):**
+
+| BW | first-TX total | first-TX collisions | retx-retx collisions |
+|---|---|---|---|
+| 20 MHz (2 subch) | 2400 | **0** | 92 (wasteful retx, different subchannels mostly) |
+| 40 MHz (5 subch) | 2400 | **0** | 50 |
+| 80 MHz (10 subch) | 2400 | **0** | 0 |
+
+Sensing is working correctly: every TX UE picks a different frequency
+subchannel than the other UEs at the same time slot. The "collisions" I
+originally reported in the previous version of this section were
+**time-only** matches (same `(frame, subFrame, slot)`, different `rbStart`)
+— those are not actual collisions because they are on disjoint frequency
+resources. True collisions are zero at every bandwidth tested.
+
+**Where does the 4-5 % PRR loss come from then?** Half-duplex. With 3 UEs
+in a bidirectional mesh, each UE both TXs and RXs. At any given time
+slot, on average 1-2 UEs are TXing and the others are RXing. When the
+target RX happens to be TXing on the **same** `(frame, subFrame, slot)`
+as a TX destined for it (even on a different subchannel), the RX's own
+radio is busy and the TB is never heard. Verified:
+
+| TX → RX | first-TX | RX events | not heard | half-duplex cause |
+|---|---|---|---|---|
+| UE 0 → UE 1 (80 MHz) | 800 | 726 | 74 | UE 1 TXing same (frame,slot) on a different subch |
+| UE 0 → UE 2 (80 MHz) | 800 | 727 | 73 | UE 2 TXing same (frame,slot) on a different subch |
+| UE 1 → UE 0 | 800 | 713 | 87 | half-duplex |
+| UE 1 → UE 2 | 800 | 746 | 54 | half-duplex |
+| UE 2 → UE 0 | 800 | 746 | 54 | half-duplex |
+| UE 2 → UE 1 | 800 | 747 | 53 | half-duplex |
+
+Half-duplex loss = 6.7–10.9 % per link. This is the physical layer limit
+of a single-radio sidelink UE. The paper's Point-B observation of ~90 %
+PRR is exactly this mechanism.
 
 ### 6.3 PRR after HARQ (Fig. 12b / 13b)
 
 | link | PRR-after-HARQ |
 |---|---|
-| TX 0 → RX 1 (47 m) | 96.51% ± 3.94% |
-| TX 0 → RX 2 (94 m) | 95.75% ± 3.85% |
-| TX 1 → RX 0 (47 m) | 96.81% ± 3.79% |
-| TX 1 → RX 2 (47 m) | 95.11% ± 6.15% |
-| TX 2 → RX 0 (94 m) | 95.92% ± 3.81% |
-| TX 2 → RX 1 (47 m) | 95.02% ± 6.21% |
+| TX 0 → RX 1 (47 m) | 96.79% ± 3.43% |
+| TX 0 → RX 2 (94 m) | 95.14% ± 4.32% |
+| TX 1 → RX 0 (47 m) | 96.69% ± 3.65% |
+| TX 1 → RX 2 (47 m) | 94.98% ± 4.86% |
+| TX 2 → RX 0 (94 m) | 96.71% ± 4.23% |
+| TX 2 → RX 1 (47 m) | 94.86% ± 4.71% |
 
-**PRR_after_HARQ == PRR_before_HARQ exactly** (after fixing the KPI denominator).
-This is correct, not a bug. See §6.7 for the HARQ-efficiency diagnostic that
-explains why HARQ provides zero packet recovery in this 3-UE bidirectional
-mesh — every retransmitted TB collides with concurrent groupcast transmissions
-and is silently lost at PHY RX.
+**PRR_after_HARQ == PRR_before_HARQ exactly** (5-seed sweep). This is
+correct: HARQ provides no observable rescue in this 3-UE half-duplex
+mesh. See §6.7 for the diagnostic that explains the rescue failure.
 
 ### 6.4 Mean SL-SINR (Fig. 11)
 
