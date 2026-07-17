@@ -63,14 +63,16 @@ struct SlStackParams
     std::map<uint32_t, uint8_t> nodeMcsOverride{};
 
     // -- Deterministic (collision-free) scheduler --
-    // When "deterministic", every UE gets NrSlDeterministicScheduler instead of
-    // SB-SPS: node 0 (leader) is assigned partition lane 0 and every other UE
-    // (relay candidates) lane 1, so leader and relay transmissions never share a
-    // subchannel/slot (p_col -> 0). Any other value keeps the default SB-SPS.
-    std::string schedulerMode{"sbsps"};   // "sbsps" | "deterministic"
-    std::string detScheme{"fdm"};         // "fdm" (subchannel lanes) | "tdm" (slot phases)
-    uint8_t     detNumLanes{2};           // number of disjoint partitions
-    uint8_t     detTotalSubch{10};        // subchannels in the pool (for FDM split)
+    // DISABLED. We tested FDM and TDM partitioning for Mikami et al. 2020 and
+    // it makes the simulation WORSE, not better. Partitions silo UEs onto
+    // disjoint subchannels, so each UE's sensing window only sees TXs in its
+    // own lane — random slot picks across lanes collide in the TIME domain
+    // with no recovery (HARQ retx hits the same half-duplex conflict). See
+    // VALIDATION_REPORT.md §7. Default remains plain SB-SPS (paper-faithful).
+    std::string schedulerMode{"sbsps"};   // legacy; ignored at runtime
+    std::string detScheme{"fdm"};         // legacy; ignored at runtime
+    uint8_t     detNumLanes{2};           // legacy; ignored at runtime
+    uint8_t     detTotalSubch{10};        // legacy; ignored at runtime
 
     // -- Explicit bandwidth control --
     // By default the bandwidth is derived as 200 * 2^mu (100-kHz units), which

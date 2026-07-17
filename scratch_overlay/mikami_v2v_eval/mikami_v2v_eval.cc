@@ -101,11 +101,6 @@ main(int argc, char* argv[])
     // -- HARQ --
     bool        harqEnabled  = true;
 
-    // -- Scheduler (sbsps = SB-SPS sensing, deterministic = disjoint slots) --
-    std::string schedulerMode = "sbsps";      // "sbsps" | "deterministic"
-    std::string detScheme     = "fdm";        // "fdm" (subchannels) | "tdm" (slot phases)
-    uint8_t     detNumLanes   = 3;            // >= numUes for disjoint slots per UE
-
     // -- Output --
     std::string outputDir    = "./";
     std::string simTag;
@@ -126,9 +121,6 @@ main(int argc, char* argv[])
     cmd.AddValue("mcs",            "Fixed MCS index",                                mcs);
     cmd.AddValue("maxNumTx",       "Max PSSCH TX per TB (1=no retx; paper=3)",      maxNumTx);
     cmd.AddValue("psfchPeriod",    "PSFCH period (0=off, 1/2/4=on); HARQ feedback only flows when >0", psfchPeriod);
-    cmd.AddValue("schedulerMode",  "sbsps (SB-SPS sensing) | deterministic (disjoint slots)", schedulerMode);
-    cmd.AddValue("detScheme",      "deterministic: fdm (subchannels) | tdm (slot phases)", detScheme);
-    cmd.AddValue("detNumLanes",    "deterministic: number of lanes (>= numUEs for disjoint)", detNumLanes);
     cmd.AddValue("pktSizeBytes",   "Application-layer payload size (B)",             pktSizeBytes);
     cmd.AddValue("pktIntervalMs",  "Application-layer packet interval (ms)",        pktIntervalMs);
     cmd.AddValue("port",           "UDP destination port",                           port);
@@ -240,36 +232,11 @@ main(int argc, char* argv[])
     // retx TBs fire wastefully and clog the channel. Setting to 1 makes
     // PRR_after_HARQ >= PRR_before_HARQ (HARQ can only rescue, not hurt).
     stackParams.maxNumPerReserve = 1;
-    // Scheduler: default SB-SPS sensing (paper-faithful). With 3 UEs at 100 pkts/s
-    // and 20 MHz BW (2 subchannels × 9 slots = 18 candidates per 3 ms cycle),
-    // two UEs may pick the same (subFrame, slot) at startup; once locked-in by
-    // RRI=10 ms, they collide every cycle → half-duplex RX loss of 5–10 %.
-    // Set schedulerMode=deterministic to assign disjoint slots per UE up-front
-    // (lane k → subchannel k for FDM, slot phase k for TDM) and eliminate this.
-    // NB: TDM doesn't actually partition with RRI=10 ms (40 slots % numLanes != 0
-    // in general), so the grant repetitions span all phases and UEs still
-    // overlap. Use FDM (subchannel per UE) and bwPRBs such that
-    // detNumLanes ≤ floor(availablePRBs / bwPRBs).
-    stackParams.schedulerMode   = schedulerMode;
-    stackParams.detScheme       = detScheme;
-    stackParams.detNumLanes     = detNumLanes;
-    // Compute the actual subchannel count for the configured BW and bwPRBs.
-    // Mirrors the formula in BuildSlStack (availPRBs at the configured mu/BW).
-    {
-        const double subcarrierSpacingHz = 15000.0 * (1u << mu);
-        const double fullBand100kHz =
-            (channelBwMHz > 0.0) ? (channelBwMHz * 10.0) : (200u << mu);
-        const double availPRBs =
-            std::floor((fullBand100kHz * 100e3) / (12.0 * subcarrierSpacingHz));
-        const uint32_t subchSize =
-            (bwPRBs > 0) ? static_cast<uint32_t>(bwPRBs) : 10;
-        stackParams.detTotalSubch =
-            static_cast<uint8_t>(availPRBs / subchSize);
-        NS_LOG_INFO("mikami: BW=" << channelBwMHz << " MHz mu=" << mu
-                                  << " availPRBs=" << availPRBs
-                                  << " subchSize=" << subchSize
-                                  << " → detTotalSubch=" << +stackParams.detTotalSubch);
-    }
+    // Sensing-based SPS (Mode-2) — the paper's actual scheduler. We do NOT
+    // add an explicit FDM/TDM partition: doing so siloes UEs onto disjoint
+    // subchannels and makes their sensing blind to each other, which lets
+    // random selections collide in the time domain with no escape (see
+    // §7 of VALIDATION_REPORT.md).
 
     // Geometry-aware NLOSv channel: in moving-platoon mode, all UE nodes are
     // treated as potential blockers for the LOS path between any pair straddling

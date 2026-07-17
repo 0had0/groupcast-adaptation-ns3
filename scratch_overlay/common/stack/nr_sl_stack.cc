@@ -233,7 +233,15 @@ BuildSlStack(const SlStackParams& p,
     // Replaces SB-SPS with NrSlDeterministicScheduler so that node 0 (leader)
     // and the relay candidates transmit on disjoint partitions and never
     // collide (p_col -> 0). Node 0 gets lane 0; every other UE gets lane 1.
-    const bool deterministic = (p.schedulerMode == "deterministic");
+    //
+    // DISABLED: we tested this for Mikami et al. 2020 and it makes things
+    // WORSE, not better. Partitions silo UEs onto disjoint subchannels, so
+    // each UE's sensing window only sees TXs in its own lane — random slot
+    // selections across lanes then collide in the TIME domain with no
+    // recovery (the lost TBs aren't retransmittable because retx slots hit
+    // the same half-duplex conflict). See VALIDATION_REPORT.md §7.
+    // Default remains plain SB-SPS (paper-faithful).
+    const bool deterministic = false;  // hard-disable: was (p.schedulerMode == "deterministic");
     if (deterministic)
     {
         const bool tdm = (p.detScheme == "tdm");
@@ -253,8 +261,16 @@ BuildSlStack(const SlStackParams& p,
             det->InstallAmc(slAmc);
             det->SetAttribute("Mcs", UintegerValue(p.mcs));
 
-            // Partition: node 0 = lane 0 (leader), all others = lane 1 (relays).
-            const uint8_t laneIdx = (i == 0) ? 0 : 1;
+            // Partition: each UE gets its own lane (round-robin) so that with
+            // detNumLanes >= numUEs, every UE is on a disjoint subchannel/slot
+            // phase and never collides on the same (time, freq) cell. Falls
+            // back to lane 0 if detNumLanes is too small to give every UE a
+            // unique lane (caller should set detNumLanes >= numUEs).
+            uint8_t laneIdx = (p.detNumLanes > 0) ? (i % p.detNumLanes) : 0;
+            NS_LOG_INFO("Deterministic scheduler UE i=" << i << " device=" << dev
+                                                       << " RNTI=" << nrSlMac->GetRnti()
+                                                       << " → lane " << +laneIdx
+                                                       << " (modulus=" << +p.detNumLanes << ")");
             if (tdm)
             {
                 det->SetSlotPartition(p.detNumLanes, laneIdx);
