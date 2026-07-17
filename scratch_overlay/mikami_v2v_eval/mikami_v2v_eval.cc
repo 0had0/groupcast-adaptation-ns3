@@ -168,9 +168,14 @@ main(int argc, char* argv[])
 
     // ------------------------------------------------------------------------
     // 1. RNG + defaults
+    //
+    // Note: do NOT hardcode SetSeed(1) — kpi_hooks writes
+    // RngSeedManager::GetSeed() / GetRun() into the SQLite SEED/RUN columns
+    // and DataCache filters pktTxRx/psschRxUePhy by them, so the DB-side
+    // SEED value must equal the requested --seed.
     // ------------------------------------------------------------------------
-    RngSeedManager::SetSeed(1);
-    RngSeedManager::SetRun(seed);
+    RngSeedManager::SetSeed(seed);
+    RngSeedManager::SetRun(1);
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(999999999));
 
     // ------------------------------------------------------------------------

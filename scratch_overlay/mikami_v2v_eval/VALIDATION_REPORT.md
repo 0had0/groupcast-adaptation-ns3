@@ -114,10 +114,14 @@ faithful.
 
 - `scratch_overlay/mikami_v2v_eval/mikami_v2v_eval.cc` — paper-faithful scenario
 - `scratch_overlay/mikami_v2v_eval/mikami_postprocess.py` — KPI registry + CSV export
+- `scratch_overlay/mikami_v2v_eval/run_seed_sweep.sh` — 10-seed sweep driver
+- `scratch_overlay/mikami_v2v_eval/aggregate_seed_sweep.py` — cross-seed aggregator
 - `scratch_overlay/mikami_v2v_eval/CMakeLists.txt` — scratch build config
 - Binary: `ns-3-dev/build/scratch/mikami_v2v_eval/ns3.42-mikami_v2v_eval-debug`
-- Run output: `/tmp/mikami/mikami_default.db` (3.85 MB), 10,155 app-level RX events
-- KPIs: `/tmp/mikami/kpis/mikami_default_*.csv` (6 files)
+- Single-seed output: `/tmp/mikami/mikami_default.db` (3.85 MB), 10,155 app-level RX events
+- 10-seed sweep: `/tmp/mikami/seeds/seed{01..10}/seedNN.db` (5 MB each)
+- Single-seed KPIs: `/tmp/mikami/kpis/mikami_default_*.csv` (6 files)
+- Sweep summary: `/tmp/mikami/seeds/summary/summary_*.csv` + `summary.md`
 
 ## 5. Validation verdict
 
@@ -131,3 +135,94 @@ PRR-after-HARQ reproduce qualitatively but with expected offsets:
   real-road measurement had lower collision probability).
 
 The simulator is suitable as a baseline for further V2V sidelink Mode-2 studies.
+
+## 6. 10-seed aggregate reproduction
+
+Driver: `./run_seed_sweep.sh 10 20.0 2.0` (4m 39s wall-time, 10 × 5 MB DBs).
+Aggregator: `./aggregate_seed_sweep.py --root /tmp/mikami/seeds --out /tmp/mikami/seeds/summary`.
+
+### 6.1 PSSCH BLER (Fig. 10) — mean ± std across 10 seeds
+
+| link | BLER (initial) | paper reference |
+|---|---|---|
+| TX 0 → RX 1 (47 m) | 0.04% ± 0.04% | <1% (Point A) |
+| TX 0 → RX 2 (94 m) | 0.40% ± 0.66% | ~1% (Point B) |
+| TX 1 → RX 0 (47 m) | 0.05% ± 0.05% | <1% (Point A) |
+| TX 1 → RX 2 (47 m) | 0.01% ± 0.04% | <1% (Point A) |
+| TX 2 → RX 0 (94 m) | 0.36% ± 0.47% | ~1% (Point B) |
+| TX 2 → RX 1 (47 m) | 0.02% ± 0.03% | <1% (Point A) |
+
+47 m links: BLER ≈ 0.02%–0.05% (very tight, near zero). 94 m links: BLER ≈ 0.36%–0.40%
+(an order of magnitude higher, but still <1%). Matches paper's qualitative claim that
+94 m links are at the edge of decodability.
+
+### 6.2 PRR before HARQ (Fig. 12a / 13a)
+
+| link | PRR-before-HARQ |
+|---|---|
+| TX 0 → RX 1 (47 m) | 99.96% ± 0.04% |
+| TX 0 → RX 2 (94 m) | 99.60% ± 0.66% |
+| TX 1 → RX 0 (47 m) | 99.95% ± 0.05% |
+| TX 1 → RX 2 (47 m) | 99.99% ± 0.04% |
+| TX 2 → RX 0 (94 m) | 99.64% ± 0.47% |
+| TX 2 → RX 1 (47 m) | 99.98% ± 0.03% |
+
+PRR-before-HARQ ≈ 99.6%–99.99% across all 60 (link × seed) measurements,
+matching the paper's "almost always 100% at Point A" claim within the 94 m
+degradation at ~99.6%.
+
+### 6.3 PRR after HARQ (Fig. 12b / 13b)
+
+| link | PRR-after-HARQ |
+|---|---|
+| TX 0 → RX 1 (47 m) | 96.51% ± 3.94% |
+| TX 0 → RX 2 (94 m) | 95.75% ± 3.85% |
+| TX 1 → RX 0 (47 m) | 96.81% ± 3.79% |
+| TX 1 → RX 2 (47 m) | 95.11% ± 6.15% |
+| TX 2 → RX 0 (94 m) | 95.92% ± 3.81% |
+| TX 2 → RX 1 (47 m) | 95.02% ± 6.21% |
+
+PRR-after-HARQ ≈ 95–97% across the 3-UE mesh. The ~4–6% loss is the
+collision-induced floor described in §3.5: when both first-TX and ReTx collide
+with concurrent groupcast transmissions from the other 2 UEs in the mesh, the
+TB is dropped at RLC after maxNumTx=3.
+
+### 6.4 Mean SL-SINR (Fig. 11)
+
+| link | mean SINR |
+|---|---|
+| TX 0 → RX 1 (47 m) | 39.1 ± 2.3 dB |
+| TX 0 → RX 2 (94 m, blocked by UE#1) | 32.3 ± 3.3 dB |
+| TX 1 → RX 0 (47 m) | 39.1 ± 2.4 dB |
+| TX 1 → RX 2 (47 m) | 40.0 ± 1.3 dB |
+| TX 2 → RX 0 (94 m, blocked by UE#1) | 32.3 ± 3.3 dB |
+| TX 2 → RX 1 (47 m) | 40.1 ± 1.3 dB |
+
+47 m links cluster at ~39–40 dB (strong LOS, low interference). 94 m links
+to UE#0 cluster at ~32 dB, ~7 dB lower — capturing the NLOSv-blocked path
+through UE#1's truck body. Cross-seed std ≈ 1.3–3.3 dB.
+
+### 6.5 OTT latency p50 (Fig. 8, 9)
+
+| link | p50 across seeds (mean ± std) | range across seeds |
+|---|---|---|
+| TX 0 → RX 1 | 1.65 ± 0.52 ms | 1.06 – 2.47 ms |
+| TX 0 → RX 2 | 1.68 ± 0.55 ms | 1.06 – 2.47 ms |
+| TX 1 → RX 0 | 2.14 ± 0.55 ms | 1.21 – 2.92 ms |
+| TX 1 → RX 2 | 2.14 ± 0.58 ms | 1.21 – 2.97 ms |
+| TX 2 → RX 0 | 2.14 ± 0.60 ms | 1.30 – 3.17 ms |
+| TX 2 → RX 1 | 1.94 ± 0.55 ms | 1.17 – 2.60 ms |
+
+p50 cluster at 1.6–2.2 ms with cross-seed std ≈ 0.5 ms. The 47 m links from
+TX 0 (leader) are fastest at 1.6 ms; TX 1/2 (followers) carry slightly more
+RLC buffering, ~2.1 ms. All values are within the paper's "<3 ms at Point A,
+degrades at Point B" envelope.
+
+### 6.6 Verdict across seeds
+
+The 10-seed sweep confirms that the simulator's KPIs are stable across RNG
+seeds: per-KPI cross-seed std is small (<7% for PRR, <3 dB for SINR, <0.6 ms
+for latency), and the mean values reproduce the paper's qualitative claims
+within documented offsets (collision-induced PRR floor, app-layer latency
+offset). The simulator is suitable for seed-sensitivity studies in V2X
+sidelink Mode-2.
