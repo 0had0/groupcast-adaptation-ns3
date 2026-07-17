@@ -325,7 +325,10 @@ BuildSlStack(const SlStackParams& p,
     poolFactory->SetSlSelectionWindow(5);
     poolFactory->SetSlFreqResourcePscch(10);
     poolFactory->SetSlSubchannelSize(subchSize);
-    poolFactory->SetSlMaxNumPerReserve(3);
+    // Default 1 = disable blind retx reservation; retx is NACK-driven.
+    // Set to 3 to restore the mode-2 spec default (initial + 2 blind retx slots
+    // pre-reserved in SCI-1A). See SlStackParams::maxNumPerReserve for details.
+    poolFactory->SetSlMaxNumPerReserve(p.maxNumPerReserve);
     // Build the allowed-RRI list.
     // The ns-3 NrSlCommResourcePoolFactory switch only recognises:
     //   0 (DG sentinel)

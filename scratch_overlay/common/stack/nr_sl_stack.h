@@ -102,6 +102,19 @@ struct SlStackParams
     // ran with HARQ Option-1 semantics; set to 2 for HARQ Option-2 setups.
     uint8_t harqOption{1};
 
+    // -- Blind HARQ retx reservation --
+    // Maps to NrSlCommResourcePoolFactory::SetSlMaxNumPerReserve().
+    // Default 3 = mode-2 blind reservation of initial TX + up to 2 retx slots,
+    //   advertised in SCI-1A at first-TX time. If the CTTC NR SL MAC cancel
+    //   logic fails to erase the retx grant on ACK, those retx slots still
+    //   fire (~98% wasteful in the mikami 3-UE bidirectional mesh test).
+    // 1 = disable blind retx reservation; only the initial TX slot is
+    //   advertised. Retx slots are scheduled NACK-driven by the CTTC code
+    //   (lines ~786-812 of nr-sl-ue-mac.cc). Default 1 is the spec-faithful
+    //   NACK-triggered HARQ policy: a packet is only retransmitted if at
+    //   least one RX sent NACK.
+    uint8_t maxNumPerReserve{1};
+
     // -- MCR feedback gate (HARQ Option-1 only) --
     // When harqOption == 1 AND mcrMeters > 0, BuildSlStack calls
     // InstallMcrFeedbackGate() on all UE devices, suppressing PSFCH from

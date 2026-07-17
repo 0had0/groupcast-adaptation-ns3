@@ -14,7 +14,7 @@ N_SEEDS="${1:-10}"
 SIM_TIME="${2:-20.0}"
 WARMUP="${3:-2.0}"
 ROOT="${MIKAMI_OUT_ROOT:-/tmp/mikami/seeds}"
-BIN="/Users/hadih/Documents/groupcast-adaptation-ns3/ns-3-dev/build/scratch/mikami_v2v_eval/ns3.42-mikami_v2v_eval-debug"
+BIN="/Users/hadih/Documents/groupcast-adaptation-ns3/ns-3-dev/cmake-cache-opt/scratch/mikami_v2v_eval/ns3.42-mikami_v2v_eval-default"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "[mikami-seed-sweep] N_SEEDS=$N_SEEDS  simTime=$SIM_TIME  warmup=$WARMUP  out=$ROOT"

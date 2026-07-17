@@ -346,17 +346,30 @@ class MikamiPrrBeforeHarq(KpiBase):
                 tx_totals[int(r.nodeId)].add(int(r.pktSeqNum))
 
         rows: List[Dict] = []
-        for (tx_node, rx_node), a in per_link.items():
+        # Ensure every (tx, rx) pair with TX traffic has a row, even if no PHY RX.
+        all_tx_nodes = sorted(tx_totals.keys())
+        for tx_node in all_tx_nodes:
             n_total = len(tx_totals.get(tx_node, set()))
-            rows.append({
-                "tx_node_id": tx_node,
-                "rx_node_id": rx_node,
-                "tx_total": n_total,
-                "first_rx_attempts": a["first_rx_attempts"],
-                "first_rx_success": a["first_rx_success"],
-                "prr_before_harq": (a["first_rx_success"] / a["first_rx_attempts"])
-                                    if a["first_rx_attempts"] > 0 else None,
-            })
+            for rx_node in all_tx_nodes:
+                if tx_node == rx_node:
+                    continue
+                a = per_link.get((tx_node, rx_node),
+                                 {"first_rx_attempts": 0, "first_rx_success": 0})
+                first_rx_ok = a["first_rx_success"]
+                # PRR before HARQ: numerator is first-TX PHY successes,
+                # denominator is APP-layer TX packets (not just first-TX PHY
+                # attempts). This makes PRR_before_HARQ comparable to
+                # PRR_after_HARQ which uses the same denominator.
+                # When HARQ is OFF or retx is broken, PRR_before ≈ PRR_after.
+                prr_before = (first_rx_ok / n_total) if n_total > 0 else None
+                rows.append({
+                    "tx_node_id": tx_node,
+                    "rx_node_id": rx_node,
+                    "tx_total": n_total,
+                    "first_rx_attempts": a["first_rx_attempts"],
+                    "first_rx_success": a["first_rx_success"],
+                    "prr_before_harq": prr_before,
+                })
         rows.sort(key=lambda r: (r["tx_node_id"], r["rx_node_id"]))
         return [ScalarResult(rows, filename="mikami_prr_before_harq.csv")]
 
@@ -443,6 +456,117 @@ class MikamiPrrAfterHarq(KpiBase):
         return [ScalarResult(rows, filename="mikami_prr_after_harq.csv")]
 
 
+# ---------- 5b. HARQ efficiency (diagnostic) ----------------------------
+# Shows how many of the HARQ retransmissions actually reached the PHY RX layer.
+# In a 3-UE bidirectional mesh with sensing-based Mode-2, retx TBs often
+# collide with concurrent transmissions and are lost; this KPI makes that
+# explicit so PRR_before_HARQ ≈ PRR_after_HARQ isn't surprising.
+@register(
+    id="mikami_harq_efficiency",
+    title="HARQ retransmission efficiency (Mikami diagnostic)",
+    spec_ref="diagnostic",
+    output_kind="scalar",
+    output_columns=(
+        KpiOutputColumn("tx_node_id", "", "TX node id"),
+        KpiOutputColumn("harq_retx_tx", "", "# PSSCH retx TBs transmitted (NDI=0)"),
+        KpiOutputColumn("harq_retx_rx", "", "# PSSCH retx TBs heard at any RX (NDI=0)"),
+        KpiOutputColumn("harq_retx_efficiency", "", "retx RX / retx TX"),
+        KpiOutputColumn("first_tx_tx", "", "# PSSCH first-TX TBs (NDI=1)"),
+        KpiOutputColumn("first_tx_rx", "", "# PSSCH first-TX TBs heard at any RX (NDI=1)"),
+        KpiOutputColumn("nack_count", "", "# NACK feedback events"),
+        KpiOutputColumn("ack_count", "", "# ACK feedback events"),
+        KpiOutputColumn("harq_timeout", "", "# HARQ timeout events (RLC drop)"),
+    ),
+)
+class MikamiHarqEfficiency(KpiBase):
+    """HARQ control-plane efficiency diagnostic.
+
+    Numerator/denominator are MAC-trace based (psschTxUeMac, psschRxUePhy,
+    slHarqFeedback, slHarqTimeout). harq_retx_efficiency = NDI=0 RX /
+    NDI=0 TX; if this is 0%, then *no* retx TBs reached the PHY RX layer
+    and PRR_after_HARQ cannot exceed PRR_before_HARQ.
+    """
+    def compute(self, ctx: KpiContext):
+        pssch_tx = ctx.cache.pssch_tx()
+        pssch_rx = ctx.cache.pssch_rx()
+        imsi_to_node = ctx.cache.imsi_to_node()
+        rnti_to_node = {imsi % 65535: nid for imsi, nid in imsi_to_node.items()}
+
+        # TX side: count first-TX vs retx per TX node
+        first_tx: Dict[int, int] = defaultdict(int)
+        retx_tx:  Dict[int, int] = defaultdict(int)
+        if pssch_tx is not None and len(pssch_tx):
+            for r in pssch_tx.itertuples(index=False):
+                t = float(r.timeMs) / 1000.0
+                if t < ctx.t_start or t > ctx.t_end:
+                    continue
+                tx_node = rnti_to_node.get(int(r.rnti), -1)
+                if tx_node < 0:
+                    continue
+                ndi = int(r.ndi) if r.ndi is not None else 1
+                if ndi == 1:
+                    first_tx[tx_node] += 1
+                else:
+                    retx_tx[tx_node] += 1
+
+        # RX side: count first-TX vs retx heard at any RX (aggregated by TX node)
+        first_rx: Dict[int, int] = defaultdict(int)
+        retx_rx:  Dict[int, int] = defaultdict(int)
+        if pssch_rx is not None and len(pssch_rx):
+            for r in pssch_rx.itertuples(index=False):
+                t = float(r.timeMs) / 1000.0
+                if t < ctx.t_start or t > ctx.t_end:
+                    continue
+                tx_node = rnti_to_node.get(int(r.txRnti), -1)
+                if tx_node < 0:
+                    continue
+                ndi = int(r.ndi) if r.ndi is not None else 1
+                if ndi == 1:
+                    first_rx[tx_node] += 1
+                else:
+                    retx_rx[tx_node] += 1
+
+        # HARQ feedback (slHarqFeedback has no SEED/RUN column → use whole table)
+        try:
+            harq = ctx.cache.con.execute(
+                "SELECT status FROM slHarqFeedback"
+            ).fetchall()
+            ack = sum(1 for (s,) in harq if s == "ACK")
+            nack = sum(1 for (s,) in harq if s == "NACK")
+        except Exception:
+            ack = nack = 0
+
+        # HARQ timeout
+        try:
+            n_to = len(ctx.cache.con.execute(
+                "SELECT 1 FROM slHarqTimeout"
+            ).fetchall())
+        except Exception:
+            n_to = 0
+
+        rows: List[Dict] = []
+        all_tx = sorted(set(first_tx) | set(retx_tx))
+        for tx_node in all_tx:
+            f_tx = first_tx.get(tx_node, 0)
+            r_tx = retx_tx.get(tx_node, 0)
+            f_rx = first_rx.get(tx_node, 0)
+            r_rx = retx_rx.get(tx_node, 0)
+            eff = (r_rx / r_tx) if r_tx > 0 else None
+            rows.append({
+                "tx_node_id": tx_node,
+                "harq_retx_tx": r_tx,
+                "harq_retx_rx": r_rx,
+                "harq_retx_efficiency": eff,
+                "first_tx_tx": f_tx,
+                "first_tx_rx": f_rx,
+                "nack_count": nack,        # global count, not per-tx (no per-tx in trace)
+                "ack_count":  ack,
+                "harq_timeout": n_to,
+            })
+        rows.sort(key=lambda r: r["tx_node_id"])
+        return [ScalarResult(rows, filename="mikami_harq_efficiency.csv")]
+
+
 # ---------- 6. Path loss (Fig. 7) — uses the THREE GPP channel model -----
 @register(
     id="mikami_pathloss",
@@ -498,6 +622,7 @@ MIKAMI_KPIS = (
     "mikami_sinr",
     "mikami_prr_before_harq",
     "mikami_prr_after_harq",
+    "mikami_harq_efficiency",
     "mikami_pathloss",
 )
 

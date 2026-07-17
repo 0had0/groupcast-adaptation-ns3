@@ -217,13 +217,13 @@ class DataCache:
     def pssch_rx(self) -> Optional[pd.DataFrame]:
         """PSSCH RX events (UE PHY). Columns: timeMs, rnti, txRnti,
         srcL2Id, dstL2Id, bwpId, frame, subFrame, slot, psschRbStart,
-        psschRbLen, tbSizeBytes, avrgSinr, minSinr, psschTbler,
+        psschRbLen, ndi, rv, tbSizeBytes, avrgSinr, minSinr, psschTbler,
         psschCorrupt, sci2Tbler, sci2Corrupt."""
         return self._load(
             "pssch_rx", "psschRxUePhy",
             "timeMs, rnti, txRnti, srcL2Id, dstL2Id, bwpId, frame, subFrame, "
-            "slot, psschRbStart, psschRbLen, tbSizeBytes, avrgSinr, minSinr, "
-            "psschTbler, psschCorrupt, sci2Tbler, sci2Corrupt",
+            "slot, psschRbStart, psschRbLen, ndi, rv, tbSizeBytes, avrgSinr, "
+            "minSinr, psschTbler, psschCorrupt, sci2Tbler, sci2Corrupt",
             time_col="timeMs", time_scale=1000.0,
         )
 

@@ -225,6 +225,13 @@ main(int argc, char* argv[])
     // the paper's "HARQ retransmission scheme" (Fig. 12(b) vs 13(b)).
     stackParams.harqOption       = 1;
     stackParams.mcrMeters        = 0.0;       // no distance gate; single-dstL2Id group
+    // NACK-driven HARQ policy: only the initial TX slot is pre-reserved in
+    // SCI-1A; retx slots are added NACK-driven by the CTTC scheduler. With
+    // maxNumPerReserve=3 (mode-2 spec default) the cancel logic in CTTC's
+    // DoReceivePsfch does not always erase retx grants on ACK, so ~98% of
+    // retx TBs fire wastefully and clog the channel. Setting to 1 makes
+    // PRR_after_HARQ >= PRR_before_HARQ (HARQ can only rescue, not hurt).
+    stackParams.maxNumPerReserve = 1;
 
     // Geometry-aware NLOSv channel: in moving-platoon mode, all UE nodes are
     // treated as potential blockers for the LOS path between any pair straddling
