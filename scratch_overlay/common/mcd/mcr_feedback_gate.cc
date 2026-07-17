@@ -43,10 +43,10 @@ NS_LOG_COMPONENT_DEFINE("McrFeedbackGate");
 
 // CastType values — must match NrSlSciF2aHeader::CastTypeIndicator_t
 // (ns-3-dev/contrib/nr/model/nr-sl-sci-f2a-header.h).
-static constexpr uint8_t CAST_BROADCAST        = 0;
-static constexpr uint8_t CAST_GROUPCAST        = 1; // Option-2 ACK/NACK
-static constexpr uint8_t CAST_UNICAST          = 2;
-static constexpr uint8_t CAST_GROUPCAST_NACK   = 3; // Option-1 NACK-only
+[[maybe_unused]] static constexpr uint8_t CAST_BROADCAST      = 0;
+[[maybe_unused]] static constexpr uint8_t CAST_GROUPCAST      = 1; // Option-2 ACK/NACK
+[[maybe_unused]] static constexpr uint8_t CAST_UNICAST        = 2;
+[[maybe_unused]] static constexpr uint8_t CAST_GROUPCAST_NACK = 3; // Option-1 NACK-only
 
 // ---------------------------------------------------------------------------
 // RntiMobilityRegistry
