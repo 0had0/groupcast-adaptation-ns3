@@ -79,7 +79,13 @@ main(int argc, char* argv[])
     uint32_t    mu           = 2;          // 60 kHz SCS
     double      channelBwMHz = 20.0;       // 20 MHz BW
     uint32_t    bwPRBs       = 10;         // subchannel size: 27 PRBs / 10 = 2 subchannels
-    uint32_t    mcs          = 14;         // mid-MCS (common starting point)
+    // -- MCS -- paper §III: "We selected QPSK modulation scheme and coding rate
+    // R of lower than 1/3 as a set of modulation scheme and coding scheme (MCS)
+    // for data transmission in order that a low-order MCS is indispensable."
+    // In TS 38.214 Table 1, QPSK with R<1/3 corresponds to MCS 0-3 (spectral
+    // efficiency 0.23-0.49). We pick MCS 2 (QPSK, SE 0.38, R~0.19) as a
+    // middle-of-the-low-MCS choice.
+    uint32_t    mcs          = 2;          // QPSK, SE 0.38, R~0.19 (paper-faithful)
     uint32_t    maxNumTx     = 3;          // 1 initial + 2 ReTx → maxNumTx=3 (TABLE II)
     uint16_t    psfchPeriod  = 1;          // HARQ feedback every slot
 
