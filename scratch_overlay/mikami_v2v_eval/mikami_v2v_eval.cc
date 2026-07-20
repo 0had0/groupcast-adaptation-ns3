@@ -78,7 +78,8 @@ main(int argc, char* argv[])
     // -- PHY/MAC (paper TABLE I) --
     uint32_t    mu           = 2;          // 60 kHz SCS
     double      channelBwMHz = 20.0;       // 20 MHz BW
-    uint32_t    bwPRBs       = 10;         // subchannel size: 27 PRBs / 10 = 2 subchannels
+    uint32_t    bwPRBs       = 10;         // subchannel size in PRBs (used only if numSubchannels == 0)
+    uint32_t    numSubchannels = 0;        // 0 = legacy bwPRBs mode; >0 = compute subchSize from numSubchannels
     // -- MCS -- paper §III: "We selected QPSK modulation scheme and coding rate
     // R of lower than 1/3 as a set of modulation scheme and coding scheme (MCS)
     // for data transmission in order that a low-order MCS is indispensable."
@@ -94,6 +95,11 @@ main(int argc, char* argv[])
     uint32_t    pktIntervalMs = 10;        // 100 packets/s
     uint32_t    rriMs        = 10;         // SPS reservation period (paper = pktInterval)
     uint32_t    port         = 8001;
+
+    // -- Scheduler (paper-faithful SB-SPS by default) --
+    std::string schedulerMode = "sbsps";    // "sbsps" | "deterministic"
+    std::string detScheme     = "fdm";      // "fdm" (subchannels) | "tdm" (slot phases only)
+    uint8_t     detNumLanes   = 2;          // FDM lanes; combined with TDM phase when numUEs > detNumLanes
 
     // -- Timing --
     double      simTime      = 20.0;       // seconds of application traffic per flow
@@ -124,7 +130,11 @@ main(int argc, char* argv[])
     cmd.AddValue("antennaHeight",  "UE antenna height from ground (m)",             antennaHeight);
     cmd.AddValue("mu",             "Numerology: 0=15kHz|1=30kHz|2=60kHz",            mu);
     cmd.AddValue("channelBwMHz",   "Channel bandwidth (MHz)",                        channelBwMHz);
-    cmd.AddValue("bwPRBs",         "Subchannel size in PRBs",                        bwPRBs);
+    cmd.AddValue("bwPRBs",         "Subchannel size in PRBs (used when numSubchannels=0)", bwPRBs);
+    cmd.AddValue("numSubchannels", "Number of subchannels in pool (0=legacy bwPRBs; 1=full BW per TX, forces time-domain separation)", numSubchannels);
+    cmd.AddValue("schedulerMode",  "sbsps (paper-faithful Mode-2 sensing) | deterministic (combined FDM+TDM disjoint reservations)", schedulerMode);
+    cmd.AddValue("detScheme",      "deterministic: fdm (subchannels, default) | tdm (slot phases only)", detScheme);
+    cmd.AddValue("detNumLanes",    "deterministic: number of FDM lanes (<numUEs triggers TDM tiling for remaining UEs)", detNumLanes);
     cmd.AddValue("mcs",            "Fixed MCS index",                                mcs);
     cmd.AddValue("maxNumTx",       "Max PSSCH TX per TB (1=no retx; paper=3)",      maxNumTx);
     cmd.AddValue("psfchPeriod",    "PSFCH period (0=off, 1/2/4=on); HARQ feedback only flows when >0", psfchPeriod);
@@ -218,6 +228,10 @@ main(int argc, char* argv[])
     stackParams.mu               = mu;
     stackParams.channelBwMHz     = channelBwMHz;
     stackParams.bwPRBs           = bwPRBs;
+    stackParams.numSubchannels    = numSubchannels;
+    stackParams.schedulerMode     = schedulerMode;
+    stackParams.detScheme         = detScheme;
+    stackParams.detNumLanes       = detNumLanes;
     stackParams.mcs              = mcs;
     stackParams.seed             = seed;
     stackParams.maxNumTx         = static_cast<uint8_t>(maxNumTx);
@@ -233,6 +247,25 @@ main(int argc, char* argv[])
     // the paper's "HARQ retransmission scheme" (Fig. 12(b) vs 13(b)).
     stackParams.harqOption       = 1;
     stackParams.mcrMeters        = 0.0;       // no distance gate; single-dstL2Id group
+
+    // Compute the actual subchannel count for the configured BW and bwPRBs.
+    // Mirrors the formula in BuildSlStack (availPRBs at the configured mu/BW).
+    // Used by the deterministic scheduler to partition the resource pool.
+    {
+        const double subcarrierSpacingHz = 15000.0 * (1u << mu);
+        const double fullBand100kHz =
+            (channelBwMHz > 0.0) ? (channelBwMHz * 10.0) : (200u << mu);
+        const double availPRBs =
+            std::floor((fullBand100kHz * 100e3) / (12.0 * subcarrierSpacingHz));
+        const uint32_t subchSize =
+            (bwPRBs > 0) ? static_cast<uint32_t>(bwPRBs) : 10;
+        stackParams.detTotalSubch =
+            static_cast<uint8_t>(availPRBs / subchSize);
+        NS_LOG_INFO("mikami: BW=" << channelBwMHz << " MHz mu=" << mu
+                                  << " availPRBs=" << availPRBs
+                                  << " subchSize=" << subchSize
+                                  << " → detTotalSubch=" << +stackParams.detTotalSubch);
+    }
     // NACK-driven HARQ policy: only the initial TX slot is pre-reserved in
     // SCI-1A; retx slots are added NACK-driven by the CTTC scheduler. With
     // maxNumPerReserve=3 (mode-2 spec default) the cancel logic in CTTC's
@@ -281,7 +314,7 @@ main(int argc, char* argv[])
               << ";pdb_ms=" << pktIntervalMs
               << ";rate_kbps=" << rateKbps
               << ";harq=1"
-              << ";dynamic=0"
+              << ";dynamic=1"
               << ";tx_nodes=";       // empty = every UE transmits (full mesh)
     for (uint32_t i = 0; i < numUEs; ++i)
         flowsSpec << (i > 0 ? ":" : "") << i;

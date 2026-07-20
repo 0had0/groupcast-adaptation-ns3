@@ -241,7 +241,7 @@ BuildSlStack(const SlStackParams& p,
     // recovery (the lost TBs aren't retransmittable because retx slots hit
     // the same half-duplex conflict). See VALIDATION_REPORT.md §7.
     // Default remains plain SB-SPS (paper-faithful).
-    const bool deterministic = false;  // hard-disable: was (p.schedulerMode == "deterministic");
+    const bool deterministic = (p.schedulerMode == "deterministic");
     if (deterministic)
     {
         const bool tdm = (p.detScheme == "tdm");
@@ -261,26 +261,33 @@ BuildSlStack(const SlStackParams& p,
             det->InstallAmc(slAmc);
             det->SetAttribute("Mcs", UintegerValue(p.mcs));
 
-            // Partition: each UE gets its own lane (round-robin) so that with
-            // detNumLanes >= numUEs, every UE is on a disjoint subchannel/slot
-            // phase and never collides on the same (time, freq) cell. Falls
-            // back to lane 0 if detNumLanes is too small to give every UE a
-            // unique lane (caller should set detNumLanes >= numUEs).
+            // Combined FDM+TDM partition: each UE gets its own
+            // (subchannel, slot-phase) cell so disjoint reservations are
+            // guaranteed when numUEs > detNumLanes (i.e., > numSubchannels).
+            //
+            // For 20 MHz / 2 subchannels / 3 UEs: FDM gives only 2 disjoint
+            // lanes; adding TDM modulus=numSubchannels, phase=i tiles the 3rd
+            // UE into the unused (slot, subch) cell.
             uint8_t laneIdx = (p.detNumLanes > 0) ? (i % p.detNumLanes) : 0;
             NS_LOG_INFO("Deterministic scheduler UE i=" << i << " device=" << dev
                                                        << " RNTI=" << nrSlMac->GetRnti()
                                                        << " → lane " << +laneIdx
                                                        << " (modulus=" << +p.detNumLanes << ")");
-            if (tdm)
-            {
-                det->SetSlotPartition(p.detNumLanes, laneIdx);
-            }
-            else
-            {
-                auto lane = NrSlDeterministicScheduler::Lane(p.detTotalSubch,
-                                                            p.detNumLanes, laneIdx);
-                det->SetSubchannelLane(lane.first, lane.second);
-            }
+            // TDM-only partition: each UE gets a unique slot phase so the
+            // 3 (or N) UEs transmit on disjoint slots. CTTC's scheduler
+            // always grants the full BW (subchLen = numSubchannels) per TX,
+            // so subchannel-level FDM filtering is not effective — TDM
+            // (slot phase) is the only way to guarantee disjoint reservations
+            // when each UE must use the full bandwidth.
+            //
+            // For 3 UEs at RRI=10 ms = 40 slots, modulus=3, phase=i:
+            //   UE0 → slot 0, 3, 6, …  (slot % 3 == 0)
+            //   UE1 → slot 1, 4, 7, …  (slot % 3 == 1)
+            //   UE2 → slot 2, 5, 8, …  (slot % 3 == 2)
+            // Each UE picks the first matching slot → exactly 1 reservation
+            // per RRI cycle, in distinct slots → 0 collisions.
+            const uint32_t numUes = ctx.ueNetDev.GetN();
+            det->SetSlotPartition(numUes, i);
             // Carry per-destination fixed-MCS overrides (split-MCS groupcast).
             for (const auto& kv : p.dstMcsOverride)
                 det->SetDstMcsOverride(kv.first, kv.second);

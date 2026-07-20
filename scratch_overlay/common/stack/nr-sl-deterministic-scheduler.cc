@@ -153,6 +153,20 @@ NrSlDeterministicScheduler::DoNrSlAllocation(
             filtered.push_back(r);
         }
     }
+    NS_LOG_DEBUG("imsi=" << GetMac()->GetImsi() << " Deterministic: m_slotModulus=" << m_slotModulus
+                                                << " m_slotPhase=" << m_slotPhase
+                                                << " m_laneStart=" << +m_laneStart
+                                                << " m_laneLength=" << +m_laneLength
+                                                << " candResources=" << candResources.size()
+                                                << " filtered=" << filtered.size());
+    if (candResources.size() > 0 && candResources.size() < 5)
+    {
+        for (const auto& r : candResources)
+        {
+            NS_LOG_DEBUG("  cand: sfn=" << r.sfn << " subchStart=" << +r.slSubchannelStart
+                                       << " subchLen=" << +r.slSubchannelLength);
+        }
+    }
 
     if (filtered.empty())
     {
@@ -170,10 +184,17 @@ NrSlDeterministicScheduler::DoNrSlAllocation(
                                                             allocationInfo);
     }
 
-    return NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(filtered,
+    auto rv = NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(filtered,
                                                         dstInfo,
                                                         slotAllocList,
                                                         allocationInfo);
+    // Log what was actually allocated
+    NS_LOG_DEBUG("Deterministic allocated: rv=" << rv << " count=" << slotAllocList.size());
+    for (const auto& s : slotAllocList) {
+        NS_LOG_DEBUG("  → sfn=" << s.sfn << " subChLen=" << +s.slPsschSubChLength
+                          << " maxPerRsv=" << +s.maxNumPerReserve);
+    }
+    return rv;
 }
 
 } // namespace ns3
