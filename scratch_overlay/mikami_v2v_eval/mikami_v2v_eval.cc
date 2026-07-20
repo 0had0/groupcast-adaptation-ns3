@@ -313,7 +313,7 @@ main(int argc, char* argv[])
               << ";rri_ms=" << effectiveRriMs
               << ";pdb_ms=" << pktIntervalMs
               << ";rate_kbps=" << rateKbps
-              << ";harq=1"
+              << ";harq=" << (harqEnabled ? 1 : 0)
               << ";dynamic=1"
               << ";tx_nodes=";       // empty = every UE transmits (full mesh)
     for (uint32_t i = 0; i < numUEs; ++i)
