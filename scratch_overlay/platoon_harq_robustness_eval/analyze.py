@@ -51,6 +51,14 @@ def ci95(x):
 
 
 def load(rdir):
+    run_files = sorted(glob.glob(str(rdir / "*_run.csv")))
+    if not run_files and (rdir / "runs_all.csv").exists():
+        # already-aggregated results (e.g. copied back from another machine)
+        runs, mem = pd.read_csv(rdir / "runs_all.csv"), pd.read_csv(rdir / "members_all.csv")
+        for d in (runs, mem):
+            d["ivd_m"] = d["ivd_m"].astype(float).astype(int)
+            d["nbg"] = d["nbg"].astype(int)
+        return runs, mem
     runs = pd.concat([pd.read_csv(f) for f in sorted(glob.glob(str(rdir / "*_run.csv")))],
                      ignore_index=True)
     mem = pd.concat([pd.read_csv(f) for f in sorted(glob.glob(str(rdir / "*_member.csv")))],
@@ -219,7 +227,8 @@ def main():
                 ax.set_ylabel("share of leader transmissions")
             if i == 1:
                 ax.set_xlabel("member")
-    axes[1, 0].legend(loc="lower left", fontsize=8)
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, loc="upper right", ncol=3, fontsize=8, bbox_to_anchor=(0.99, 0.99))
     fig.suptitle("Leader -> member link condition (3GPP + geometric blockage), no background",
                  color=INK, fontsize=11, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.95))

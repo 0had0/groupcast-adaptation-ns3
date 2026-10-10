@@ -63,6 +63,14 @@ def make_trace(args):
 
 
 def run_job(job):
+    try:
+        return _run_job(job)
+    except Exception as e:  # never let one job take the campaign loop down
+        sc, ivd, tr, nbg, seed, _, _ = job
+        return f"{SHORT[sc]}_ivd{ivd}_{tr}_n{nbg}_s{seed}", f"FAILED exception {e!r}", 0.0
+
+
+def _run_job(job):
     sc, ivd, tr, nbg, seed, tdir, rdir = job
     tag = f"{SHORT[sc]}_ivd{ivd}_{tr}_n{nbg}_s{seed}"
     out = rdir / tag
@@ -120,9 +128,12 @@ def main():
 
     def log(msg):
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-        print(line, flush=True)
         progress.write(line + "\n")
         progress.flush()
+        try:
+            print(line, flush=True)
+        except OSError:
+            pass  # terminal gone (closed ssh / pipe): keep logging to the file
 
     # ---- 1. mobility traces (cheap, SUMO)
     tjobs = [(tdir, sc, ivd, nbg, seed) for sc, ivd, nbg, seed in
@@ -150,7 +161,11 @@ def main():
     with cf.ThreadPoolExecutor(max_workers=a.jobs) as ex:
         futs = {ex.submit(run_job, j): j for j in todo}
         for f in cf.as_completed(futs):
-            tag, st, dt = f.result()
+            try:
+                tag, st, dt = f.result()
+            except Exception as e:
+                j = futs[f]
+                tag, st, dt = f"{SHORT[j[0]]}_ivd{j[1]}_{j[2]}_n{j[3]}_s{j[4]}", f"FAILED {e!r}", 0.0
             done += 1
             el = time.time() - t0
             log(f"{done}/{len(todo)} {tag}: {st} ({dt:.0f}s)  elapsed {el / 60:.1f} min")
