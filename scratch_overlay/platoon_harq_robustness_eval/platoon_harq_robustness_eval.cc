@@ -67,6 +67,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace ns3;
@@ -206,6 +207,9 @@ struct Global
     std::unordered_map<uint64_t, std::vector<size_t>> txByKey;
     size_t lastSeenTx{0};
     uint64_t phyUnmatched{0};
+    // MCS of the leader PSSCHs decoded by the members (self-check of --mcs)
+    int mcsRxMin{255};
+    int mcsRxMax{-1};
 };
 
 Global g;
@@ -286,6 +290,8 @@ OnMemberPsschRx(uint32_t member, SlRxDataPacketTraceParams p)
         ++g.phyUnmatched;
         return;
     }
+    g.mcsRxMin = std::min(g.mcsRxMin, static_cast<int>(p.m_mcs));
+    g.mcsRxMax = std::max(g.mcsRxMax, static_cast<int>(p.m_mcs));
     MemberRx& r = g.phy[best][member - 1];
     r.status = p.m_corrupt ? 2 : 1;
     r.sinrDb = (p.m_sinr > 0.0) ? static_cast<float>(10.0 * std::log10(p.m_sinr)) : -99.0f;
@@ -372,6 +378,7 @@ main(int argc, char* argv[])
     bool option1Tx = true;
     bool leaderSps = false;         // CTTC SPS never re-selects for a larger SDU (see README)
     bool bgSps = true;
+    bool dedicatedCarrier = false;  // every slot SL (else 9 of 20, shared TDD carrier)
     double antennaHeight = 1.5;
     double maxLossDb = 150.0;
     double kpiStart = -1.0;         // default: trace meta kpi_start
@@ -401,6 +408,7 @@ main(int argc, char* argv[])
     cmd.AddValue("option1Tx", "leader treats 'no NACK' as success (Option 1)", option1Tx);
     cmd.AddValue("leaderSps", "periodic leader traffic uses SPS (else dynamic grant)", leaderSps);
     cmd.AddValue("bgSps", "periodic background traffic uses SPS", bgSps);
+    cmd.AddValue("dedicatedCarrier", "dedicated SL carrier: every slot is sidelink", dedicatedCarrier);
     cmd.AddValue("maxLossDb", "SpectrumChannel MaxLossDb", maxLossDb);
     cmd.AddValue("kpiStart", "KPI window start (s); default = trace kpi_start", kpiStart);
     cmd.AddValue("maxTime", "truncate the run at this time (s), 0 = whole trace", maxTime);
@@ -494,6 +502,7 @@ main(int argc, char* argv[])
     sp.maxNumTx = static_cast<uint8_t>(maxNumTx);
     sp.psfchPeriod = psfchPeriod;
     sp.maxNumPerReserve = static_cast<uint8_t>(maxNumPerReserve);
+    sp.dedicatedCarrier = dedicatedCarrier;
     sp.harqOption = 1;
     sp.mcrMeters = 0.0; // the Option-1 RX gate is installed below
     sp.adaptiveMcs = false;
@@ -595,7 +604,8 @@ main(int argc, char* argv[])
               << ", periodic1 " << nP1 << ") tEnd=" << tEnd << " kpi=[" << kpiStart << ","
               << tEnd - tailGuard << "] mu=" << mu << " BW=" << channelBwMHz
               << "MHz subch=" << subchPrbs << "PRB" << " mcs=" << mcs << " maxNumTx=" << maxNumTx
-              << " psfch=" << psfchPeriod << "\n";
+              << " psfch=" << psfchPeriod << " option1Tx=" << option1Tx
+              << " dedicatedCarrier=" << dedicatedCarrier << "\n";
 
     // Local contrib/nr builds may carry NS_LOG_UNCOND debug prints in per-slot
     // paths; with badbit set every std::clog insertion is a no-op, so they
@@ -674,8 +684,12 @@ main(int argc, char* argv[])
     }
 
     // -- channel busy ratio (all active vehicles, KPI window)
+    // busySubchSlots sums every transmission, so overlapping (collided)
+    // transmissions count twice: cbr is the offered load and can exceed 1.
+    // occupied counts each (slot, subchannel) once: cbr_occupied <= 1.
     double busySubchSlots = 0.0;
     double leaderSubchSlots = 0.0;
+    std::unordered_set<int64_t> occupied;
     {
         const int64_t s0 = std::llround(kpiStart / g.tSlot);
         const int64_t s1 = std::llround(kpiEnd / g.tSlot);
@@ -687,6 +701,12 @@ main(int argc, char* argv[])
             }
             const double sc = static_cast<double>(o.rbLen) / subchPrbs;
             busySubchSlots += sc;
+            const uint32_t k0 = o.rbStart / subchPrbs;
+            const uint32_t k1 = (o.rbStart + o.rbLen + subchPrbs - 1) / subchPrbs;
+            for (uint32_t k = k0; k < k1; ++k)
+            {
+                occupied.insert(o.slotAbs * 1024 + k);
+            }
             if (o.node == 0)
             {
                 leaderSubchSlots += sc;
@@ -694,10 +714,13 @@ main(int argc, char* argv[])
         }
     }
     // SL pool: 9 SL slots out of every 20 physical slots (bitmap 111111000111
-    // applied to the 6 UL slots of DL|DL|DL|F|UL|UL|UL|UL|UL|UL)
-    const double slSlots = (kpiEnd - kpiStart) / g.tSlot * 9.0 / 20.0;
+    // applied to the 6 UL slots of DL|DL|DL|F|UL|UL|UL|UL|UL|UL), or every
+    // slot on the dedicated carrier
+    const double slSlotFrac = dedicatedCarrier ? 1.0 : 9.0 / 20.0;
+    const double slSlots = (kpiEnd - kpiStart) / g.tSlot * slSlotFrac;
     const double cbr = busySubchSlots / (slSlots * totalSubch);
     const double cbrLeader = leaderSubchSlots / (slSlots * totalSubch);
+    const double cbrOccupied = static_cast<double>(occupied.size()) / (slSlots * totalSubch);
 
     // -- seq -> leader transmissions
     const uint32_t nSeq = static_cast<uint32_t>(g.pktTxTime.size());
@@ -991,7 +1014,8 @@ main(int argc, char* argv[])
               "leader_tx,leader_new_tb,leader_retx,tx_per_pkt,retx_ratio,leader_tx_coll_rate,"
               "pkt_any_coll_rate,nack_rx,implicit_ack,nack_decisions,stale_decisions,"
               "explicit_ack_rx,cbr,cbr_leader,prr_mean,prr_min,collision_loss_rate,"
-              "channel_loss_rate,notx_rate,other_loss_rate,phy_unmatched,slot_misaligned,wall_s\n";
+              "channel_loss_rate,notx_rate,other_loss_rate,phy_unmatched,slot_misaligned,wall_s,"
+              "option1_tx,sl_slot_frac,mcs_rx_min,mcs_rx_max,cbr_occupied\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -1005,7 +1029,9 @@ main(int argc, char* argv[])
            << ctl.nAckRx << ',' << cbr << ',' << cbrLeader << ',' << prrMean << ',' << prrMin
            << ',' << collMean << ',' << chanMean << ',' << notxMean << ',' << otherMean << ','
            << g.phyUnmatched
-           << ',' << ctl.nSlotMisaligned << ',' << std::setprecision(1) << wall << '\n';
+           << ',' << ctl.nSlotMisaligned << ',' << std::fixed << std::setprecision(1) << wall << ','
+           << option1Tx << ',' << std::defaultfloat << std::setprecision(4) << slSlotFrac << ',' << g.mcsRxMin << ','
+           << g.mcsRxMax << ',' << std::setprecision(6) << cbrOccupied << '\n';
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx

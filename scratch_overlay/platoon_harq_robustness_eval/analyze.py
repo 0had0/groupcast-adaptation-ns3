@@ -243,7 +243,7 @@ def main():
                         ls=ls, marker=mk, capsize=2, label=f"{lab}: leader TBs in collision")
             ax.plot(d.nbg, d.cbr, color=col, ls=":", marker="^", lw=1.2,
                     label=f"{lab}: CBR")
-        ax.set_ylim(0, None)
+        ax.set_ylim(0, 0.68)
     facet("Channel busy ratio and resource-collision rate of the leader's transmissions",
           out / "fig5_cbr_collision.png", cell_cbr, ylabel="ratio", legend_cell=(0, 0))
 

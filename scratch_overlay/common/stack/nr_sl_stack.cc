@@ -356,7 +356,13 @@ BuildSlStack(const SlStackParams& p,
     // -----------------------------------------------------------------------
     Ptr<NrSlCommResourcePoolFactory> poolFactory =
         Create<NrSlCommResourcePoolFactory>();
+    // Dedicated carrier (p.dedicatedCarrier): all-ones bitmap on an all-UL
+    // TDD pattern, i.e. every physical slot is a sidelink slot.
     std::vector<std::bitset<1>> slBitmap = {1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1};
+    if (p.dedicatedCarrier)
+    {
+        slBitmap.assign(10, std::bitset<1>(1));
+    }
     poolFactory->SetSlTimeResources(slBitmap);
     poolFactory->SetSlSensingWindow(100);
     poolFactory->SetSlSelectionWindow(5);
@@ -428,7 +434,8 @@ BuildSlStack(const SlStackParams& p,
         slFreqCfg.slBwpList[bid] = slBwpCfg;
 
     LteRrcSap::TddUlDlConfigCommon tddCfg;
-    tddCfg.tddPattern = "DL|DL|DL|F|UL|UL|UL|UL|UL|UL|";
+    tddCfg.tddPattern = p.dedicatedCarrier ? "UL|UL|UL|UL|UL|UL|UL|UL|UL|UL|"
+                                           : "DL|DL|DL|F|UL|UL|UL|UL|UL|UL|";
 
     LteRrcSap::SlPreconfigGeneralNr slPreGen;
     slPreGen.slTddConfig = tddCfg;

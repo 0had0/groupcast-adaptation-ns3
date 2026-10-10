@@ -118,6 +118,13 @@ struct SlStackParams
     //   least one RX sent NACK.
     uint8_t maxNumPerReserve{1};
 
+    // -- Dedicated SL carrier --
+    // false (default) = repo-standard shared TDD carrier: SL bitmap
+    //   111111000111 on the UL slots of DL|DL|DL|F|UL×6 → 9 SL slots per 20.
+    // true = dedicated ITS carrier: TDD pattern UL×10 and an all-ones bitmap,
+    //   every physical slot is a sidelink slot.
+    bool dedicatedCarrier{false};
+
     // -- MCR feedback gate (HARQ Option-1 only) --
     // When harqOption == 1 AND mcrMeters > 0, BuildSlStack calls
     // InstallMcrFeedbackGate() on all UE devices, suppressing PSFCH from
