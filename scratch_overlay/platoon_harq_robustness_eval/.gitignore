@@ -3,4 +3,5 @@ traces/
 results/
 *.log
 sumo/highway/*.xml
-sumo/roundabout/vtypes_platoon.add.xml
+sumo/roundabout/vtypes_platoon*.add.xml
+sumo/**/.*.tmp

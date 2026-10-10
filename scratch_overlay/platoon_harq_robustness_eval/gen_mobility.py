@@ -145,6 +145,15 @@ class SeatManager:
         return self.first + seat
 
 
+def write_atomic(path, text):
+    """Write a shared generated file safely when traces are built in parallel."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def park_xy(seat):
     return PARK_X0 - PARK_DX * seat, PARK_Y
 
@@ -204,20 +213,26 @@ def build_highway_net(net_dir):
     net = net_dir / "highway_2dir.net.xml"
     if net.exists():
         return net
-    (net_dir / "hwy2.nod.xml").write_text(
+    net_dir.mkdir(parents=True, exist_ok=True)
+    tag = f"{os.getpid()}"
+    nod, edg = net_dir / f".hwy2.{tag}.nod.xml", net_dir / f".hwy2.{tag}.edg.xml"
+    tmp_net = net_dir / f".highway_2dir.{tag}.net.xml"
+    nod.write_text(
         '<nodes>\n'
         '    <node id="A" x="0.0" y="0.0" type="priority"/>\n'
         f'    <node id="B" x="{HWY_LEN:.1f}" y="0.0" type="priority"/>\n'
         '</nodes>\n')
-    (net_dir / "hwy2.edg.xml").write_text(
+    edg.write_text(
         '<edges>\n'
         f'    <edge id="E" from="A" to="B" numLanes="{HWY_LANES}" speed="{HWY_SPEED_LIMIT}"/>\n'
         f'    <edge id="W" from="B" to="A" numLanes="{HWY_LANES}" speed="{HWY_SPEED_LIMIT}"/>\n'
         '</edges>\n')
-    subprocess.run([NETCONVERT, "--node-files", str(net_dir / "hwy2.nod.xml"),
-                    "--edge-files", str(net_dir / "hwy2.edg.xml"),
-                    "--no-turnarounds", "true", "--output-file", str(net)],
+    subprocess.run([NETCONVERT, "--node-files", str(nod), "--edge-files", str(edg),
+                    "--no-turnarounds", "true", "--output-file", str(tmp_net)],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.replace(tmp_net, net)   # atomic: parallel builders never see a partial file
+    nod.unlink()
+    edg.unlink()
     return net
 
 
@@ -244,14 +259,14 @@ def run_highway(a):
     k_per_m = a.nbg / (len(bg_lanes) * 2.0 * W) if a.nbg > 0 else 0.0
 
     vtypes = net_dir / "vtypes_bg.add.xml"
-    vtypes.write_text(
+    write_atomic(vtypes, 
         '<additional>\n'
         '  <vType id="bg" vClass="passenger" length="5.0" width="1.8" minGap="2.5" '
         'accel="2.6" decel="4.5" sigma="0.5" tau="1.0" maxSpeed="45" '
         'speedFactor="normc(1.0,0.08,0.85,1.15)"/>\n'
         '</additional>\n')
     routes = net_dir / "routes_2dir.rou.xml"
-    routes.write_text('<routes>\n  <route id="rE" edges="E"/>\n  <route id="rW" edges="W"/>\n</routes>\n')
+    write_atomic(routes, '<routes>\n  <route id="rE" edges="E"/>\n  <route id="rW" edges="W"/>\n</routes>\n')
 
     cmd = [SUMO_BIN, "-n", str(net_path), "-r", str(routes), "--additional-files", str(vtypes),
            "--begin", "0", "--step-length", str(a.dt), "--no-step-log", "true",
@@ -358,8 +373,8 @@ def run_roundabout(a):
     spacing = a.ivd + a.veh_len
     R = a.rbt_radius
 
-    vtypes = net_dir / "vtypes_platoon.add.xml"
-    vtypes.write_text(
+    vtypes = net_dir / f"vtypes_platoon_L{a.veh_len:g}.add.xml"
+    write_atomic(vtypes, 
         '<additional>\n'
         '  <vType id="car" vClass="passenger" length="4.5" width="2.0" minGap="2.5" '
         'accel="2.6" decel="4.5" emergencyDecel="6.0" sigma="0.5" tau="1.0" maxSpeed="55" '
