@@ -12,6 +12,7 @@
 
 #include "common/channel/geometric_channel.h"
 
+#include "ns3/channel-condition-model.h"
 #include "ns3/internet-module.h"
 #include "ns3/network-module.h"
 #include "ns3/nr-module.h"
@@ -151,6 +152,12 @@ struct SlStackCtx
     Ipv4InterfaceContainer       ueIpIface;
     int64_t                      stream{0};
     std::map<uint16_t, uint32_t> rntiToNode; //!< RNTI → nodeId (for future CSI work)
+    // Channel-condition model of the (first) BWP, i.e. the geometric-wrapped
+    // model, so callers can read back the actual LOS / NLOSv / NLOS condition
+    // of a link. This is a refcounted Ptr on purpose: CcBwpCreator::GetAllBwps
+    // MOVES the BandwidthPartInfoPtrs into a local vector inside BuildSlStack,
+    // so anything cached here must not be a BandwidthPartInfo pointer.
+    Ptr<ChannelConditionModel> channelConditionModel;
 };
 
 SlStackCtx BuildSlStack(const SlStackParams& p,

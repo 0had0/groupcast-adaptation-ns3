@@ -13,6 +13,8 @@
 // exactly like McrGateShim.
 
 #include "mcr_nack_only_gate.h"
+#include "mcr_feedback_gate.h"
+
 
 #include "ns3/log.h"
 #include "ns3/mobility-model.h"
@@ -92,6 +94,8 @@ class McrNackOnlyShim : public Object
         }
 
         // Forward NACK (and ACK if dropAcks=false) to original callback.
+        NS_LOG_DEBUG("McrNackOnlyGate: forwarding " << (info.m_harqStatus == SlHarqInfo::ACK ? "ACK" : "NACK") << " txRnti=" << info.m_txRnti);
+
         m_uePhy->EnqueueSlHarqFeedback(info);
     }
 
@@ -115,6 +119,8 @@ InstallMcrNackOnlyGate(const NetDeviceContainer& ueNetDev,
                        bool dropAcks)
 {
     NS_LOG_FUNCTION(mcrMeters << dropAcks);
+    RegisterRntiMobilityPoll(ueNetDev);
+
 
     if (mcrMeters >= 1e8)
     {

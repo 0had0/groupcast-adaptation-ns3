@@ -140,12 +140,24 @@ ThreeGppGeometricNlosvModel::IsBlockedByVehicle(Ptr<const MobilityModel> a,
     Vector posA = a->GetPosition();
     Vector posB = b->GetPosition();
 
+    // A vehicle can never block its own link: the TX sits at the start of the
+    // segment and the RX at its end, so both of their own AABBs trivially
+    // intersect it. Without this skip every link is forced to NLOSv, because
+    // m_blockerNodes normally contains the whole UE set including a and b.
+    Ptr<Node> nodeA = a->GetObject<Node>();
+    Ptr<Node> nodeB = b->GetObject<Node>();
+
     // --- Path 1: direct NodeContainer (trace-replay mode, no TraCI) ---
     if (m_blockerNodes.GetN() > 0)
     {
         for (uint32_t i = 0; i < m_blockerNodes.GetN(); ++i)
         {
-            Ptr<MobilityModel> mob = m_blockerNodes.Get(i)->GetObject<MobilityModel>();
+            Ptr<Node> blockerNode = m_blockerNodes.Get(i);
+            if (blockerNode == nodeA || blockerNode == nodeB)
+            {
+                continue;
+            }
+            Ptr<MobilityModel> mob = blockerNode->GetObject<MobilityModel>();
             if (!mob)
                 continue;
             Vector posV = mob->GetPosition();
@@ -176,6 +188,8 @@ ThreeGppGeometricNlosvModel::IsBlockedByVehicle(Ptr<const MobilityModel> a,
 
         Ptr<Node> blockerNode = it->second.second;
         if (!blockerNode)
+            continue;
+        if (blockerNode == nodeA || blockerNode == nodeB)
             continue;
 
         Ptr<MobilityModel> blockerMob = blockerNode->GetObject<MobilityModel>();

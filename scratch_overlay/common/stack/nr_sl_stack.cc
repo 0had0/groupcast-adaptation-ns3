@@ -144,6 +144,20 @@ BuildSlStack(const SlStackParams& p,
 
     Packet::EnablePrinting();
 
+    // Capture the (geometric-wrapped) channel-condition model while allBwps is
+    // still alive: GetAllBwps moves the BandwidthPartInfoPtrs out of the band,
+    // so they die with this function. The CCM itself is refcounted and lives on.
+    if (!allBwps.empty())
+    {
+        if (auto* bwp = allBwps[0].get().get())
+        {
+            if (auto pl = DynamicCast<ThreeGppPropagationLossModel>(bwp->m_propagation))
+            {
+                ctx.channelConditionModel = pl->GetChannelConditionModel();
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // 4. UE antenna + PHY attributes.
     // -----------------------------------------------------------------------

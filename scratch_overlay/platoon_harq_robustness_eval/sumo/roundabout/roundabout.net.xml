@@ -1,0 +1,681 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-09-30T14:57:00.867656+01:00 by Eclipse SUMO netconvert v1_26_0+1305-4fc6bb35f49
+<netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+
+    <input>
+        <node-files value="/Users/hadih/Documents/joint-coop-harq-mac/sumo-exports/roundabout.nod.xml"/>
+        <edge-files value="/Users/hadih/Documents/joint-coop-harq-mac/sumo-exports/roundabout.edg.xml"/>
+        <connection-files value="/Users/hadih/Documents/joint-coop-harq-mac/sumo-exports/roundabout.con.xml"/>
+    </input>
+
+    <output>
+        <output-file value="/Users/hadih/Documents/joint-coop-harq-mac/sumo-exports/roundabout.net.xml"/>
+    </output>
+
+    <processing>
+        <offset.disable-normalization value="true"/>
+    </processing>
+
+    <building_defaults>
+        <default.junctions.radius value="6"/>
+    </building_defaults>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+    </junctions>
+
+</netconvertConfiguration>
+-->
+
+<net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+
+    <location netOffset="0.00,0.00" convBoundary="-1025.00,-1025.00,1025.00,1025.00" origBoundary="-1025.00,-1025.00,1025.00,1025.00" projParameter="!"/>
+
+    <edge id=":ring_0_0" function="internal">
+        <lane id=":ring_0_0_0" index="0" speed="7.56" length="10.05" shape="-4.80,34.51 -5.15,31.87 -6.21,29.76 -7.97,28.20 -10.43,27.17"/>
+        <lane id=":ring_0_0_1" index="1" speed="8.91" length="14.28" shape="-1.60,34.51 -2.10,30.75 -3.60,27.76 -6.10,25.54 -9.60,24.08"/>
+    </edge>
+    <edge id=":ring_0_2" function="internal">
+        <lane id=":ring_0_2_0" index="0" speed="7.56" length="10.05" shape="10.43,27.17 7.97,28.20 6.21,29.76 5.15,31.87 4.80,34.51"/>
+    </edge>
+    <edge id=":ring_0_3" function="internal">
+        <lane id=":ring_0_3_0" index="0" speed="8.33" length="21.27" shape="10.43,27.17 4.46,28.63 -0.00,29.11 -4.46,28.63 -10.43,27.17"/>
+    </edge>
+    <edge id=":ring_0_4" function="internal">
+        <lane id=":ring_0_4_0" index="0" speed="8.91" length="3.96" shape="9.60,24.08 6.10,25.54 5.98,25.65"/>
+    </edge>
+    <edge id=":ring_0_5" function="internal">
+        <lane id=":ring_0_5_0" index="0" speed="8.33" length="19.61" shape="9.60,24.08 3.99,25.48 -0.00,25.95 -3.99,25.48 -9.60,24.08"/>
+    </edge>
+    <edge id=":ring_0_6" function="internal">
+        <lane id=":ring_0_6_0" index="0" speed="8.91" length="10.32" shape="5.98,25.65 3.60,27.76 2.10,30.75 1.60,34.51"/>
+    </edge>
+    <edge id=":ring_1_0" function="internal">
+        <lane id=":ring_1_0_0" index="0" speed="7.59" length="1.69" shape="-13.74,26.29 -14.46,26.08 -14.94,25.87 -15.36,25.56 -15.89,25.04"/>
+        <lane id=":ring_1_0_1" index="1" speed="8.33" length="1.69" shape="-12.91,23.20 -13.15,23.13 -13.31,23.06 -13.45,22.95 -13.63,22.78"/>
+    </edge>
+    <edge id=":ring_10_0" function="internal">
+        <lane id=":ring_10_0_0" index="0" speed="7.59" length="1.69" shape="26.29,13.74 26.08,14.46 25.87,14.94 25.56,15.36 25.04,15.89"/>
+        <lane id=":ring_10_0_1" index="1" speed="8.33" length="1.69" shape="23.20,12.91 23.13,13.15 23.06,13.31 22.95,13.45 22.78,13.63"/>
+    </edge>
+    <edge id=":ring_11_0" function="internal">
+        <lane id=":ring_11_0_0" index="0" speed="7.59" length="1.69" shape="15.89,25.04 15.36,25.56 14.94,25.87 14.46,26.08 13.74,26.29"/>
+        <lane id=":ring_11_0_1" index="1" speed="8.33" length="1.69" shape="13.63,22.78 13.45,22.95 13.31,23.06 13.15,23.13 12.91,23.20"/>
+    </edge>
+    <edge id=":ring_2_0" function="internal">
+        <lane id=":ring_2_0_0" index="0" speed="7.59" length="1.69" shape="-25.04,15.89 -25.56,15.36 -25.87,14.94 -26.08,14.46 -26.29,13.74"/>
+        <lane id=":ring_2_0_1" index="1" speed="8.33" length="1.69" shape="-22.78,13.63 -22.95,13.45 -23.06,13.31 -23.13,13.15 -23.20,12.91"/>
+    </edge>
+    <edge id=":ring_3_0" function="internal">
+        <lane id=":ring_3_0_0" index="0" speed="7.56" length="10.05" shape="-27.17,10.43 -28.20,7.97 -29.76,6.21 -31.87,5.15 -34.51,4.80"/>
+    </edge>
+    <edge id=":ring_3_1" function="internal">
+        <lane id=":ring_3_1_0" index="0" speed="8.33" length="21.27" shape="-27.17,10.43 -28.63,4.46 -29.11,-0.00 -28.63,-4.46 -27.17,-10.43"/>
+    </edge>
+    <edge id=":ring_3_2" function="internal">
+        <lane id=":ring_3_2_0" index="0" speed="8.91" length="3.96" shape="-24.08,9.60 -25.54,6.10 -25.65,5.98"/>
+    </edge>
+    <edge id=":ring_3_3" function="internal">
+        <lane id=":ring_3_3_0" index="0" speed="8.33" length="19.61" shape="-24.08,9.60 -25.48,3.99 -25.95,0.00 -25.48,-3.99 -24.08,-9.60"/>
+    </edge>
+    <edge id=":ring_3_6" function="internal">
+        <lane id=":ring_3_6_0" index="0" speed="8.91" length="10.32" shape="-25.65,5.98 -27.76,3.60 -30.75,2.10 -34.51,1.60"/>
+    </edge>
+    <edge id=":ring_3_4" function="internal">
+        <lane id=":ring_3_4_0" index="0" speed="7.56" length="10.05" shape="-34.51,-4.80 -31.87,-5.15 -29.76,-6.21 -28.20,-7.97 -27.17,-10.43"/>
+        <lane id=":ring_3_4_1" index="1" speed="8.91" length="14.28" shape="-34.51,-1.60 -30.75,-2.10 -27.76,-3.60 -25.54,-6.10 -24.08,-9.60"/>
+    </edge>
+    <edge id=":ring_4_0" function="internal">
+        <lane id=":ring_4_0_0" index="0" speed="7.59" length="1.69" shape="-26.29,-13.74 -26.08,-14.46 -25.87,-14.94 -25.56,-15.36 -25.04,-15.89"/>
+        <lane id=":ring_4_0_1" index="1" speed="8.33" length="1.69" shape="-23.20,-12.91 -23.13,-13.15 -23.06,-13.31 -22.95,-13.45 -22.78,-13.63"/>
+    </edge>
+    <edge id=":ring_5_0" function="internal">
+        <lane id=":ring_5_0_0" index="0" speed="7.59" length="1.69" shape="-15.89,-25.04 -15.36,-25.56 -14.94,-25.87 -14.46,-26.08 -13.74,-26.29"/>
+        <lane id=":ring_5_0_1" index="1" speed="8.33" length="1.69" shape="-13.63,-22.78 -13.45,-22.95 -13.31,-23.06 -13.15,-23.13 -12.91,-23.20"/>
+    </edge>
+    <edge id=":ring_6_0" function="internal">
+        <lane id=":ring_6_0_0" index="0" speed="7.56" length="10.05" shape="4.80,-34.51 5.15,-31.87 6.21,-29.76 7.97,-28.20 10.43,-27.17"/>
+        <lane id=":ring_6_0_1" index="1" speed="8.91" length="14.28" shape="1.60,-34.51 2.10,-30.75 3.60,-27.76 6.10,-25.54 9.60,-24.08"/>
+    </edge>
+    <edge id=":ring_6_2" function="internal">
+        <lane id=":ring_6_2_0" index="0" speed="7.56" length="10.05" shape="-10.43,-27.17 -7.97,-28.20 -6.21,-29.76 -5.15,-31.87 -4.80,-34.51"/>
+    </edge>
+    <edge id=":ring_6_3" function="internal">
+        <lane id=":ring_6_3_0" index="0" speed="8.33" length="21.27" shape="-10.43,-27.17 -4.46,-28.63 0.00,-29.11 4.46,-28.63 10.43,-27.17"/>
+    </edge>
+    <edge id=":ring_6_4" function="internal">
+        <lane id=":ring_6_4_0" index="0" speed="8.91" length="3.96" shape="-9.60,-24.08 -6.10,-25.54 -5.98,-25.65"/>
+    </edge>
+    <edge id=":ring_6_5" function="internal">
+        <lane id=":ring_6_5_0" index="0" speed="8.33" length="19.61" shape="-9.60,-24.08 -3.99,-25.48 0.00,-25.95 3.99,-25.48 9.60,-24.08"/>
+    </edge>
+    <edge id=":ring_6_6" function="internal">
+        <lane id=":ring_6_6_0" index="0" speed="8.91" length="10.32" shape="-5.98,-25.65 -3.60,-27.76 -2.10,-30.75 -1.60,-34.51"/>
+    </edge>
+    <edge id=":ring_7_0" function="internal">
+        <lane id=":ring_7_0_0" index="0" speed="7.59" length="1.69" shape="13.74,-26.29 14.46,-26.08 14.94,-25.87 15.36,-25.56 15.89,-25.04"/>
+        <lane id=":ring_7_0_1" index="1" speed="8.33" length="1.69" shape="12.91,-23.20 13.15,-23.13 13.31,-23.06 13.45,-22.95 13.63,-22.78"/>
+    </edge>
+    <edge id=":ring_8_0" function="internal">
+        <lane id=":ring_8_0_0" index="0" speed="7.59" length="1.69" shape="25.04,-15.89 25.56,-15.36 25.87,-14.94 26.08,-14.46 26.29,-13.74"/>
+        <lane id=":ring_8_0_1" index="1" speed="8.33" length="1.69" shape="22.78,-13.63 22.95,-13.45 23.06,-13.31 23.13,-13.15 23.20,-12.91"/>
+    </edge>
+    <edge id=":ring_9_0" function="internal">
+        <lane id=":ring_9_0_0" index="0" speed="7.56" length="10.05" shape="34.51,4.80 31.87,5.15 29.76,6.21 28.20,7.97 27.17,10.43"/>
+        <lane id=":ring_9_0_1" index="1" speed="8.91" length="14.28" shape="34.51,1.60 30.75,2.10 27.76,3.60 25.54,6.10 24.08,9.60"/>
+    </edge>
+    <edge id=":ring_9_2" function="internal">
+        <lane id=":ring_9_2_0" index="0" speed="7.56" length="10.05" shape="27.17,-10.43 28.20,-7.97 29.76,-6.21 31.87,-5.15 34.51,-4.80"/>
+    </edge>
+    <edge id=":ring_9_3" function="internal">
+        <lane id=":ring_9_3_0" index="0" speed="8.33" length="21.27" shape="27.17,-10.43 28.63,-4.46 29.11,0.00 28.63,4.46 27.17,10.43"/>
+    </edge>
+    <edge id=":ring_9_4" function="internal">
+        <lane id=":ring_9_4_0" index="0" speed="8.91" length="3.96" shape="24.08,-9.60 25.54,-6.10 25.65,-5.98"/>
+    </edge>
+    <edge id=":ring_9_5" function="internal">
+        <lane id=":ring_9_5_0" index="0" speed="8.33" length="19.61" shape="24.08,-9.60 25.48,-3.99 25.95,-0.00 25.48,3.99 24.08,9.60"/>
+    </edge>
+    <edge id=":ring_9_6" function="internal">
+        <lane id=":ring_9_6_0" index="0" speed="8.91" length="10.32" shape="25.65,-5.98 27.76,-3.60 30.75,-2.10 34.51,-1.60"/>
+    </edge>
+
+    <edge id="E_in" from="E_5" to="ring_9" priority="1">
+        <lane id="E_in_0" index="0" speed="13.89" length="990.49" shape="1025.00,4.80 34.51,4.80"/>
+        <lane id="E_in_1" index="1" speed="13.89" length="990.49" shape="1025.00,1.60 34.51,1.60"/>
+    </edge>
+    <edge id="E_out" from="ring_9" to="E_5" priority="1">
+        <lane id="E_out_0" index="0" speed="13.89" length="990.49" shape="34.51,-4.80 1025.00,-4.80"/>
+        <lane id="E_out_1" index="1" speed="13.89" length="990.49" shape="34.51,-1.60 1025.00,-1.60"/>
+    </edge>
+    <edge id="N_in" from="N_5" to="ring_0" priority="1">
+        <lane id="N_in_0" index="0" speed="13.89" length="990.49" shape="-4.80,1025.00 -4.80,34.51"/>
+        <lane id="N_in_1" index="1" speed="13.89" length="990.49" shape="-1.60,1025.00 -1.60,34.51"/>
+    </edge>
+    <edge id="N_out" from="ring_0" to="N_5" priority="1">
+        <lane id="N_out_0" index="0" speed="13.89" length="990.49" shape="4.80,34.51 4.80,1025.00"/>
+        <lane id="N_out_1" index="1" speed="13.89" length="990.49" shape="1.60,34.51 1.60,1025.00"/>
+    </edge>
+    <edge id="S_in" from="S_5" to="ring_6" priority="1">
+        <lane id="S_in_0" index="0" speed="13.89" length="990.49" shape="4.80,-1025.00 4.80,-34.51"/>
+        <lane id="S_in_1" index="1" speed="13.89" length="990.49" shape="1.60,-1025.00 1.60,-34.51"/>
+    </edge>
+    <edge id="S_out" from="ring_6" to="S_5" priority="1">
+        <lane id="S_out_0" index="0" speed="13.89" length="990.49" shape="-4.80,-34.51 -4.80,-1025.00"/>
+        <lane id="S_out_1" index="1" speed="13.89" length="990.49" shape="-1.60,-34.51 -1.60,-1025.00"/>
+    </edge>
+    <edge id="W_in" from="W_5" to="ring_3" priority="1">
+        <lane id="W_in_0" index="0" speed="13.89" length="990.49" shape="-1025.00,-4.80 -34.51,-4.80"/>
+        <lane id="W_in_1" index="1" speed="13.89" length="990.49" shape="-1025.00,-1.60 -34.51,-1.60"/>
+    </edge>
+    <edge id="W_out" from="ring_3" to="W_5" priority="1">
+        <lane id="W_out_0" index="0" speed="13.89" length="990.49" shape="-34.51,4.80 -1025.00,4.80"/>
+        <lane id="W_out_1" index="1" speed="13.89" length="990.49" shape="-34.51,1.60 -1025.00,1.60"/>
+    </edge>
+    <edge id="ring_0" from="ring_0" to="ring_1" priority="10">
+        <lane id="ring_0_0" index="0" speed="8.33" length="3.43" shape="-10.43,27.17 -13.74,26.29"/>
+        <lane id="ring_0_1" index="1" speed="8.33" length="3.43" shape="-9.60,24.08 -12.91,23.20"/>
+    </edge>
+    <edge id="ring_1" from="ring_1" to="ring_2" priority="10">
+        <lane id="ring_1_0" index="0" speed="8.33" length="12.94" shape="-15.89,25.04 -25.04,15.89"/>
+        <lane id="ring_1_1" index="1" speed="8.33" length="12.94" shape="-13.63,22.78 -22.78,13.63"/>
+    </edge>
+    <edge id="ring_10" from="ring_10" to="ring_11" priority="10">
+        <lane id="ring_10_0" index="0" speed="8.33" length="12.94" shape="25.04,15.89 15.89,25.04"/>
+        <lane id="ring_10_1" index="1" speed="8.33" length="12.94" shape="22.78,13.63 13.63,22.78"/>
+    </edge>
+    <edge id="ring_11" from="ring_11" to="ring_0" priority="10">
+        <lane id="ring_11_0" index="0" speed="8.33" length="3.43" shape="13.74,26.29 10.43,27.17"/>
+        <lane id="ring_11_1" index="1" speed="8.33" length="3.43" shape="12.91,23.20 9.60,24.08"/>
+    </edge>
+    <edge id="ring_2" from="ring_2" to="ring_3" priority="10">
+        <lane id="ring_2_0" index="0" speed="8.33" length="3.43" shape="-26.29,13.74 -27.17,10.43"/>
+        <lane id="ring_2_1" index="1" speed="8.33" length="3.43" shape="-23.20,12.91 -24.08,9.60"/>
+    </edge>
+    <edge id="ring_3" from="ring_3" to="ring_4" priority="10">
+        <lane id="ring_3_0" index="0" speed="8.33" length="3.43" shape="-27.17,-10.43 -26.29,-13.74"/>
+        <lane id="ring_3_1" index="1" speed="8.33" length="3.43" shape="-24.08,-9.60 -23.20,-12.91"/>
+    </edge>
+    <edge id="ring_4" from="ring_4" to="ring_5" priority="10">
+        <lane id="ring_4_0" index="0" speed="8.33" length="12.94" shape="-25.04,-15.89 -15.89,-25.04"/>
+        <lane id="ring_4_1" index="1" speed="8.33" length="12.94" shape="-22.78,-13.63 -13.63,-22.78"/>
+    </edge>
+    <edge id="ring_5" from="ring_5" to="ring_6" priority="10">
+        <lane id="ring_5_0" index="0" speed="8.33" length="3.43" shape="-13.74,-26.29 -10.43,-27.17"/>
+        <lane id="ring_5_1" index="1" speed="8.33" length="3.43" shape="-12.91,-23.20 -9.60,-24.08"/>
+    </edge>
+    <edge id="ring_6" from="ring_6" to="ring_7" priority="10">
+        <lane id="ring_6_0" index="0" speed="8.33" length="3.43" shape="10.43,-27.17 13.74,-26.29"/>
+        <lane id="ring_6_1" index="1" speed="8.33" length="3.43" shape="9.60,-24.08 12.91,-23.20"/>
+    </edge>
+    <edge id="ring_7" from="ring_7" to="ring_8" priority="10">
+        <lane id="ring_7_0" index="0" speed="8.33" length="12.94" shape="15.89,-25.04 25.04,-15.89"/>
+        <lane id="ring_7_1" index="1" speed="8.33" length="12.94" shape="13.63,-22.78 22.78,-13.63"/>
+    </edge>
+    <edge id="ring_8" from="ring_8" to="ring_9" priority="10">
+        <lane id="ring_8_0" index="0" speed="8.33" length="3.43" shape="26.29,-13.74 27.17,-10.43"/>
+        <lane id="ring_8_1" index="1" speed="8.33" length="3.43" shape="23.20,-12.91 24.08,-9.60"/>
+    </edge>
+    <edge id="ring_9" from="ring_9" to="ring_10" priority="10">
+        <lane id="ring_9_0" index="0" speed="8.33" length="3.43" shape="27.17,10.43 26.29,13.74"/>
+        <lane id="ring_9_1" index="1" speed="8.33" length="3.43" shape="24.08,9.60 23.20,12.91"/>
+    </edge>
+
+    <junction id="E_5" type="dead_end" x="1025.00" y="0.00" incLanes="E_out_0 E_out_1" intLanes="" shape="1025.00,0.00 1025.00,-6.40 1025.00,0.00"/>
+    <junction id="N_5" type="dead_end" x="0.00" y="1025.00" incLanes="N_out_0 N_out_1" intLanes="" shape="0.00,1025.00 6.40,1025.00 0.00,1025.00"/>
+    <junction id="S_5" type="dead_end" x="0.00" y="-1025.00" incLanes="S_out_0 S_out_1" intLanes="" shape="0.00,-1025.00 -6.40,-1025.00 0.00,-1025.00"/>
+    <junction id="W_5" type="dead_end" x="-1025.00" y="0.00" incLanes="W_out_0 W_out_1" intLanes="" shape="-1025.00,0.00 -1025.00,6.40 -1025.00,0.00"/>
+    <junction id="ring_0" type="priority" x="0.00" y="25.00" incLanes="N_in_0 N_in_1 ring_11_0 ring_11_1" intLanes=":ring_0_0_0 :ring_0_0_1 :ring_0_2_0 :ring_0_3_0 :ring_0_6_0 :ring_0_5_0" shape="-6.40,34.51 6.40,34.51 6.89,31.82 7.51,30.76 8.38,29.89 9.49,29.21 10.85,28.72 9.19,22.54 5.36,23.53 2.45,24.12 0.00,24.32 -2.45,24.12 -5.36,23.53 -9.19,22.54 -10.85,28.72 -8.38,29.89 -7.51,30.76 -6.89,31.82 -6.52,33.07" radius="4.60">
+        <request index="0" response="001000" foes="001000" cont="0"/>
+        <request index="1" response="101000" foes="101000" cont="0"/>
+        <request index="2" response="000000" foes="000000" cont="0"/>
+        <request index="3" response="000000" foes="010011" cont="0"/>
+        <request index="4" response="001000" foes="001000" cont="1"/>
+        <request index="5" response="000000" foes="000010" cont="0"/>
+    </junction>
+    <junction id="ring_1" type="priority" x="-12.50" y="21.65" incLanes="ring_0_0 ring_0_1" intLanes=":ring_1_0_0 :ring_1_0_1" shape="-14.16,27.83 -12.50,21.65 -17.03,26.18 -16.12,27.03 -15.75,27.28 -15.35,27.47 -14.84,27.64" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_10" type="priority" x="21.65" y="12.50" incLanes="ring_9_0 ring_9_1" intLanes=":ring_10_0_0 :ring_10_0_1" shape="27.83,14.16 21.65,12.50 26.18,17.03 27.03,16.12 27.28,15.75 27.47,15.35 27.64,14.84" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_11" type="priority" x="12.50" y="21.65" incLanes="ring_10_0 ring_10_1" intLanes=":ring_11_0_0 :ring_11_0_1" shape="17.03,26.18 12.50,21.65 14.16,27.83 15.35,27.47 15.75,27.28 16.12,27.03 16.52,26.68" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_2" type="priority" x="-21.65" y="12.50" incLanes="ring_1_0 ring_1_1" intLanes=":ring_2_0_0 :ring_2_0_1" shape="-26.18,17.03 -21.65,12.50 -27.83,14.16 -27.47,15.35 -27.28,15.75 -27.03,16.12 -26.68,16.52" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_3" type="priority" x="-25.00" y="0.00" incLanes="ring_2_0 ring_2_1 W_in_0 W_in_1" intLanes=":ring_3_0_0 :ring_3_1_0 :ring_3_6_0 :ring_3_3_0 :ring_3_4_0 :ring_3_4_1" shape="-28.72,10.85 -22.54,9.19 -23.53,5.36 -24.12,2.45 -24.32,0.00 -24.12,-2.45 -23.53,-5.36 -22.54,-9.19 -28.72,-10.85 -29.89,-8.38 -30.76,-7.51 -31.82,-6.89 -33.07,-6.52 -34.51,-6.40 -34.51,6.40 -31.82,6.89 -30.76,7.51 -29.89,8.38 -29.21,9.49" radius="4.60">
+        <request index="0" response="000000" foes="000000" cont="0"/>
+        <request index="1" response="000000" foes="110100" cont="0"/>
+        <request index="2" response="000010" foes="000010" cont="1"/>
+        <request index="3" response="000000" foes="100000" cont="0"/>
+        <request index="4" response="000010" foes="000010" cont="0"/>
+        <request index="5" response="001010" foes="001010" cont="0"/>
+    </junction>
+    <junction id="ring_4" type="priority" x="-21.65" y="-12.50" incLanes="ring_3_0 ring_3_1" intLanes=":ring_4_0_0 :ring_4_0_1" shape="-21.65,-12.50 -26.18,-17.03 -27.03,-16.12 -27.28,-15.75 -27.47,-15.35 -27.64,-14.84 -27.83,-14.16" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_5" type="priority" x="-12.50" y="-21.65" incLanes="ring_4_0 ring_4_1" intLanes=":ring_5_0_0 :ring_5_0_1" shape="-12.50,-21.65 -14.16,-27.83 -15.35,-27.47 -15.75,-27.28 -16.12,-27.03 -16.52,-26.68 -17.03,-26.18" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_6" type="priority" x="0.00" y="-25.00" incLanes="S_in_0 S_in_1 ring_5_0 ring_5_1" intLanes=":ring_6_0_0 :ring_6_0_1 :ring_6_2_0 :ring_6_3_0 :ring_6_6_0 :ring_6_5_0" shape="9.19,-22.54 10.85,-28.72 8.38,-29.89 7.51,-30.76 6.89,-31.82 6.52,-33.07 6.40,-34.51 -6.40,-34.51 -6.89,-31.82 -7.51,-30.76 -8.38,-29.89 -9.49,-29.21 -10.85,-28.72 -9.19,-22.54 -5.36,-23.53 -2.45,-24.12 -0.00,-24.32 2.45,-24.12 5.36,-23.53" radius="4.60">
+        <request index="0" response="001000" foes="001000" cont="0"/>
+        <request index="1" response="101000" foes="101000" cont="0"/>
+        <request index="2" response="000000" foes="000000" cont="0"/>
+        <request index="3" response="000000" foes="010011" cont="0"/>
+        <request index="4" response="001000" foes="001000" cont="1"/>
+        <request index="5" response="000000" foes="000010" cont="0"/>
+    </junction>
+    <junction id="ring_7" type="priority" x="12.50" y="-21.65" incLanes="ring_6_0 ring_6_1" intLanes=":ring_7_0_0 :ring_7_0_1" shape="12.50,-21.65 17.03,-26.18 16.12,-27.03 15.75,-27.28 15.35,-27.47 14.84,-27.64 14.16,-27.83" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_8" type="priority" x="21.65" y="-12.50" incLanes="ring_7_0 ring_7_1" intLanes=":ring_8_0_0 :ring_8_0_1" shape="21.65,-12.50 27.83,-14.16 27.47,-15.35 27.28,-15.75 27.03,-16.12 26.68,-16.52 26.18,-17.03" radius="1.61">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="ring_9" type="priority" x="25.00" y="0.00" incLanes="E_in_0 E_in_1 ring_8_0 ring_8_1" intLanes=":ring_9_0_0 :ring_9_0_1 :ring_9_2_0 :ring_9_3_0 :ring_9_6_0 :ring_9_5_0" shape="34.51,6.40 34.51,-6.40 31.82,-6.89 30.76,-7.51 29.89,-8.38 29.21,-9.49 28.72,-10.85 22.54,-9.19 23.53,-5.36 24.12,-2.45 24.32,-0.00 24.12,2.45 23.53,5.36 22.54,9.19 28.72,10.85 29.89,8.38 30.76,7.51 31.82,6.89 33.07,6.52" radius="4.60">
+        <request index="0" response="001000" foes="001000" cont="0"/>
+        <request index="1" response="101000" foes="101000" cont="0"/>
+        <request index="2" response="000000" foes="000000" cont="0"/>
+        <request index="3" response="000000" foes="010011" cont="0"/>
+        <request index="4" response="001000" foes="001000" cont="1"/>
+        <request index="5" response="000000" foes="000010" cont="0"/>
+    </junction>
+
+    <junction id=":ring_0_6_0" type="internal" x="5.98" y="25.65" incLanes=":ring_0_4_0 ring_11_0" intLanes=":ring_0_3_0"/>
+    <junction id=":ring_3_6_0" type="internal" x="-25.65" y="5.98" incLanes=":ring_3_2_0 ring_2_0" intLanes=":ring_3_1_0"/>
+    <junction id=":ring_6_6_0" type="internal" x="-5.98" y="-25.65" incLanes=":ring_6_4_0 ring_5_0" intLanes=":ring_6_3_0"/>
+    <junction id=":ring_9_6_0" type="internal" x="25.65" y="-5.98" incLanes=":ring_9_4_0 ring_8_0" intLanes=":ring_9_3_0"/>
+
+    <connection from="E_in" to="ring_9" fromLane="0" toLane="0" via=":ring_9_0_0" dir="r" state="m" visibility="9.00"/>
+    <connection from="E_in" to="ring_9" fromLane="1" toLane="1" via=":ring_9_0_1" dir="r" state="m" visibility="9.00"/>
+    <connection from="N_in" to="ring_0" fromLane="0" toLane="0" via=":ring_0_0_0" dir="r" state="m" visibility="9.00"/>
+    <connection from="N_in" to="ring_0" fromLane="1" toLane="1" via=":ring_0_0_1" dir="r" state="m" visibility="9.00"/>
+    <connection from="S_in" to="ring_6" fromLane="0" toLane="0" via=":ring_6_0_0" dir="r" state="m" visibility="9.00"/>
+    <connection from="S_in" to="ring_6" fromLane="1" toLane="1" via=":ring_6_0_1" dir="r" state="m" visibility="9.00"/>
+    <connection from="W_in" to="ring_3" fromLane="0" toLane="0" via=":ring_3_4_0" dir="r" state="m" visibility="9.00"/>
+    <connection from="W_in" to="ring_3" fromLane="1" toLane="1" via=":ring_3_4_1" dir="r" state="m" visibility="9.00"/>
+    <connection from="ring_0" to="ring_1" fromLane="0" toLane="0" via=":ring_1_0_0" dir="s" state="M"/>
+    <connection from="ring_0" to="ring_1" fromLane="1" toLane="1" via=":ring_1_0_1" dir="s" state="M"/>
+    <connection from="ring_1" to="ring_2" fromLane="0" toLane="0" via=":ring_2_0_0" dir="s" state="M"/>
+    <connection from="ring_1" to="ring_2" fromLane="1" toLane="1" via=":ring_2_0_1" dir="s" state="M"/>
+    <connection from="ring_10" to="ring_11" fromLane="0" toLane="0" via=":ring_11_0_0" dir="s" state="M"/>
+    <connection from="ring_10" to="ring_11" fromLane="1" toLane="1" via=":ring_11_0_1" dir="s" state="M"/>
+    <connection from="ring_11" to="N_out" fromLane="0" toLane="0" via=":ring_0_2_0" dir="r" state="M"/>
+    <connection from="ring_11" to="ring_0" fromLane="0" toLane="0" via=":ring_0_3_0" dir="s" state="M"/>
+    <connection from="ring_11" to="N_out" fromLane="1" toLane="1" via=":ring_0_4_0" dir="r" state="m"/>
+    <connection from="ring_11" to="ring_0" fromLane="1" toLane="1" via=":ring_0_5_0" dir="s" state="M"/>
+    <connection from="ring_2" to="W_out" fromLane="0" toLane="0" via=":ring_3_0_0" dir="r" state="M"/>
+    <connection from="ring_2" to="ring_3" fromLane="0" toLane="0" via=":ring_3_1_0" dir="s" state="M"/>
+    <connection from="ring_2" to="W_out" fromLane="1" toLane="1" via=":ring_3_2_0" dir="r" state="m"/>
+    <connection from="ring_2" to="ring_3" fromLane="1" toLane="1" via=":ring_3_3_0" dir="s" state="M"/>
+    <connection from="ring_3" to="ring_4" fromLane="0" toLane="0" via=":ring_4_0_0" dir="s" state="M"/>
+    <connection from="ring_3" to="ring_4" fromLane="1" toLane="1" via=":ring_4_0_1" dir="s" state="M"/>
+    <connection from="ring_4" to="ring_5" fromLane="0" toLane="0" via=":ring_5_0_0" dir="s" state="M"/>
+    <connection from="ring_4" to="ring_5" fromLane="1" toLane="1" via=":ring_5_0_1" dir="s" state="M"/>
+    <connection from="ring_5" to="S_out" fromLane="0" toLane="0" via=":ring_6_2_0" dir="r" state="M"/>
+    <connection from="ring_5" to="ring_6" fromLane="0" toLane="0" via=":ring_6_3_0" dir="s" state="M"/>
+    <connection from="ring_5" to="S_out" fromLane="1" toLane="1" via=":ring_6_4_0" dir="r" state="m"/>
+    <connection from="ring_5" to="ring_6" fromLane="1" toLane="1" via=":ring_6_5_0" dir="s" state="M"/>
+    <connection from="ring_6" to="ring_7" fromLane="0" toLane="0" via=":ring_7_0_0" dir="s" state="M"/>
+    <connection from="ring_6" to="ring_7" fromLane="1" toLane="1" via=":ring_7_0_1" dir="s" state="M"/>
+    <connection from="ring_7" to="ring_8" fromLane="0" toLane="0" via=":ring_8_0_0" dir="s" state="M"/>
+    <connection from="ring_7" to="ring_8" fromLane="1" toLane="1" via=":ring_8_0_1" dir="s" state="M"/>
+    <connection from="ring_8" to="E_out" fromLane="0" toLane="0" via=":ring_9_2_0" dir="r" state="M"/>
+    <connection from="ring_8" to="ring_9" fromLane="0" toLane="0" via=":ring_9_3_0" dir="s" state="M"/>
+    <connection from="ring_8" to="E_out" fromLane="1" toLane="1" via=":ring_9_4_0" dir="r" state="m"/>
+    <connection from="ring_8" to="ring_9" fromLane="1" toLane="1" via=":ring_9_5_0" dir="s" state="M"/>
+    <connection from="ring_9" to="ring_10" fromLane="0" toLane="0" via=":ring_10_0_0" dir="s" state="M"/>
+    <connection from="ring_9" to="ring_10" fromLane="1" toLane="1" via=":ring_10_0_1" dir="s" state="M"/>
+
+    <connection from=":ring_0_0" to="ring_0" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_0_0" to="ring_0" fromLane="1" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_0_2" to="N_out" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_0_3" to="ring_0" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_0_4" to="N_out" fromLane="0" toLane="1" via=":ring_0_6_0" dir="r" state="m"/>
+    <connection from=":ring_0_6" to="N_out" fromLane="0" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_0_5" to="ring_0" fromLane="0" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_1_0" to="ring_1" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_1_0" to="ring_1" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_10_0" to="ring_10" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_10_0" to="ring_10" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_11_0" to="ring_11" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_11_0" to="ring_11" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_2_0" to="ring_2" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_2_0" to="ring_2" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_3_0" to="W_out" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_3_1" to="ring_3" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_3_2" to="W_out" fromLane="0" toLane="1" via=":ring_3_6_0" dir="r" state="m"/>
+    <connection from=":ring_3_6" to="W_out" fromLane="0" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_3_3" to="ring_3" fromLane="0" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_3_4" to="ring_3" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_3_4" to="ring_3" fromLane="1" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_4_0" to="ring_4" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_4_0" to="ring_4" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_5_0" to="ring_5" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_5_0" to="ring_5" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_6_0" to="ring_6" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_6_0" to="ring_6" fromLane="1" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_6_2" to="S_out" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_6_3" to="ring_6" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_6_4" to="S_out" fromLane="0" toLane="1" via=":ring_6_6_0" dir="r" state="m"/>
+    <connection from=":ring_6_6" to="S_out" fromLane="0" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_6_5" to="ring_6" fromLane="0" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_7_0" to="ring_7" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_7_0" to="ring_7" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_8_0" to="ring_8" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_8_0" to="ring_8" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":ring_9_0" to="ring_9" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_9_0" to="ring_9" fromLane="1" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_9_2" to="E_out" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":ring_9_3" to="ring_9" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":ring_9_4" to="E_out" fromLane="0" toLane="1" via=":ring_9_6_0" dir="r" state="m"/>
+    <connection from=":ring_9_6" to="E_out" fromLane="0" toLane="1" dir="r" state="M"/>
+    <connection from=":ring_9_5" to="ring_9" fromLane="0" toLane="1" dir="s" state="M"/>
+
+    <roundabout nodes="ring_0 ring_1 ring_10 ring_11 ring_2 ring_3 ring_4 ring_5 ring_6 ring_7 ring_8 ring_9" edges="ring_0 ring_1 ring_10 ring_11 ring_2 ring_3 ring_4 ring_5 ring_6 ring_7 ring_8 ring_9"/>
+
+    <type id="building.0" width="0.0" name="centre">
+        <polygon shape="-9.00,-9.00 9.00,-9.00 9.00,9.00 -9.00,9.00 -9.00,-9.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.1" width="0.0" name="centre-2">
+        <polygon shape="-4.00,10.00 6.00,10.00 6.00,19.00 -4.00,19.00 -4.00,10.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.2" width="0.0" name="N-0">
+        <polygon shape="14.40,60.00 44.40,60.00 44.40,100.00 14.40,100.00 14.40,60.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.3" width="0.0" name="N-1">
+        <polygon shape="14.40,140.00 44.40,140.00 44.40,180.00 14.40,180.00 14.40,140.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.4" width="0.0" name="N-2">
+        <polygon shape="14.40,220.00 44.40,220.00 44.40,260.00 14.40,260.00 14.40,220.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.5" width="0.0" name="N-3">
+        <polygon shape="14.40,300.00 44.40,300.00 44.40,340.00 14.40,340.00 14.40,300.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.6" width="0.0" name="N-4">
+        <polygon shape="14.40,380.00 44.40,380.00 44.40,420.00 14.40,420.00 14.40,380.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.7" width="0.0" name="N-5">
+        <polygon shape="14.40,460.00 44.40,460.00 44.40,500.00 14.40,500.00 14.40,460.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.8" width="0.0" name="N-6">
+        <polygon shape="14.40,540.00 44.40,540.00 44.40,580.00 14.40,580.00 14.40,540.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.9" width="0.0" name="N-7">
+        <polygon shape="14.40,620.00 44.40,620.00 44.40,660.00 14.40,660.00 14.40,620.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.10" width="0.0" name="N-8">
+        <polygon shape="14.40,700.00 44.40,700.00 44.40,740.00 14.40,740.00 14.40,700.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.11" width="0.0" name="N-9">
+        <polygon shape="14.40,780.00 44.40,780.00 44.40,820.00 14.40,820.00 14.40,780.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.12" width="0.0" name="N-10">
+        <polygon shape="14.40,860.00 44.40,860.00 44.40,900.00 14.40,900.00 14.40,860.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.13" width="0.0" name="N-11">
+        <polygon shape="14.40,940.00 44.40,940.00 44.40,980.00 14.40,980.00 14.40,940.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.14" width="0.0" name="N+0">
+        <polygon shape="-44.40,60.00 -14.40,60.00 -14.40,100.00 -44.40,100.00 -44.40,60.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.15" width="0.0" name="N+1">
+        <polygon shape="-44.40,140.00 -14.40,140.00 -14.40,180.00 -44.40,180.00 -44.40,140.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.16" width="0.0" name="N+2">
+        <polygon shape="-44.40,220.00 -14.40,220.00 -14.40,260.00 -44.40,260.00 -44.40,220.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.17" width="0.0" name="N+3">
+        <polygon shape="-44.40,300.00 -14.40,300.00 -14.40,340.00 -44.40,340.00 -44.40,300.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.18" width="0.0" name="N+4">
+        <polygon shape="-44.40,380.00 -14.40,380.00 -14.40,420.00 -44.40,420.00 -44.40,380.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.19" width="0.0" name="N+5">
+        <polygon shape="-44.40,460.00 -14.40,460.00 -14.40,500.00 -44.40,500.00 -44.40,460.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.20" width="0.0" name="N+6">
+        <polygon shape="-44.40,540.00 -14.40,540.00 -14.40,580.00 -44.40,580.00 -44.40,540.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.21" width="0.0" name="N+7">
+        <polygon shape="-44.40,620.00 -14.40,620.00 -14.40,660.00 -44.40,660.00 -44.40,620.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.22" width="0.0" name="N+8">
+        <polygon shape="-44.40,700.00 -14.40,700.00 -14.40,740.00 -44.40,740.00 -44.40,700.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.23" width="0.0" name="N+9">
+        <polygon shape="-44.40,780.00 -14.40,780.00 -14.40,820.00 -44.40,820.00 -44.40,780.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.24" width="0.0" name="N+10">
+        <polygon shape="-44.40,860.00 -14.40,860.00 -14.40,900.00 -44.40,900.00 -44.40,860.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.25" width="0.0" name="N+11">
+        <polygon shape="-44.40,940.00 -14.40,940.00 -14.40,980.00 -44.40,980.00 -44.40,940.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.26" width="0.0" name="W-0">
+        <polygon shape="-95.00,9.40 -65.00,9.40 -65.00,49.40 -95.00,49.40 -95.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.27" width="0.0" name="W-1">
+        <polygon shape="-175.00,9.40 -145.00,9.40 -145.00,49.40 -175.00,49.40 -175.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.28" width="0.0" name="W-2">
+        <polygon shape="-255.00,9.40 -225.00,9.40 -225.00,49.40 -255.00,49.40 -255.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.29" width="0.0" name="W-3">
+        <polygon shape="-335.00,9.40 -305.00,9.40 -305.00,49.40 -335.00,49.40 -335.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.30" width="0.0" name="W-4">
+        <polygon shape="-415.00,9.40 -385.00,9.40 -385.00,49.40 -415.00,49.40 -415.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.31" width="0.0" name="W-5">
+        <polygon shape="-495.00,9.40 -465.00,9.40 -465.00,49.40 -495.00,49.40 -495.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.32" width="0.0" name="W-6">
+        <polygon shape="-575.00,9.40 -545.00,9.40 -545.00,49.40 -575.00,49.40 -575.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.33" width="0.0" name="W-7">
+        <polygon shape="-655.00,9.40 -625.00,9.40 -625.00,49.40 -655.00,49.40 -655.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.34" width="0.0" name="W-8">
+        <polygon shape="-735.00,9.40 -705.00,9.40 -705.00,49.40 -735.00,49.40 -735.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.35" width="0.0" name="W-9">
+        <polygon shape="-815.00,9.40 -785.00,9.40 -785.00,49.40 -815.00,49.40 -815.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.36" width="0.0" name="W-10">
+        <polygon shape="-895.00,9.40 -865.00,9.40 -865.00,49.40 -895.00,49.40 -895.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.37" width="0.0" name="W-11">
+        <polygon shape="-975.00,9.40 -945.00,9.40 -945.00,49.40 -975.00,49.40 -975.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.38" width="0.0" name="W+0">
+        <polygon shape="-95.00,-49.40 -65.00,-49.40 -65.00,-9.40 -95.00,-9.40 -95.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.39" width="0.0" name="W+1">
+        <polygon shape="-175.00,-49.40 -145.00,-49.40 -145.00,-9.40 -175.00,-9.40 -175.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.40" width="0.0" name="W+2">
+        <polygon shape="-255.00,-49.40 -225.00,-49.40 -225.00,-9.40 -255.00,-9.40 -255.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.41" width="0.0" name="W+3">
+        <polygon shape="-335.00,-49.40 -305.00,-49.40 -305.00,-9.40 -335.00,-9.40 -335.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.42" width="0.0" name="W+4">
+        <polygon shape="-415.00,-49.40 -385.00,-49.40 -385.00,-9.40 -415.00,-9.40 -415.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.43" width="0.0" name="W+5">
+        <polygon shape="-495.00,-49.40 -465.00,-49.40 -465.00,-9.40 -495.00,-9.40 -495.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.44" width="0.0" name="W+6">
+        <polygon shape="-575.00,-49.40 -545.00,-49.40 -545.00,-9.40 -575.00,-9.40 -575.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.45" width="0.0" name="W+7">
+        <polygon shape="-655.00,-49.40 -625.00,-49.40 -625.00,-9.40 -655.00,-9.40 -655.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.46" width="0.0" name="W+8">
+        <polygon shape="-735.00,-49.40 -705.00,-49.40 -705.00,-9.40 -735.00,-9.40 -735.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.47" width="0.0" name="W+9">
+        <polygon shape="-815.00,-49.40 -785.00,-49.40 -785.00,-9.40 -815.00,-9.40 -815.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.48" width="0.0" name="W+10">
+        <polygon shape="-895.00,-49.40 -865.00,-49.40 -865.00,-9.40 -895.00,-9.40 -895.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.49" width="0.0" name="W+11">
+        <polygon shape="-975.00,-49.40 -945.00,-49.40 -945.00,-9.40 -975.00,-9.40 -975.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.50" width="0.0" name="S-0">
+        <polygon shape="-44.40,-100.00 -14.40,-100.00 -14.40,-60.00 -44.40,-60.00 -44.40,-100.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.51" width="0.0" name="S-1">
+        <polygon shape="-44.40,-180.00 -14.40,-180.00 -14.40,-140.00 -44.40,-140.00 -44.40,-180.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.52" width="0.0" name="S-2">
+        <polygon shape="-44.40,-260.00 -14.40,-260.00 -14.40,-220.00 -44.40,-220.00 -44.40,-260.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.53" width="0.0" name="S-3">
+        <polygon shape="-44.40,-340.00 -14.40,-340.00 -14.40,-300.00 -44.40,-300.00 -44.40,-340.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.54" width="0.0" name="S-4">
+        <polygon shape="-44.40,-420.00 -14.40,-420.00 -14.40,-380.00 -44.40,-380.00 -44.40,-420.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.55" width="0.0" name="S-5">
+        <polygon shape="-44.40,-500.00 -14.40,-500.00 -14.40,-460.00 -44.40,-460.00 -44.40,-500.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.56" width="0.0" name="S-6">
+        <polygon shape="-44.40,-580.00 -14.40,-580.00 -14.40,-540.00 -44.40,-540.00 -44.40,-580.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.57" width="0.0" name="S-7">
+        <polygon shape="-44.40,-660.00 -14.40,-660.00 -14.40,-620.00 -44.40,-620.00 -44.40,-660.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.58" width="0.0" name="S-8">
+        <polygon shape="-44.40,-740.00 -14.40,-740.00 -14.40,-700.00 -44.40,-700.00 -44.40,-740.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.59" width="0.0" name="S-9">
+        <polygon shape="-44.40,-820.00 -14.40,-820.00 -14.40,-780.00 -44.40,-780.00 -44.40,-820.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.60" width="0.0" name="S-10">
+        <polygon shape="-44.40,-900.00 -14.40,-900.00 -14.40,-860.00 -44.40,-860.00 -44.40,-900.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.61" width="0.0" name="S-11">
+        <polygon shape="-44.40,-980.00 -14.40,-980.00 -14.40,-940.00 -44.40,-940.00 -44.40,-980.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.62" width="0.0" name="S+0">
+        <polygon shape="14.40,-100.00 44.40,-100.00 44.40,-60.00 14.40,-60.00 14.40,-100.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.63" width="0.0" name="S+1">
+        <polygon shape="14.40,-180.00 44.40,-180.00 44.40,-140.00 14.40,-140.00 14.40,-180.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.64" width="0.0" name="S+2">
+        <polygon shape="14.40,-260.00 44.40,-260.00 44.40,-220.00 14.40,-220.00 14.40,-260.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.65" width="0.0" name="S+3">
+        <polygon shape="14.40,-340.00 44.40,-340.00 44.40,-300.00 14.40,-300.00 14.40,-340.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.66" width="0.0" name="S+4">
+        <polygon shape="14.40,-420.00 44.40,-420.00 44.40,-380.00 14.40,-380.00 14.40,-420.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.67" width="0.0" name="S+5">
+        <polygon shape="14.40,-500.00 44.40,-500.00 44.40,-460.00 14.40,-460.00 14.40,-500.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.68" width="0.0" name="S+6">
+        <polygon shape="14.40,-580.00 44.40,-580.00 44.40,-540.00 14.40,-540.00 14.40,-580.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.69" width="0.0" name="S+7">
+        <polygon shape="14.40,-660.00 44.40,-660.00 44.40,-620.00 14.40,-620.00 14.40,-660.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.70" width="0.0" name="S+8">
+        <polygon shape="14.40,-740.00 44.40,-740.00 44.40,-700.00 14.40,-700.00 14.40,-740.00" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.71" width="0.0" name="S+9">
+        <polygon shape="14.40,-820.00 44.40,-820.00 44.40,-780.00 14.40,-780.00 14.40,-820.00" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.72" width="0.0" name="S+10">
+        <polygon shape="14.40,-900.00 44.40,-900.00 44.40,-860.00 14.40,-860.00 14.40,-900.00" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.73" width="0.0" name="S+11">
+        <polygon shape="14.40,-980.00 44.40,-980.00 44.40,-940.00 14.40,-940.00 14.40,-980.00" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.74" width="0.0" name="E-0">
+        <polygon shape="65.00,-49.40 95.00,-49.40 95.00,-9.40 65.00,-9.40 65.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.75" width="0.0" name="E-1">
+        <polygon shape="145.00,-49.40 175.00,-49.40 175.00,-9.40 145.00,-9.40 145.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.76" width="0.0" name="E-2">
+        <polygon shape="225.00,-49.40 255.00,-49.40 255.00,-9.40 225.00,-9.40 225.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.77" width="0.0" name="E-3">
+        <polygon shape="305.00,-49.40 335.00,-49.40 335.00,-9.40 305.00,-9.40 305.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.78" width="0.0" name="E-4">
+        <polygon shape="385.00,-49.40 415.00,-49.40 415.00,-9.40 385.00,-9.40 385.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.79" width="0.0" name="E-5">
+        <polygon shape="465.00,-49.40 495.00,-49.40 495.00,-9.40 465.00,-9.40 465.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.80" width="0.0" name="E-6">
+        <polygon shape="545.00,-49.40 575.00,-49.40 575.00,-9.40 545.00,-9.40 545.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.81" width="0.0" name="E-7">
+        <polygon shape="625.00,-49.40 655.00,-49.40 655.00,-9.40 625.00,-9.40 625.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.82" width="0.0" name="E-8">
+        <polygon shape="705.00,-49.40 735.00,-49.40 735.00,-9.40 705.00,-9.40 705.00,-49.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.83" width="0.0" name="E-9">
+        <polygon shape="785.00,-49.40 815.00,-49.40 815.00,-9.40 785.00,-9.40 785.00,-49.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.84" width="0.0" name="E-10">
+        <polygon shape="865.00,-49.40 895.00,-49.40 895.00,-9.40 865.00,-9.40 865.00,-49.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.85" width="0.0" name="E-11">
+        <polygon shape="945.00,-49.40 975.00,-49.40 975.00,-9.40 945.00,-9.40 945.00,-49.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.86" width="0.0" name="E+0">
+        <polygon shape="65.00,9.40 95.00,9.40 95.00,49.40 65.00,49.40 65.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.87" width="0.0" name="E+1">
+        <polygon shape="145.00,9.40 175.00,9.40 175.00,49.40 145.00,49.40 145.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.88" width="0.0" name="E+2">
+        <polygon shape="225.00,9.40 255.00,9.40 255.00,49.40 225.00,49.40 225.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.89" width="0.0" name="E+3">
+        <polygon shape="305.00,9.40 335.00,9.40 335.00,49.40 305.00,49.40 305.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.90" width="0.0" name="E+4">
+        <polygon shape="385.00,9.40 415.00,9.40 415.00,49.40 385.00,49.40 385.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.91" width="0.0" name="E+5">
+        <polygon shape="465.00,9.40 495.00,9.40 495.00,49.40 465.00,49.40 465.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.92" width="0.0" name="E+6">
+        <polygon shape="545.00,9.40 575.00,9.40 575.00,49.40 545.00,49.40 545.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.93" width="0.0" name="E+7">
+        <polygon shape="625.00,9.40 655.00,9.40 655.00,49.40 625.00,49.40 625.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+    <type id="building.94" width="0.0" name="E+8">
+        <polygon shape="705.00,9.40 735.00,9.40 735.00,49.40 705.00,49.40 705.00,9.40" color="0.47,0.44,0.40" fill="true"/>
+    </type>
+    <type id="building.95" width="0.0" name="E+9">
+        <polygon shape="785.00,9.40 815.00,9.40 815.00,49.40 785.00,49.40 785.00,9.40" color="0.40,0.37,0.33" fill="true"/>
+    </type>
+    <type id="building.96" width="0.0" name="E+10">
+        <polygon shape="865.00,9.40 895.00,9.40 895.00,49.40 865.00,49.40 865.00,9.40" color="0.62,0.58,0.52" fill="true"/>
+    </type>
+    <type id="building.97" width="0.0" name="E+11">
+        <polygon shape="945.00,9.40 975.00,9.40 975.00,49.40 945.00,49.40 945.00,9.40" color="0.55,0.51,0.46" fill="true"/>
+    </type>
+</net>

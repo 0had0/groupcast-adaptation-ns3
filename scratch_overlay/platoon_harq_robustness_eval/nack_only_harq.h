@@ -1,0 +1,160 @@
+#pragma once
+// nack_only_harq.h
+//
+// TX-side HARQ feedback Option 1 (groupcast NACK-only) for the platoon leader,
+// plus exact application-packet -> transport-block bookkeeping.
+//
+// WHY
+//   contrib/nr pre-selects up to sl-MaxTxTransNumPSSCH resources for every TB
+//   (initial + retransmissions, spaced so that the PSFCH of one transmission
+//   can be processed before the next one) and only *cancels* the pending
+//   retransmissions when the HARQ entity receives a positive acknowledgement.
+//   That is Option-2 (ACK/NACK) semantics.
+//   With Option 1 the receivers never send an ACK (see
+//   common/mcd/mcr_nack_only_gate.h, which drops the ACKs at the receivers),
+//   so without this controller the leader would always transmit every TB
+//   maxNumTx times, i.e. blind retransmission.
+//
+//   TS 38.321 5.22.1.3.1a: for a groupcast with HARQ feedback option 1 the
+//   transmitter treats "no PSFCH received" as a positive acknowledgement.
+//   This controller implements exactly that decision:
+//     * every leader PSSCH transmission in slot n is mapped to its PSFCH
+//       occasion m = first PSFCH slot >= n + sl-MinTimeGapPSFCH;
+//     * the members' NACKs reach the leader MAC at m + 13 symbols + 1 slot
+//       (NrUePhy::PhyPsfchReceived adds one slot of decode latency);
+//     * half a symbol later the controller decides: if no NACK arrived for
+//       this transmission, it delivers the implicit positive acknowledgement
+//       to the MAC (one ACK per member: stock CTTC cancels on the first one,
+//       an "all members must ACK" variant of NrSlUeMacHarq on the last one),
+//       which cancels the remaining reserved retransmissions of the TB;
+//       if at least one NACK arrived nothing is done and the next reserved
+//       retransmission goes out (NACK-triggered retransmission).
+//   sl-MinTimeGapProcessing (2 slots) guarantees that the next retransmission
+//   resource is never earlier than m + 2, i.e. after the decision instant.
+//
+// HOW (no edit of contrib/nr)
+//   The leader's PHY->MAC SAP user and MAC->PHY SAP provider are wrapped:
+//     PHY->MAC  ReceivePsfch      : NACKs are recorded, then forwarded
+//     MAC->PHY  SendPsschMacPdu   : the PlatoonSeqTag byte tags carried by the
+//                                   MAC PDU tell which application packets
+//                                   ride in this TB (exact, survives RLC
+//                                   segmentation/concatenation and HARQ
+//                                   retransmissions)
+//   and the leader MAC "SlPsschScheduling" trace closes each transmission.
+
+#include "ns3/nr-sl-phy-mac-common.h"
+#include "ns3/nr-sl-ue-mac.h"
+#include "ns3/nr-sl-ue-phy-sap.h"
+#include "ns3/nr-ue-net-device.h"
+#include "ns3/packet.h"
+#include "ns3/tag.h"
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <set>
+#include <vector>
+
+namespace ns3
+{
+
+/// Byte tag carrying the application sequence number of a leader packet.
+class PlatoonSeqTag : public Tag
+{
+  public:
+    static TypeId GetTypeId();
+    TypeId GetInstanceTypeId() const override;
+    uint32_t GetSerializedSize() const override;
+    void Serialize(TagBuffer i) const override;
+    void Deserialize(TagBuffer i) override;
+    void Print(std::ostream& os) const override;
+
+    void SetSeq(uint32_t s) { m_seq = s; }
+    uint32_t GetSeq() const { return m_seq; }
+
+  private:
+    uint32_t m_seq{0};
+};
+
+/// One PSSCH transmission of the leader (initial or retransmission).
+struct LeaderTx
+{
+    double tS{0.0};               //!< slot start (s)
+    int64_t slotAbs{0};           //!< absolute slot index = round(t / Tslot)
+    uint16_t frame{0};
+    uint8_t subframe{0};
+    uint16_t slot{0};
+    uint16_t rbStart{0};
+    uint16_t rbLen{0};
+    uint8_t harqId{0};
+    uint8_t ndi{0};
+    uint8_t rv{0};
+    uint32_t gen{0};              //!< index of the ndi=1 transmission of this TB
+    uint8_t txInTb{1};            //!< 1 = initial, 2 = first retx, ...
+    std::vector<uint32_t> seqs;   //!< application packets carried
+    uint8_t nNack{0};             //!< NACKs received for this transmission
+    int8_t decision{-1};          //!< -1 pending, 0 NACK (retx kept), 1 implicit ACK, 2 stale
+};
+
+class NackOnlyHarqController
+{
+  public:
+    /**
+     * @param leader      leader device (node 0)
+     * @param members     group members (receivers)
+     * @param dstL2Id     groupcast destination of the platoon flow
+     * @param option1Tx   apply the "no NACK => success" decision (true) or only
+     *                    observe (false: retransmissions behave as stock CTTC)
+     * @param minTimeGapPsfch sl-MinTimeGapPSFCH configured in the pool (slots)
+     */
+    void Install(Ptr<NrUeNetDevice> leader,
+                 const std::vector<Ptr<NrUeNetDevice>>& members,
+                 uint32_t dstL2Id,
+                 bool option1Tx,
+                 uint8_t minTimeGapPsfch);
+
+    /// Application TagDecorator: stamps the next sequence number.
+    void TagAppPacket(Ptr<Packet> p);
+
+    const std::vector<LeaderTx>& Txs() const { return m_txs; }
+    Time SlotPeriod() const { return m_slot; }
+
+    // statistics
+    uint64_t nNackRx{0};          //!< NACK PSFCH received by the leader
+    uint64_t nAckRx{0};           //!< explicit ACKs received (0 with Option 1)
+    uint64_t nImplicitAck{0};     //!< decisions "no NACK -> success"
+    uint64_t nNackDecision{0};    //!< decisions "NACK -> keep retransmission"
+    uint64_t nStale{0};           //!< decisions skipped (HARQ id already reused)
+    uint64_t nSlotMisaligned{0};  //!< MAC trace not at a slot boundary (sanity)
+
+    // hooks used by the SAP wrappers
+    void OnPsschPdu(Ptr<Packet> p, uint32_t dstL2Id);
+    void OnPsfch(uint32_t nodeId, const SlHarqInfo& info);
+
+  private:
+    void OnPsschScheduling(SlPsschUeMacStatParameters p);
+    void Decide(size_t idx);
+
+    Ptr<NrUeNetDevice> m_leader;
+    Ptr<NrSlUeMac> m_mac;
+    std::vector<Ptr<NrUeNetDevice>> m_members;
+    uint32_t m_dst{254};
+    bool m_option1{true};
+    uint8_t m_gap{3};
+    uint8_t m_mu{1};
+    Time m_slot;
+    Time m_sym;
+    uint32_t m_nextSeq{0};
+
+    NrSlUePhySapUser* m_origUser{nullptr};
+    NrSlUePhySapProvider* m_origProv{nullptr};
+    std::unique_ptr<NrSlUePhySapUser> m_userWrap;
+    std::unique_ptr<NrSlUePhySapProvider> m_provWrap;
+
+    std::set<uint32_t> m_pendingSeqs;
+    std::vector<LeaderTx> m_txs;
+    std::map<uint8_t, uint32_t> m_curGen;      //!< harqId -> current TB generation
+    std::map<uint8_t, size_t> m_lastTxOfHarq;  //!< harqId -> index of its last transmission
+};
+
+} // namespace ns3

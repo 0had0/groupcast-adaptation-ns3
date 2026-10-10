@@ -324,7 +324,7 @@ ParseFlowsSpec(const std::string& spec)
                     auto d = static_cast<uint32_t>(std::stoul(val));
                     fd.dstL2Id = d;
                 }
-                else if (key == "harq")
+                else if (key == "harqMode")
                 {
                     static const std::map<std::string, HarqMode> kMap = {
                         {"default",  HarqMode::Default},
