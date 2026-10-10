@@ -135,3 +135,30 @@ python3 gen_mobility.py --scenario roundabout --ivd 15 --nbg 30 --seed 1 --out t
   --scenario=roundabout --mobility=traces/x.csv.gz --sumoNet=sumo/roundabout/roundabout.net.xml \
   --traffic=periodic2 --out=results/x
 ```
+
+## Running on another machine (e.g. a Linux server)
+
+```bash
+# 0. system packages (Debian/Ubuntu): compiler, build tools, SQLite, Eigen, SUMO
+sudo apt install g++ cmake ninja-build python3-pip libsqlite3-dev libeigen3-dev sumo sumo-tools
+python3 -m pip install --user pandas numpy matplotlib scipy
+export SUMO_HOME=/usr/share/sumo        # apt SUMO; or point it at any SUMO build
+
+# 1. assemble the tree (submodules at pinned SHAs + patches + scratch symlinks)
+./setup.sh
+
+# 2. configure ns-3 once and build only this target
+cd ns-3-dev
+./ns3 configure --build-profile=optimized --disable-werror
+./ns3 build platoon_harq_robustness_eval
+
+# 3. sweep (resumable; ~250 MB RAM per job) and analysis
+cd ../scratch_overlay/platoon_harq_robustness_eval
+python3 run_campaign.py --seeds 1 2 3 --jobs $(( $(nproc) - 1 ))
+python3 analyze.py
+```
+
+`run_campaign.py` picks up the newest `ns3*-platoon_harq_robustness_eval-*`
+binary (any build profile), or use `--bin`. SUMO is found through `$SUMO_HOME`
+(`tools/` for TraCI, `bin/` for the binaries), otherwise on the `PATH`.
+Long runs: start it inside `tmux`/`screen` or with `nohup`.

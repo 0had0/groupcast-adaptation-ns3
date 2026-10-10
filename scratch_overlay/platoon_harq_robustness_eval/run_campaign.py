@@ -31,9 +31,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-BIN = REPO / "ns-3-dev/build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-default"
+BIN_DIR = REPO / "ns-3-dev/build/scratch/platoon_harq_robustness_eval"
+BIN = None   # resolved in main(): --bin, else the build-profile-specific binary in BIN_DIR
 NET = HERE / "sumo/roundabout/roundabout.net.xml"
-SUMO_HOME = str(REPO / "sumo")
 
 SCENARIOS = ["highway", "roundabout"]
 IVDS = [5, 15, 30]
@@ -51,7 +51,9 @@ def make_trace(args):
     out = trace_path(tdir, sc, ivd, nbg, seed)
     if out.exists() and out.with_suffix("").with_suffix(".json").exists():
         return str(out), "cached"
-    env = dict(os.environ, SUMO_HOME=SUMO_HOME)
+    env = dict(os.environ)
+    if "SUMO_HOME" not in env and (REPO / "sumo/bin/sumo").exists():
+        env["SUMO_HOME"] = str(REPO / "sumo")
     r = subprocess.run([sys.executable, str(HERE / "gen_mobility.py"), "--scenario", sc,
                         "--ivd", str(ivd), "--nbg", str(nbg), "--seed", str(seed),
                         "--out", str(out)], env=env, capture_output=True, text=True)
@@ -96,8 +98,20 @@ def main():
     ap.add_argument("--nbg", type=int, nargs="+", default=NBG)
     ap.add_argument("--traces", default=str(HERE / "traces"))
     ap.add_argument("--results", default=str(HERE / "results/campaign"))
+    ap.add_argument("--bin", default=None, help="ns-3 binary (default: auto-detect in build/)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+
+    global BIN
+    if a.bin:
+        BIN = Path(a.bin)
+    else:
+        cands = sorted(BIN_DIR.glob("ns3*-platoon_harq_robustness_eval-*"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        if not cands:
+            sys.exit(f"no binary in {BIN_DIR}; build it first or pass --bin")
+        BIN = cands[0]
+    print(f"binary: {BIN}")
 
     tdir, rdir = Path(a.traces), Path(a.results)
     tdir.mkdir(parents=True, exist_ok=True)

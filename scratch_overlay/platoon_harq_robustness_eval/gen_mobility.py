@@ -60,6 +60,7 @@ import json
 import math
 import os
 import random
+import shutil
 import subprocess
 import sys
 import time
@@ -67,14 +68,29 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
+# SUMO: $SUMO_HOME if set, else the repo's sumo/ submodule (when built); the
+# binaries fall back to the PATH (e.g. apt / pip "eclipse-sumo" installs).
 SUMO_HOME = os.environ.get("SUMO_HOME", str(REPO / "sumo"))
-sys.path.insert(0, str(Path(SUMO_HOME) / "tools"))
+if (Path(SUMO_HOME) / "tools").is_dir():
+    sys.path.insert(0, str(Path(SUMO_HOME) / "tools"))
 import traci  # noqa: E402
 import sumolib  # noqa: E402
 
 V = traci.constants
-SUMO_BIN = str(Path(SUMO_HOME) / "bin" / "sumo")
-NETCONVERT = str(Path(SUMO_HOME) / "bin" / "netconvert")
+
+
+def _sumo_tool(name):
+    p = Path(SUMO_HOME) / "bin" / name
+    if p.exists():
+        return str(p)
+    w = shutil.which(name)
+    if not w:
+        raise SystemExit(f"{name} not found: set SUMO_HOME or put SUMO on the PATH")
+    return w
+
+
+SUMO_BIN = _sumo_tool("sumo")
+NETCONVERT = _sumo_tool("netconvert")
 
 PARK_X0 = -1.0e6      # parked (idle) seats: > 1000 km away, 200 km apart, so the
 PARK_Y = -1.0e6       # path loss exceeds ns-3's SpectrumChannel MaxLossDb (150 dB)
