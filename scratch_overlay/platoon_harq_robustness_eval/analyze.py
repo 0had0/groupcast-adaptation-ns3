@@ -87,7 +87,8 @@ def summarize(runs):
     return pd.DataFrame(rows)
 
 
-def facet(fig_title, fname, plot_cell, sharey=True, ylabel="", legend_cell=(0, 0)):
+def facet(fig_title, fname, plot_cell, sharey=True, ylabel="", legend_cell=(0, 0),
+          legend_loc="lower left"):
     fig, axes = plt.subplots(3, 3, figsize=(10.5, 8.2), sharex=True, sharey=sharey)
     for i, ivd in enumerate(IVDS):
         for j, tr in enumerate(TRAFFIC):
@@ -99,7 +100,7 @@ def facet(fig_title, fname, plot_cell, sharey=True, ylabel="", legend_cell=(0, 0
                 ax.set_ylabel(f"IVD {ivd} m\n{ylabel}")
             if i == 2:
                 ax.set_xlabel("background vehicles in the area")
-    axes[legend_cell].legend(loc="lower left", fontsize=8)
+    axes[legend_cell].legend(loc=legend_loc, fontsize=8)
     fig.suptitle(fig_title, color=INK, fontsize=11, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(fname)
@@ -253,10 +254,11 @@ def main():
             d = S[(S.scenario == sc) & (S.ivd_m == ivd) & (S.traffic == tr)].sort_values("nbg")
             ax.errorbar(d.nbg, d.tx_per_pkt, yerr=d.tx_per_pkt_ci, color=col, ls=ls, marker=mk,
                         capsize=2, label=lab)
-        ax.set_ylim(0.9, None)
+        # shared y-axis: the top must cover every panel, not just the first one drawn
+        ax.set_ylim(0.9, 1.05 * (S.tx_per_pkt + S.tx_per_pkt_ci.fillna(0)).max())
     facet("HARQ activity: PSSCH transmissions per application packet "
           "(1 = no retransmission needed)", out / "fig6_harq_tx_per_pkt.png", cell_harq,
-          ylabel="transmissions / packet")
+          ylabel="transmissions / packet", legend_loc="upper left")
 
     # ---------------- fig 7: PRR over time, roundabout vs highway (seed 1, IVD 30, periodic1)
     try:
