@@ -18,6 +18,14 @@ independently reproduced on a second machine. Code on branch `platoon-harq-robus
   soft combining in the leader's HARQ process, sensing attribution of collided attempts; NR
   patch byte-identical to stock with cooperation off. See README "Cooperative HARQ".
 
+**Update (2026-10-12).** Cooperative-HARQ follow-up implemented and piloted (§7.8, README
+"Cooperative HARQ: follow-up"): arms `split` and `additive`, corrected relay check, missed-NACK
+KPI, collision breakdown, sensing-map divergence, link conditions, helper sweep and oracle
+analysis, server driver `run_coop_followup.sh`. Found on the way: 5G-LENA dynamic grants
+skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs (fixed;
+re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Not run yet on the
+server.**
+
 **Update (2026-10-11, evening).**
 - **t-Reordering 0 re-run done on the server** (reference): campaign 270/270 runs
   (`results/campaign_rlc0`, 3 seeds) and variants (`results/variants_rlc0`: MCS 14, dedicated,
@@ -389,6 +397,35 @@ all members of delivered packets; tail p95 = 95th percentile of member 8's deliv
 5. Laptop leader-only arm ≈ server MCS 14 baseline (hwy N 45 periodic1: 0.898 vs 0.899).
    Compare with the server's coop runs cell by cell before quoting.
 
+### 7.8 Cooperative HARQ follow-up (2026-10-12): split / additive arms, footprint test, helper sweep
+
+Design, checks and the pre-registered decision rules: README "Cooperative HARQ: follow-up".
+Status: implemented and piloted on the laptop; **the campaign has not run yet** (server,
+`run_coop_followup.sh 1 2 3`). Pilots (laptop, seed 1): see README; results tables go here
+once the server runs exist (laptop vs server labelled).
+
+- `split` = leader initial + 1st retx, 2nd reserved retx handed to the helper (NACK on the
+  leader's retx required); `additive` = unchanged Option-1 leader + one helper copy on its
+  own resources after a NACK on the leader's initial transmission.
+- `none4` (leader-only, 4 transmissions) is **not feasible** in this pool: with T2 = 33
+  slots and the PSFCH / processing gaps the scheduler never fits a 4th resource. Cost is
+  compared through `tx_per_pkt`, `cbr_occupied` and `figc7_reliability_vs_cost` instead.
+- **The leader NACKed helper copies of its own TB** (it monitors the group destination):
+  the helper took that NACK for one on its copy and sent its 2nd relay without any member
+  asking (`leaderRes` / `ownRes`, relay budget 2; 8 of 71 relays in a 25 s roundabout
+  pilot with helper 7). Fixed in the NR PHY (the original transmitter ignores relayed
+  copies of its own TBs). **The 2026-10-11 `leaderRes` / `ownRes` results (§7.7) contain
+  these spurious relays**; step 1 re-runs them (`results/coop2_rlc0`). §7.7 stays as the
+  record of that version.
+- Cooperation off and `none` are byte-identical to the 2026-10-11 code (pilots, every
+  output file): `none` is reused.
+- Pilots (laptop, seed 1): both new arms pass every check (README "Pilots").
+- Sensing in 5G-LENA: dynamic grants never exclude sensed reservations (§8) — bears on the
+  footprint question: the leader's own selections ignore what it senses.
+- Verdicts (pending the server runs): (1) can a helper beat the standard, and where;
+  (2) is the footprint hypothesis supported; (3) does helper position / dynamic selection
+  matter.
+
 ## 8. Limitations / caveats
 
 - Single MCS (14). High MCS + power spread over wide allocations (6 dBm/PRB at 5 subchannels)
@@ -417,6 +454,19 @@ all members of delivered packets; tail p95 = 95th percentile of member 8's deliv
   in 20 s); optimized build hung once (server N = 45 s3, killed). Those cells have 2 seeds.
   Completed debug runs cannot have hit it and the server agrees with them, so results are
   not contaminated; fix before running more MCS 5/9 cells.
+- **5G-LENA dynamic grants never apply sensing-based exclusion** (found 2026-10-12): the
+  scheduler passes `cResel = 0` for a dynamic grant and the MAC's step-6 loop over the
+  candidate's reservation periods runs `cResel` times, so no candidate is ever excluded by a
+  sensed reservation (only step 5, the UE's own transmissions). Affects the leader in every
+  run of this study and the aperiodic background; SPS background (periodic1) excludes
+  normally. TS 38.214 sec. 8.1.4 checks the candidate itself when the reservation period is
+  0. Also, retransmission reservations announced in an SCI (TRIV gaps) are projected only
+  into the next period, not the current one. The collision breakdown (`_coll.csv` column
+  `why`, run columns `cc_*`) shows the consequence: reservations sensed well above the
+  threshold and still selected (`not_excluded`).
+- `--collCond` (link condition leader / helper -> interferer in `_coll.csv`) queries the
+  channel-condition model for extra pairs, which can change its random draws: used only in
+  fresh campaigns (step 2), never mixed seed by seed with runs made without it.
 - Laptop NR tree ≠ server NR tree (§4.6); the server is the reference. Since 2026-10-11 both
   run the `coop-harq-nr` NR patch, but the laptop build also has uncommitted edits in
   `scratch_overlay/common/` (not part of this study) and is a debug build: never pool seeds
@@ -503,12 +553,14 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
 9. Coop, in order:
    a. Copy the server's `results/coop_rlc0/analysis/` back and compare cell by cell with the
       laptop (§7.7); quote the server.
-   b. Fix the `relay_without_nack` check: judge it on the NACKs the members **sent** (not
-      received by the leader) and report "NACK missed by the leader" separately — a useful
-      Option-1 KPI for every arm (§6). Optionally confirm the 2nd flagged run (≈ 20 min).
+   b. ~~Fix the `relay_without_nack` check~~ — done 2026-10-12: judged on the NACKs the
+      members sent (gate observer), old definition kept as `relay_without_rx_nack`, new KPI
+      `leader_nack_missed` for every arm; verified on the flagged run (1 -> 0, missed 1).
    c. Why the helper does not help periodic2 on the roundabout (§7.7.1).
-   d. Helper selection: per-TB `HelperId` chosen by the leader (geometry / LOS to the tail,
-      Kuo-style), and other fixed helpers (`--helper`); the leader-side policy is the only
-      missing piece (receivers already check `helperId == own RNTI`).
-   e. Write `delay_ms` with more precision in the program (future runs) and reset the
-      helper's `tx_in_tb` per TB.
+   d. Helper selection: fixed helpers 2 / 4 / 6 / 7, static and dynamic oracle and one
+      leader-side rule — step 3 of the follow-up (§7.8). A per-TB `HelperId` policy in the
+      simulator is still not implemented (the rule is evaluated by composing static runs).
+   e. ~~`delay_ms` precision, helper `tx_in_tb`~~ — done 2026-10-12 (1 us; reset per TB).
+   f. Run the follow-up campaign on the server (§7.8) and fill in its verdicts.
+   g. 5G-LENA: dynamic grants skip the sensing exclusion (§8); decide whether to add an
+      opt-in, TS-conformant fix and re-run (it would change every result so far).

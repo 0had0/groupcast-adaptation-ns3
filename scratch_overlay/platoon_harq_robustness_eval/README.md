@@ -475,6 +475,137 @@ build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-<
   --helper=4 --helperMode=leaderRes --out=results/x
 ```
 
+## Cooperative HARQ: follow-up (2026-10-12, branch `coop-harq-nr`)
+
+Three questions: can a helper beat standard Option 1, and where (step 1); is the "sensing
+footprint" hypothesis supported, i.e. do leader and helper sense different interferers
+when buildings separate them (step 2); does the helper's position, or dynamic helper
+selection, matter (step 3). Driver: `run_coop_followup.sh` (server), analysis:
+`run_coop.py --analyze-only` (step 1), `analyze_coop_followup.py footprint | sweep`.
+
+### New arms (step 1), HARQ Option 1, helper = member 4
+
+| arm | leader | helper |
+|---|---|---|
+| `split` | initial + 1st reserved retx (retx on NACK, implicit ACK otherwise); the 2nd reserved retx slot is handed over | uses that slot only if it decoded the TB **and** heard a NACK on the PSFCH of the leader's retx |
+| `additive` | unchanged Option 1 (initial + up to 2 retx, nothing handed over) | after a NACK on the leader's **initial** transmission, one copy (`--relayBudget`, default 1) on its own Mode-2 resource, window = remaining PDB |
+
+`LeaderTxCount = 2` + `leaderRes` was not exactly `split`: (1) the scheduler handed the
+*last* selected slot to the helper unconditionally, so with only 2 slots (frequent for
+periodic2) the leader lost its own retx; (2) a NACK on the leader's *initial* transmission
+already enabled the helper's slot, even if the leader's retx then reached everyone. Fixed:
+only the slots after the first `LeaderTxCount` are handed over (identical for
+`LeaderTxCount = 1`), and in split mode the leader puts its last own reserved slot before
+the handed-over one into the SCI-2A `deadline` field (unused in handed-over mode); the
+helper counts only NACKs received after that slot. `additive` marks the SCI-2A
+`ownRes = 2`: the helper keeps only the leader's initial transmission (rv 0) and listens
+to its PSFCH occasion only (`NackKnownAfter` + 1 slot for a member whose PSFCH is pushed to
+the next occasion); a copy that cannot go out before the deadline counts as `too late`.
+Members soft-combine the copies in the leader's HARQ process (as before). HARQ ids are
+reused FIFO over 16 processes, so a leader reuses an id only ~16 TBs later (>= 150 ms,
+above every PDB): a copy cannot hit a reused process; the run check
+`relay_into_reused_harq` (latest leader transmission on that HARQ id before the copy
+belongs to another TB) verifies it.
+
+**`none4` (leader-only with `sl-MaxTxTransNumPSSCH = 4`) is not feasible here.** The
+scheduler draws the transmissions of a TB inside T2 = 33 slots with the PSFCH and
+processing gaps between them; in this pool (9 SL slots per 20) it never finds a 4th
+(roundabout pilot: 138 TBs with 3 resources, 41 with 2, none with 4). A cost-matched
+leader-only arm would need a longer T2 or another pool, i.e. a different configuration.
+Instead every arm reports `tx_per_pkt` and `cbr_occupied`, and `figc7_reliability_vs_cost`
+plots tail `prr_pdb` against `tx_per_pkt`.
+
+**The leader NACKed the helper's copies of its own TB (fixed).** The leader monitors the
+group destination, so it received the helper's relayed copies of its own TBs, tried to
+decode them (combining into its own HARQ id) and, when that failed, sent a NACK; the helper
+took it as a NACK on its copy and sent its 2nd relay although no member had asked
+(`leaderRes` / `ownRes` have a relay budget of 2; roundabout N 0, helper 7, 25 s: 8 of 71
+relays). Found by the corrected `relay_without_nack` check. Now the original transmitter
+ignores relayed copies of its own TBs (no decoding, no feedback; NR PHY). **The 2026-10-11
+`leaderRes` / `ownRes` results contain these spurious relays and are re-run in step 1**;
+`none` has no relays and is unchanged (reused), `split` / `additive` have a budget of 1.
+
+**Identity.** Cooperation off (stock path) and `none` are byte-identical to the 2026-10-11
+code (pilots: highway N 45 and roundabout N 0, every output file). `leaderRes` / `ownRes`
+are identical where no spurious 2nd relay happened (roundabout N 0, helper 4) and differ
+where it did (highway).
+
+**Pilots** (laptop, seed 1, full runs; every check 0):
+
+| cell | arm | PRR | tail `prr_pdb` | `tx_per_pkt` | helper copies | combined with an earlier attempt / first attempt | other |
+|---|---|---|---|---|---|---|---|
+| roundabout N 0 periodic1 | split | 0.893 | 0.662 | 1.87 | 122 | 315 / 0 | leader <= 2 tx per TB |
+| | additive | 0.901 | 0.715 | 2.32 | 234 | 320 / 3 | 137 copies redundant |
+| highway N 45 periodic2 | split | 0.791 | 0.266 | 1.88 | 889 | 1434 / 99 | leader <= 2 tx per TB |
+| | additive | 0.796 | 0.318 | 2.06 | 1511 | 2431 / 770 | 1727 too late, 2047 no resource, 856 redundant |
+
+(leader-only, same seed: roundabout 0.839 / 0.576 / 1.90, highway 0.791 / 0.276 / 1.89.)
+One seed: no conclusion; they show the arms work as designed and their cost. "Redundant" =
+the copy followed the leader's own retransmission, which had already reached everyone
+(`relay_without_nack` for this arm). Members combine 76-100 % of the copies they attempt
+with an earlier failed attempt (lowest: highway additive, 76 %; the cause of the rest is
+not analysed).
+
+**Checks** (run CSV, `FLAG CHECK FAILED` otherwise): `leader_retx_without_nack` = 0 (every
+arm); `relay_without_decode`, `relay_into_reused_harq` = 0 (helper arms);
+`relay_without_nack` = 0 (leaderRes, ownRes, split; members' NACKs only — the leader's own
+NACK on a copy no longer exists, see above), `relay_before_leader_retx` = 0 and
+`leader_tx_per_tb_max` <= 2 (split), `relay_without_initial_nack` = 0 (additive; its
+`relay_without_nack` counts the redundant copies, sent after the leader's own retx already
+reached everyone). New KPIs: `leader_tx_nacked`, `leader_nack_missed` (every arm),
+`helper_att_after_fail` / `helper_att_first` (helper copies a member combined with an
+earlier failed attempt / received first).
+
+Report per cell (± 95 % CI): tail `prr_pdb` (primary), mean and worst-member `prr_pdb`,
+`tx_per_pkt`, `cbr_occupied`, leader / helper collision rates, latency mean and tail p95,
+`helper_recovered`; `coop_verdict.csv` states for every arm whether it beats `none` on
+tail `prr_pdb` with disjoint CIs.
+
+### Footprint test (step 2) — pre-registered before any result
+
+Cells: roundabout IVD 30, N in {45, 60}, periodic1 and periodic2, seeds 1-10, helper 4,
+arms `none`, `leaderRes`, `ownRes`, `split`, `additive` (both new arms passed the pilots;
+all runs fresh, with `--collCond`).
+Instrumentation: for every collided failed attempt the link condition leader -> interferer
+and helper -> interferer at the attempt (`--collCond`: extra channel-condition queries,
+which can change the random draws, hence only in fresh campaigns) and whether leader and
+tail are on different road segments (ring / arm; the turn phase); for every selection of
+the leader or the helper the **sensing-map divergence**: the (slot, subchannel) units of
+the selection window that the selecting UE's sensing data excludes (RSRP above the
+selection's initial threshold; periodic and same-period retransmission reservations, as
+TS 38.214) vs those the other UE's sensing data excludes, same window, same threshold
+(`<tag>_div.csv`; divergence = |A xor B| / |A or B|).
+
+**Decision rule, fixed now:** the footprint hypothesis is **supported** if, in the turn
+phase, `leader_only` + `helper_only` >= 15 % of the collided failed leader attempts, **or**
+the median divergence of the leader's selections in the turn phase >= 15 %; otherwise it is
+**rejected** and the footprint framing is dropped. Computed by
+`analyze_coop_followup.py footprint` (`footprint_verdict.txt`), pooled over the step-2 runs.
+
+### Helper sweep (step 3) — protocol fixed before any result
+
+Roundabout IVD 30 N 0 (N 45 only if step 2 ran), periodic1/2, helpers {2, 4, 6, 7} (8 is
+the tail), arms `leaderRes`, `ownRes`, `split`, `additive`, seeds 1-10; `none` reused.
+Static oracle: best helper per traffic x arm on seeds 1-5 (tail `prr_pdb`), reported on
+seeds 6-10 only, next to helper 4 and `none`. Dynamic oracle: tail `prr_pdb` in 1 s windows
+per helper (same seed = same trace), per-window maximum over helpers = upper bound of
+per-packet helper selection; how often the best helper changes in the turn phase.
+Implementable rule (the only one): **the rearmost swept helper within X m (straight line,
+from CAM positions) of the leader**, X in {50, 100, 150, 200, 250, 300} tuned on seeds 1-5,
+evaluated on seeds 6-10 by composing the static runs window by window (an approximation).
+The highway sweep runs only if step 1 shows an arm beating `none` on the highway.
+
+```bash
+JOBS=24 ./run_coop_followup.sh 1 2 3        # server; 3n45 after step 2 if wanted
+```
+
+Results: step 1 `results/coop2_rlc0/analysis/` (`coop_verdict.csv`, `figc2_tail_prr_pdb`,
+`figc7_reliability_vs_cost`, ...), step 2 `results/coop_rbt_rlc0/analysis/` and
+`analysis_footprint/` (`footprint_verdict.txt`, `figf1`, `figf2`), step 3
+`results/coop_sweep_rlc0/analysis_sweep/` (`sweep_static.csv`, `sweep_gaps.csv`,
+`sweep_rule.csv`, `figs1_tail_vs_helper`, `figs2_oracle_timeline`). New per-run files:
+`<tag>_nack.csv` (every NACK a member sent), `<tag>_div.csv` (divergence per selection).
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

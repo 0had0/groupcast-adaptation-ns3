@@ -18,8 +18,11 @@ helper on the leader's resources vs helper on its own resources.
 
 Every run uses RLC t-Reordering 0 (NR RLC UM behaviour, see README) and is
 checked afterwards: helper mode / member / t-Reordering in the run CSV, no
-explicit ACK (Option 1), and for the helper arms relay_without_nack == 0 and
-relay_without_decode == 0. A mismatch is logged as "FLAG CHECK FAILED".
+explicit ACK (Option 1), and for the helper arms relay_without_nack == 0 (no
+relay unless a member sent a NACK on the previous transmission of the TB; runs
+made before 2026-10-12 judged it on the NACKs the leader received, which flags
+the relays after a NACK the leader missed) and relay_without_decode == 0. A
+mismatch is logged as "FLAG CHECK FAILED".
 
 Resumable (a run is skipped when its <tag>_run.csv exists).
 
@@ -30,7 +33,11 @@ Resumable (a run is skipped when its <tag>_run.csv exists).
 Outputs: results/coop_rlc0/<arm>/<tag>_*  and  results/coop_rlc0/analysis/:
   coop_runs.csv, coop_members.csv, coop_summary.csv (mean and 95 % CI over seeds),
   figc1_prr.png, figc2_tail_prr_pdb.png, figc3_collision_sensing.png,
-  coop_latency_cdf.csv, figc4_latency.png, figc5_reliability_latency.png
+  coop_latency_cdf.csv, figc4_latency.png, figc5_reliability_latency.png, and for runs
+  made since 2026-10-12 coop_why_summary.csv, figc6_why_both_sensed.png, figc6b_why_all.png
+  (why collided attempts collided although the UEs sense; see the program's _coll.csv)
+
+  python3 run_coop.py --cells roundabout:45 roundabout:60 --results results/coop_rbt_rlc0
 
 Latency = application end-to-end delay of a packet at a member: generation at the
 leader -> first delivery to the member's application (queueing for the resource,
@@ -57,12 +64,26 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import run_campaign as rc  # noqa: E402  (trace generation, binary location)
 
+# arm -> (label, program --helperMode, extra program flags)
 ARMS = {
-    "none": ("Leader only", "none"),
-    "leaderRes": ("Helper, leader's resources", "leaderRes"),
-    "ownRes": ("Helper, own resources", "ownRes"),
+    "none": ("Leader only", "none", []),
+    # none4 = leader-only with sl-MaxTxTransNumPSSCH = 4: not feasible in this pool
+    # (T2 = 33 slots, 9 SL slots / 20, PSFCH + processing gaps: the scheduler never
+    # finds a 4th resource, pilot 2026-10-12: 138 x 3, 41 x 2, 0 x 4); kept for
+    # completeness, not in the follow-up campaign
+    "none4": ("Leader only, 4 tx", "none", ["--maxNumTx=4"]),
+    "leaderRes": ("Helper, leader's resources", "leaderRes", []),
+    "ownRes": ("Helper, own resources", "ownRes", []),
+    "split": ("Split: leader 2 tx + helper", "split", []),
+    "additive": ("Additive: leader + helper copy", "additive", ["--relayBudget=1"]),
 }
-CELLS = [("roundabout", 30, 0), ("highway", 30, 45), ("highway", 30, 60)]
+DEFAULT_ARMS = ["none", "leaderRes", "ownRes"]  # the 2026-10-11 comparison
+SHORT_ARM = {"none": "LO", "none4": "LO4", "leaderRes": "LR", "ownRes": "OR", "split": "SP",
+             "additive": "AD"}
+CELLS = [("roundabout", 30, 0), ("highway", 30, 45), ("highway", 30, 60)]  # default design
+# further cells selectable with --cells (roundabout with background: is the helper's
+# sensing different when buildings, not distance, separate it from the leader?)
+ALL_CELLS = CELLS + [("roundabout", 30, 45), ("roundabout", 30, 60)]
 TRAFFIC = ["periodic1", "periodic2"]
 SEEDS = list(range(1, 11))
 BIN = None
@@ -76,36 +97,59 @@ def tag_of(sc, ivd, tr, nbg, seed):
     return f"{rc.SHORT[sc]}_ivd{ivd}_{tr}_n{nbg}_s{seed}"
 
 
-def check(run_csv, arm):
+def check(run_csv, arm, helper=None):
+    helper = HELPER if helper is None else helper
     with open(run_csv) as f:
         r = next(csv.DictReader(f))
     bad = []
     if r.get("helper_mode") != ARMS[arm][1]:
         bad.append(f"helper_mode={r.get('helper_mode')}")
-    if int(float(r.get("helper", -1))) != HELPER:
+    if int(float(r.get("helper", -1))) != helper:
         bad.append(f"helper={r.get('helper')}")
     if abs(rc.rlc_reordering_of(run_csv) - RLC_MS) > 1e-9:
         bad.append(f"rlc_reordering_ms={r.get('rlc_reordering_ms')}")
     if int(float(r["explicit_ack_rx"])) != 0:
         bad.append(f"explicit_ack_rx={r['explicit_ack_rx']}")
-    if arm != "none":
-        for k in ("relay_without_nack", "relay_without_decode"):
-            if int(float(r[k])) != 0:
-                bad.append(f"{k}={r[k]}")
+    want_tx = 4 if arm == "none4" else 3
+    if int(float(r.get("max_num_tx", want_tx))) != want_tx:
+        bad.append(f"max_num_tx={r.get('max_num_tx')}")
+    must0 = ["leader_retx_without_nack"]  # Option 1: a leader retx only after a NACK
+    if ARMS[arm][1] not in ("none", "off"):
+        must0 += ["relay_without_decode", "relay_into_reused_harq"]
+    if arm == "split":
+        must0 += ["relay_without_nack", "relay_before_leader_retx"]
+    elif arm == "additive":
+        # the copy follows the NACK on the leader's initial transmission; when the
+        # leader's own retransmission comes first and reaches everyone, the copy is
+        # redundant (relay_without_nack counts those, by design not 0)
+        must0 += ["relay_without_initial_nack"]
+    elif ARMS[arm][1] not in ("none", "off"):
+        must0 += ["relay_without_nack"]
+    for k in must0:
+        if k in r and int(float(r[k])) != 0:
+            bad.append(f"{k}={r[k]}")
+    max_leader = {"split": 2, "leaderRes": 1, "ownRes": 1}.get(arm, want_tx)
+    if "leader_tx_per_tb_max" in r and int(float(r["leader_tx_per_tb_max"])) > max_leader:
+        bad.append(f"leader_tx_per_tb_max={r['leader_tx_per_tb_max']}")
     return bad
 
 
 def run_job(job):
-    arm, sc, ivd, tr, nbg, seed, tdir, adir = job
-    tag = tag_of(sc, ivd, tr, nbg, seed)
+    """job = (arm, scenario, ivd, traffic, nbg, seed, trace dir, arm dir[, opts]);
+    opts (dict, optional): helper, tag (output tag), extra (program flags)."""
+    arm, sc, ivd, tr, nbg, seed, tdir, adir = job[:8]
+    opts = job[8] if len(job) > 8 else {}
+    helper = opts.get("helper", HELPER)
+    tag = opts.get("tag", tag_of(sc, ivd, tr, nbg, seed))
     try:
         if (adir / f"{tag}_run.csv").exists():
             return arm, tag, "cached", 0.0
         cmd = [str(BIN), f"--scenario={sc}",
                f"--mobility={rc.trace_path(tdir, sc, ivd, nbg, seed)}", f"--traffic={tr}",
                f"--seed={seed}", "--run=1", f"--out={adir / tag}",
-               f"--helperMode={ARMS[arm][1]}", f"--helper={HELPER}",
+               f"--helperMode={ARMS[arm][1]}", f"--helper={helper}",
                f"--ns3::LteRlcUm::ReorderingTimer={RLC_MS:g}ms"]
+        cmd += list(ARMS[arm][2]) + list(opts.get("extra", []))
         if sc == "roundabout":
             cmd.append(f"--sumoNet={rc.NET}")
         env = {k: v for k, v in os.environ.items() if not k.startswith("MAGIC_")}
@@ -115,13 +159,13 @@ def run_job(job):
         dt = time.time() - t0
         if r.returncode != 0:
             return arm, tag, f"FAILED rc={r.returncode}", dt
-        for suffix in ("_pkt.csv", "_ltx.csv", "_htx.csv", "_coll.csv"):
+        for suffix in ("_pkt.csv", "_ltx.csv", "_htx.csv", "_coll.csv", "_div.csv", "_nack.csv"):
             f = adir / f"{tag}{suffix}"
             if f.exists():
                 with open(f, "rb") as fi, gzip.open(str(f) + ".gz", "wb") as fo:
                     shutil.copyfileobj(fi, fo)
                 f.unlink()
-        bad = check(adir / f"{tag}_run.csv", arm)
+        bad = check(adir / f"{tag}_run.csv", arm, helper)
         return arm, tag, ("ok" if not bad else "FLAG CHECK FAILED " + " ".join(bad)), dt
     except Exception as e:  # never let one job take the loop down
         return arm, tag, f"FAILED exception {e!r}", 0.0
@@ -149,6 +193,186 @@ def latency_of_run(pkt_gz, traffic, tail):
                        else np.full(len(grid), np.nan))
     return stats, grid, curves
 
+
+WHY = ["fresh_dynamic", "fresh_sps", "fresh_platoon", "announced_after", "before_window",
+       "retx_not_projected", "below_threshold", "relaxed_threshold", "half_duplex",
+       "sci_not_received", "not_excluded", "no_selection"]
+WHY_GROUPS = [  # (label, classes, colour)
+    ("never announced: new dynamic grant", ["fresh_dynamic"], "#e34948"),
+    ("never announced: new SPS reservation", ["fresh_sps"], "#f2a29e"),
+    ("never announced: platoon", ["fresh_platoon"], "#bdbbb4"),
+    ("announced after our selection", ["announced_after"], "#eda100"),
+    ("sensed above threshold, not excluded\n(5G-LENA: no step 6 for dynamic grants)",
+     ["not_excluded"], "#4a3aa7"),
+    ("announced retx gap, not projected (5G-LENA)", ["retx_not_projected"], "#8f7fe0"),
+    ("relaxed threshold", ["relaxed_threshold"], "#1baf7a"),
+    ("below threshold", ["below_threshold"], "#7fd6b4"),
+    ("half-duplex (selector was transmitting)", ["half_duplex"], "#2a78d6"),
+    ("announcing SCI not received", ["sci_not_received"], "#8cbcf0"),
+    ("other (before window / no selection)", ["before_window", "no_selection"], "#52514e"),
+]
+
+
+def why_breakdown(R, keys, out, cells, cell_lab, colors):
+    """Why collided attempts collided although the UEs sense: shares of the
+    (attempt, interferer) pairs of collided attempts that failed at >= 1 member,
+    pooled over seeds, for all pairs and for the pairs whose interferer had been
+    sensed (any SCI-1A decoded in the window) by both leader and helper.
+    Needs runs made since 2026-10-12 (cc_* columns)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import analyze as an
+
+    if f"cc_{WHY[0]}_l" not in R:
+        return
+    rows = []
+    for k, g in R.groupby(keys):
+        for subset, pre in (("all", "cc"), ("both_sensed", "ccboth")):
+            for role, rl in (("leader", "l"), ("helper", "h")):
+                cnt = {w: g[f"{pre}_{w}_{rl}"].sum() for w in WHY}
+                tot = sum(cnt.values())
+                if tot == 0:
+                    continue
+                row = dict(zip(keys, k), subset=subset, role=role, pairs=int(tot),
+                           n_seeds=len(g))
+                for w in WHY:
+                    row[w] = cnt[w] / tot
+                rows.append(row)
+    W = pd.DataFrame(rows)
+    W.to_csv(out / "coop_why_summary.csv", index=False)
+    if W.empty:
+        return
+
+    ccells = [c for c in cells if c[1] > 0]
+    if not ccells:
+        return
+    trs = [t for t in TRAFFIC if t in set(W.traffic)]
+    groups = [(arm, role) for arm in ARMS if arm in set(W.arm) for role in ("leader", "helper")
+              if not (ARMS[arm][1] == "none" and role == "helper")]
+    glab = {(arm, role): f"{SHORT_ARM[arm]}: {role}" for arm in ARMS
+            for role in ("leader", "helper")}
+    for subset, fname, what in (("both_sensed", "figc6_why_both_sensed.png",
+                                 "interferer sensed by both leader and helper"),
+                                ("all", "figc6b_why_all.png", "all collided attempts")):
+        fig, axes = plt.subplots(len(trs), len(ccells), squeeze=False, sharey=True,
+                                 figsize=(max(11.0, 4.8 * len(ccells)), 3.4 * len(trs) + 1.2))
+        for i, tr in enumerate(trs):
+            for j, (sc, nbg) in enumerate(ccells):
+                ax = axes[i, j]
+                d = W[(W.subset == subset) & (W.scenario == sc) & (W.nbg == nbg)
+                      & (W.traffic == tr)]
+                bottom = np.zeros(len(groups))
+                npairs = []
+                for lab, cls, col in WHY_GROUPS:
+                    vals = []
+                    for arm, role in groups:
+                        x = d[(d.arm == arm) & (d.role == role)]
+                        vals.append(x[cls].sum(axis=1).iloc[0] if len(x) else 0.0)
+                    vals = np.array(vals)
+                    ax.bar(range(len(groups)), vals, 0.7, bottom=bottom, color=col,
+                           edgecolor="white", linewidth=0.8, label=lab)
+                    bottom += vals
+                for arm, role in groups:
+                    x = d[(d.arm == arm) & (d.role == role)]
+                    npairs.append(int(x.pairs.iloc[0]) if len(x) else 0)
+                for q, n in enumerate(npairs):
+                    ax.text(q, 1.01, str(n), ha="center", va="bottom", fontsize=6,
+                            color=an.INK2)
+                ax.set_xticks(range(len(groups)))
+                ax.set_xticklabels([glab[g] for g in groups], fontsize=7, rotation=20)
+                ax.set_ylim(0, 1.08)
+                if i == 0:
+                    ax.set_title(cell_lab[(sc, nbg)].replace("\n", " "), color=an.INK,
+                                 fontsize=10)
+                if j == 0:
+                    ax.set_ylabel(f"{tr}\nshare of (attempt, interferer)")
+        h, l = axes[0, 0].get_legend_handles_labels()
+        fig.legend(h, l, loc="lower center", ncol=3, fontsize=7, bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(f"Why collided attempts collided: {what}\n"
+                     "(share of (attempt, interferer) pairs pooled over seeds; count above bars)",
+                     color=an.INK, fontsize=11, x=0.01, ha="left")
+        fig.tight_layout(rect=(0, 0.13, 1, 0.94))
+        fig.savefig(out / fname)
+        plt.close(fig)
+
+
+
+def cost_and_verdict(S, out, cells, cell_lab, colors, arms):
+    """Reliability vs cost (tail PRR within the PDB vs transmissions per packet,
+    95 % CI over seeds) and the verdict table: does an arm beat leader-only
+    Option 1 (none, and none4 = one more allowed transmission) on tail prr_pdb
+    with disjoint 95 % CIs, and at what cost (tx_per_pkt, cbr_occupied)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import analyze as an
+
+    trs = [t for t in TRAFFIC if t in set(S.traffic)]
+    fig, axes = plt.subplots(len(trs), len(cells), squeeze=False,
+                             figsize=(4.4 * len(cells), 3.4 * len(trs) + 0.8))
+    for i, tr in enumerate(trs):
+        for j, (sc, nbg) in enumerate(cells):
+            ax = axes[i, j]
+            for arm in arms:
+                d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
+                if not len(d):
+                    continue
+                r = d.iloc[0]
+                ax.errorbar(r.tx_per_pkt, r.prr_pdb_tail, xerr=r.tx_per_pkt_ci,
+                            yerr=r.prr_pdb_tail_ci, fmt="o", ms=5, capsize=2,
+                            color=colors[arm], label=ARMS[arm][0])
+                ax.annotate(SHORT_ARM[arm], (r.tx_per_pkt, r.prr_pdb_tail), fontsize=7,
+                            xytext=(4, 3), textcoords="offset points", color=an.INK2)
+            ax.grid(color=an.GRID, lw=0.5)
+            if i == 0:
+                ax.set_title(cell_lab[(sc, nbg)].replace("\n", " "), color=an.INK, fontsize=10)
+            if j == 0:
+                ax.set_ylabel(f"{tr}\ntail PRR within PDB")
+            if i == len(trs) - 1:
+                ax.set_xlabel("PSSCH transmissions per packet (leader + helper)")
+    h, l = [], []
+    for ax in axes.flat:
+        for hh, ll in zip(*ax.get_legend_handles_labels()):
+            if ll not in l:
+                h.append(hh)
+                l.append(ll)
+    fig.legend(h, l, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle("Reliability vs cost per arm (95 % CI over seeds)", color=an.INK, fontsize=11,
+                 x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0.08, 1, 0.95))
+    fig.savefig(out / "figc7_reliability_vs_cost.png")
+    plt.close(fig)
+
+    rows = []
+    for (sc, nbg, tr), g in S.groupby(["scenario", "nbg", "traffic"]):
+        ref = {b: g[g.arm == b].iloc[0] for b in ("none", "none4") if (g.arm == b).any()}
+        for _, r in g.iterrows():
+            row = {"scenario": sc, "nbg": nbg, "traffic": tr, "arm": r.arm,
+                   "n_seeds": r.n_seeds, "prr_pdb_tail": r.prr_pdb_tail,
+                   "prr_pdb_tail_ci": r.prr_pdb_tail_ci, "tx_per_pkt": r.tx_per_pkt,
+                   "cbr_occupied": r.cbr_occupied}
+            for b, x in ref.items():
+                if b == r.arm:
+                    continue
+                lo, hi = r.prr_pdb_tail - r.prr_pdb_tail_ci, r.prr_pdb_tail + r.prr_pdb_tail_ci
+                blo, bhi = x.prr_pdb_tail - x.prr_pdb_tail_ci, x.prr_pdb_tail + x.prr_pdb_tail_ci
+                row[f"d_tail_vs_{b}"] = r.prr_pdb_tail - x.prr_pdb_tail
+                row[f"verdict_vs_{b}"] = ("better" if lo > bhi else "worse" if hi < blo
+                                          else "overlap")
+                row[f"d_tx_per_pkt_vs_{b}"] = r.tx_per_pkt - x.tx_per_pkt
+                row[f"d_cbr_occupied_vs_{b}"] = r.cbr_occupied - x.cbr_occupied
+            rows.append(row)
+    V = pd.DataFrame(rows)
+    V.to_csv(out / "coop_verdict.csv", index=False)
+    cols = [c for c in ["scenario", "nbg", "traffic", "arm", "n_seeds", "prr_pdb_tail",
+                        "prr_pdb_tail_ci", "d_tail_vs_none", "verdict_vs_none",
+                        "d_tail_vs_none4", "verdict_vs_none4", "d_tx_per_pkt_vs_none",
+                        "d_cbr_occupied_vs_none"] if c in V]
+    with pd.option_context("display.width", 220, "display.max_rows", 200,
+                           "display.float_format", "{:.3f}".format):
+        print("\nverdict (tail prr_pdb, disjoint 95 % CIs):")
+        print(V[cols].to_string(index=False))
 
 def analyze(a):
     import matplotlib
@@ -187,7 +411,7 @@ def analyze(a):
     per = mems[mems.member.str.isdigit()].copy()
     tail = str(per.member.astype(int).max())
     agg = (per.groupby(keys + ["seed"])
-           .agg(prr_pdb_mean=("prr_pdb", "mean")).reset_index())
+           .agg(prr_pdb_mean=("prr_pdb", "mean"), prr_pdb_min=("prr_pdb", "min")).reset_index())
     tl = (per[per.member == tail].groupby(keys + ["seed"])
           .agg(prr_tail=("prr", "mean"), prr_pdb_tail=("prr_pdb", "mean")).reset_index())
     R = runs.merge(agg, on=keys + ["seed"], how="left").merge(tl, on=keys + ["seed"], how="left")
@@ -219,11 +443,20 @@ def analyze(a):
         tot = sum(R[f"{role}coll_{c}"] for c in cats)
         for c in cats:
             R[f"{role}coll_{c}_share"] = R[f"{role}coll_{c}"] / tot.where(tot > 0)
-    metrics = (["prr_mean", "prr_min", "prr_tail", "prr_pdb_mean", "prr_pdb_tail",
+    metrics = (["prr_mean", "prr_min", "prr_tail", "prr_pdb_mean", "prr_pdb_tail", "prr_pdb_min",
+                "cbr_occupied",
                 "collision_loss_rate", "channel_loss_rate", "cbr", "tx_per_pkt",
                 "leader_tx_coll_rate", "helper_tx", "helper_tx_coll_rate", "coop_sent",
                 "coop_no_nack", "coop_no_resource", "helper_recovered"]
                + [f"{r}coll_{c}_share" for r in ("l", "h") for c in cats] + lat_metrics)
+    # runs made since 2026-10-12: NACKs the leader missed, and whether sensing
+    # (step 6) removed any candidate of the leader's selections
+    if "leader_nack_missed" in R:
+        R["leader_nack_missed_rate"] = R.leader_nack_missed / R.leader_tx_nacked.where(
+            R.leader_tx_nacked > 0)
+        metrics += [m for m in ("leader_nack_missed", "leader_nack_missed_rate",
+                                "relay_without_rx_nack", "sel_leader_sensing_excluded",
+                                "sel_leader_relaxed", "sel_helper_sensing_excluded") if m in R]
     rows = []
     for k, g in R.groupby(keys):
         row = dict(zip(keys, k))
@@ -238,22 +471,28 @@ def analyze(a):
                       key=lambda c: c.map(order) if c.name == "arm" else c)
     S.to_csv(out / "coop_summary.csv", index=False)
 
-    colors = {"none": "#2a78d6", "leaderRes": "#eb6834", "ownRes": "#1baf7a"}
-    hatches = {"none": "", "leaderRes": "//", "ownRes": ".."}
-    cells = [(sc, nbg) for sc, _, nbg in CELLS]
+    colors = {"none": "#2a78d6", "none4": "#8cbcf0", "leaderRes": "#eb6834", "ownRes": "#1baf7a",
+              "split": "#4a3aa7", "additive": "#eda100"}
+    hatches = {"none": "", "none4": "xx", "leaderRes": "//", "ownRes": "..", "split": "\\\\",
+               "additive": "oo"}
+    arms = [arm for arm in ARMS if arm in set(S.arm)]
+    present = set(zip(S.scenario, S.nbg))
+    cells = [(sc, nbg) for sc, _, nbg in ALL_CELLS if (sc, nbg) in present]
     cell_lab = {("roundabout", 0): "Roundabout, N = 0\n(blockage)",
+                ("roundabout", 45): "Roundabout, N = 45\n(blockage + collisions)",
+                ("roundabout", 60): "Roundabout, N = 60\n(blockage + collisions)",
                 ("highway", 45): "Highway, N = 45\n(collisions)",
                 ("highway", 60): "Highway, N = 60\n(collisions)"}
 
     def bar_panel(ax, metric, tr):
-        w = 0.26
-        for k, arm in enumerate(ARMS):
+        w = 0.8 / max(1, len(arms))
+        for k, arm in enumerate(arms):
             ys, es = [], []
             for sc, nbg in cells:
                 d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
                 ys.append(d[metric].iloc[0] if len(d) else np.nan)
                 es.append(d[metric + "_ci"].iloc[0] if len(d) else 0)
-            x = np.arange(len(cells)) + (k - 1) * w
+            x = np.arange(len(cells)) + (k - (len(arms) - 1) / 2) * w
             ax.bar(x, ys, w * 0.92, yerr=es, color=colors[arm], hatch=hatches[arm],
                    edgecolor="white", linewidth=0.5, capsize=2, label=ARMS[arm][0])
         ax.set_xticks(np.arange(len(cells)))
@@ -290,40 +529,41 @@ def analyze(a):
                "both": "#1baf7a"}
     cat_lab = {"neither": "sensed by neither", "helper_only": "helper only",
                "leader_only": "leader only", "both": "both"}
-    groups = [(arm, role) for arm in ARMS for role in ("l", "h") if not (arm == "none" and role == "h")]
-    glab = {("none", "l"): "LO: leader", ("leaderRes", "l"): "LR: leader",
-            ("leaderRes", "h"): "LR: helper", ("ownRes", "l"): "OR: leader",
-            ("ownRes", "h"): "OR: helper"}
-    fig, axes = plt.subplots(len(trs), len(ccells), figsize=(5.0 * len(ccells), 3.2 * len(trs)),
-                             sharey=True, squeeze=False)
-    for i, tr in enumerate(trs):
-        for j, (sc, nbg) in enumerate(ccells):
-            ax = axes[i, j]
-            bottom = np.zeros(len(groups))
-            for c in cats:
-                vals = []
-                for arm, role in groups:
-                    d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
-                    vals.append(d[f"{role}coll_{c}_share"].iloc[0] if len(d) else np.nan)
-                vals = np.nan_to_num(np.array(vals))
-                ax.bar(range(len(groups)), vals, 0.7, bottom=bottom, color=cat_col[c],
-                       edgecolor="white", linewidth=1.0, label=cat_lab[c])
-                bottom += vals
-            ax.set_xticks(range(len(groups)))
-            ax.set_xticklabels([glab[g] for g in groups], fontsize=7, rotation=20)
-            ax.set_ylim(0, 1.0)
-            if i == 0:
-                ax.set_title(cell_lab[(sc, nbg)].replace("\n", " "), color=an.INK, fontsize=10)
-            if j == 0:
-                ax.set_ylabel(f"{tr}\nshare of collided failed attempts")
-    h, l = axes[0, 0].get_legend_handles_labels()
-    fig.legend(h, l, loc="lower center", ncol=4, fontsize=8, bbox_to_anchor=(0.5, 0.0))
-    fig.suptitle("Who had sensed an interferer of a failed, collided attempt "
-                 "(SCI-1A decoded in the 100 ms sensing window + PDB before it)",
-                 color=an.INK, fontsize=11, x=0.01, ha="left")
-    fig.tight_layout(rect=(0, 0.07, 1, 0.94))
-    fig.savefig(out / "figc3_collision_sensing.png")
-    plt.close(fig)
+    groups = [(arm, role) for arm in arms for role in ("l", "h")
+              if not (ARMS[arm][1] == "none" and role == "h")]
+    glab = {(arm, role): f"{SHORT_ARM[arm]}: {'leader' if role == 'l' else 'helper'}"
+            for arm in ARMS for role in ("l", "h")}
+    if ccells:  # no collision cells (N = 0 only): nothing to attribute
+        fig, axes = plt.subplots(len(trs), len(ccells), figsize=(5.0 * len(ccells), 3.2 * len(trs)),
+                                 sharey=True, squeeze=False)
+        for i, tr in enumerate(trs):
+            for j, (sc, nbg) in enumerate(ccells):
+                ax = axes[i, j]
+                bottom = np.zeros(len(groups))
+                for c in cats:
+                    vals = []
+                    for arm, role in groups:
+                        d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
+                        vals.append(d[f"{role}coll_{c}_share"].iloc[0] if len(d) else np.nan)
+                    vals = np.nan_to_num(np.array(vals))
+                    ax.bar(range(len(groups)), vals, 0.7, bottom=bottom, color=cat_col[c],
+                           edgecolor="white", linewidth=1.0, label=cat_lab[c])
+                    bottom += vals
+                ax.set_xticks(range(len(groups)))
+                ax.set_xticklabels([glab[g] for g in groups], fontsize=7, rotation=20)
+                ax.set_ylim(0, 1.0)
+                if i == 0:
+                    ax.set_title(cell_lab[(sc, nbg)].replace("\n", " "), color=an.INK, fontsize=10)
+                if j == 0:
+                    ax.set_ylabel(f"{tr}\nshare of collided failed attempts")
+        h, l = axes[0, 0].get_legend_handles_labels()
+        fig.legend(h, l, loc="lower center", ncol=4, fontsize=8, bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle("Who had sensed an interferer of a failed, collided attempt "
+                     "(SCI-1A decoded in the 100 ms sensing window + PDB before it)",
+                     color=an.INK, fontsize=11, x=0.01, ha="left")
+        fig.tight_layout(rect=(0, 0.07, 1, 0.94))
+        fig.savefig(out / "figc3_collision_sensing.png")
+        plt.close(fig)
 
     # latency of delivered packets: mean (all members) and 95th percentile (tail
     # member), one column per traffic type (own y scale: the PDBs differ 10x)
@@ -370,7 +610,7 @@ def analyze(a):
             xmax = min(xmax, max(PDB_MS[tr] * 0.3, 1.15 * reached.max()))
         for j, (sc, nbg) in enumerate(cells):
             ax = axes[i, j]
-            for arm in ARMS:
+            for arm in arms:
                 for who, ls, lw in (("tail", "-", 1.6), ("all", "--", 1.0)):
                     d = ct[(ct.arm == arm) & (ct.scenario == sc) & (ct.nbg == nbg)
                            & (ct.who == who)]
@@ -403,17 +643,27 @@ def analyze(a):
     with pd.option_context("display.width", 220, "display.max_rows", 200,
                            "display.float_format", "{:.3f}".format):
         print(S[cols].to_string(index=False))
+    cost_and_verdict(S, out, cells, cell_lab, colors, arms)
+    why_breakdown(R, keys, out, cells, cell_lab, colors)
     print(f"\nwritten to {out}")
 
 
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--arms", nargs="+", default=list(ARMS), choices=list(ARMS))
+    ap.add_argument("--arms", nargs="+", default=DEFAULT_ARMS, choices=list(ARMS))
+    ap.add_argument("--max-time", type=float, default=0.0,
+                    help="truncate every run at this time (s): smoke tests only")
+    ap.add_argument("--coll-cond", action="store_true",
+                    help="log the link condition leader / helper -> interferer of collided "
+                         "attempts (--collCond; extra channel-condition queries: use for fresh "
+                         "campaigns only, results are not comparable seed by seed with runs "
+                         "made without it)")
     ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS)
     ap.add_argument("--traffic", nargs="+", default=TRAFFIC)
     ap.add_argument("--cells", nargs="+", default=None,
-                    help="subset of cells as scenario:nbg, e.g. roundabout:0 highway:45")
+                    help="cells as scenario:nbg, e.g. roundabout:0 highway:45 (default: the "
+                         "3 of CELLS; also roundabout:45 roundabout:60)")
     ap.add_argument("--helper", type=int, default=4)
     ap.add_argument("--jobs", type=int, default=7)
     ap.add_argument("--traces", default=str(HERE / "traces"))
@@ -428,7 +678,9 @@ def main():
     cells = CELLS
     if a.cells:
         want = {(c.split(":")[0], int(c.split(":")[1])) for c in a.cells}
-        cells = [c for c in CELLS if (c[0], c[2]) in want]
+        cells = [c for c in ALL_CELLS if (c[0], c[2]) in want]
+        if len(cells) != len(want):
+            sys.exit(f"unknown cell in {a.cells}; known: {ALL_CELLS}")
     if a.analyze_only:
         analyze(a)
         return
@@ -470,7 +722,10 @@ def main():
     for arm, (sc, ivd, nbg), tr, seed in itertools.product(a.arms, cells, a.traffic, a.seeds):
         adir = root / arm
         adir.mkdir(exist_ok=True)
-        jobs.append((arm, sc, ivd, tr, nbg, seed, tdir, adir))
+        jobs.append((arm, sc, ivd, tr, nbg, seed, tdir, adir,
+                     {"helper": HELPER,
+                      "extra": (["--collCond=true"] if a.coll_cond else [])
+                      + ([f"--maxTime={a.max_time:g}"] if a.max_time > 0 else [])}))
     # replicate by replicate, most expensive first
     jobs.sort(key=lambda j: (j[5], -j[4], j[1] != "highway", j[3] != "periodic2"))
     todo = [j for j in jobs if not (j[7] / f"{tag_of(*j[1:6])}_run.csv").exists()]
