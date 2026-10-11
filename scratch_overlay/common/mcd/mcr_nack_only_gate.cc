@@ -29,6 +29,17 @@ namespace ns3
 
 NS_LOG_COMPONENT_DEFINE("McrNackOnlyGate");
 
+namespace
+{
+Callback<void, uint32_t, const SlHarqInfo&> g_gateObserver; // see SetMcrNackOnlyGateObserver
+} // namespace
+
+void
+SetMcrNackOnlyGateObserver(Callback<void, uint32_t, const SlHarqInfo&> observer)
+{
+    g_gateObserver = observer;
+}
+
 // ---------------------------------------------------------------------------
 // McrNackOnlyShim: ns3::Object so Ptr<> ref-counting is safe.
 // Wraps one UE's spectrum-phy PSFCH feedback slot. State captured at install
@@ -96,6 +107,10 @@ class McrNackOnlyShim : public Object
         // Forward NACK (and ACK if dropAcks=false) to original callback.
         NS_LOG_DEBUG("McrNackOnlyGate: forwarding " << (info.m_harqStatus == SlHarqInfo::ACK ? "ACK" : "NACK") << " txRnti=" << info.m_txRnti);
 
+        if (!g_gateObserver.IsNull())
+        {
+            g_gateObserver(m_rxMob->GetObject<Node>()->GetId(), info);
+        }
         m_uePhy->EnqueueSlHarqFeedback(info);
     }
 

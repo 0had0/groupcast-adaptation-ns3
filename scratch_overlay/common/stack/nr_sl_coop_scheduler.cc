@@ -66,6 +66,14 @@ NrSlCoopScheduler::GetTypeId(void)
                       BooleanValue(false),
                       MakeBooleanAccessor(&NrSlCoopScheduler::m_helperOwnResources),
                       MakeBooleanChecker())
+        .AddAttribute("AdditiveRelays",
+                      "Additive arm: if > 0, the leader keeps all its transmissions (standard "
+                      "Option-1 HARQ) and the helper may add up to this many copies on its own "
+                      "resources after a NACK on the leader's initial transmission (SCI-2A "
+                      "ownRes = 2, packet deadline). Takes precedence over HelperOwnResources",
+                      UintegerValue(0),
+                      MakeUintegerAccessor(&NrSlCoopScheduler::m_additiveRelays),
+                      MakeUintegerChecker<uint32_t>(0, 255))
         .AddAttribute("ChainedResActive",
                       "Activate Chained Reservations.",
                       BooleanValue(false),
@@ -1462,7 +1470,21 @@ NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
             }
             
             NS_LOG_DEBUG("Sched ChainedResActive: " << m_chainedResActive << " HelperId: " << m_helperId << " Slots: " << grant.slotAllocations.size());
-            if (m_chainedResActive && m_helperId != 0 && m_helperOwnResources)
+            if (m_chainedResActive && m_helperId != 0 && m_additiveRelays > 0)
+            {
+                // additive: the leader keeps all its transmissions, the helper may add
+                // copies on its own resources
+                grant.helperId = m_helperId;
+                grant.helperOwnRes = true;
+                grant.helperAdditive = true;
+                grant.relayTxMax = static_cast<uint8_t>(m_additiveRelays);
+                auto itDl = m_deadlineOfHarq.find(grant.harqId);
+                if (itDl != m_deadlineOfHarq.end())
+                {
+                    grant.helperDeadline = itDl->second;
+                }
+            }
+            else if (m_chainedResActive && m_helperId != 0 && m_helperOwnResources)
             {
                 // the helper selects its own relay resources: nothing is handed over
                 grant.helperId = m_helperId;
@@ -1479,14 +1501,9 @@ NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
             }
             else if (m_chainedResActive && m_helperId != 0 && grant.slotAllocations.size() > 1) {
                 grant.helperId = m_helperId;
-                // Mark the LAST slot as usurped by helper
-                auto lastIt = grant.slotAllocations.end();
-                --lastIt;
-                grant.usurpedByHelper[*lastIt] = true;
-                
-                // If there are 3 slots, mark the SECOND as usurped if HelperTx=2?
-                // For Scenario D (Leader=1, Helper=2), Leader allocates 3 slots, Helper usurps 2.
-                // Let's usurp all except the first one!
+                // the slots after the leader's first LeaderTxCount ones are handed to
+                // the helper (LeaderTxCount = 1: all but the first; = 2, split arm:
+                // the 2nd reserved retransmission only, none if only 2 slots fit)
                 auto it = grant.slotAllocations.begin();
                 for (uint32_t i = 0; i < m_leaderTxCount && it != grant.slotAllocations.end(); ++i) {
                     ++it; // Skip slots that the leader should transmit

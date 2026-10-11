@@ -249,7 +249,13 @@ NackOnlyHarqController::OnPsschScheduling(SlPsschUeMacStatParameters p)
     m_pendingSeqs.clear();
 
     const size_t idx = m_txs.size();
-    if (tx.ndi == 1 || !m_curGen.count(tx.harqId))
+    // a helper's relayed copies all have ndi = 0: a copy carrying other packets
+    // than the last transmission of this HARQ id is a new TB (the leader's
+    // retransmissions carry the same packets, or none)
+    auto lastOfHarq = m_lastTxOfHarq.find(tx.harqId);
+    const bool otherPackets = !tx.seqs.empty() && lastOfHarq != m_lastTxOfHarq.end() &&
+                              m_txs[lastOfHarq->second].seqs != tx.seqs;
+    if (tx.ndi == 1 || !m_curGen.count(tx.harqId) || otherPackets)
     {
         m_curGen[tx.harqId] = static_cast<uint32_t>(idx);
         tx.gen = static_cast<uint32_t>(idx);

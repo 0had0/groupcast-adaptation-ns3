@@ -40,7 +40,9 @@
 
 #include "common/mcd/mcr_feedback_gate.h"
 
+#include "ns3/callback.h"
 #include "ns3/net-device-container.h"
+#include "ns3/nr-phy-mac-common.h"
 
 #include <cstdint>
 
@@ -72,5 +74,14 @@ namespace ns3
 void InstallMcrNackOnlyGate(const NetDeviceContainer& ueNetDev,
                             double mcrMeters,
                             bool dropAcks = true);
+
+// ---------------------------------------------------------------------------
+// Optional observer of the feedback the gate forwards to the PHY (the NACKs a
+// receiver actually sends on the PSFCH, and the ACKs when dropAcks=false):
+// called with the receiver's node id just before the PHY enqueues it. Not
+// called for suppressed feedback. Empty callback (default) = no observer.
+// Global for all gates of the simulation; does not change the behaviour.
+// ---------------------------------------------------------------------------
+void SetMcrNackOnlyGateObserver(Callback<void, uint32_t, const SlHarqInfo&> observer);
 
 } // namespace ns3

@@ -66,6 +66,7 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
     bool m_chainedResActive{false};
     uint32_t m_helperMinGap{2}; //!< min slots between the leader's last tx and the helper's first
     bool m_helperOwnResources{false}; //!< helper-picks-resource arm
+    uint32_t m_additiveRelays{0}; //!< additive arm: helper copies on its own resources (0 = off)
     SfnSf m_pendingDeadline;          //!< deadline of the TB being allocated
     std::map<uint8_t, SfnSf> m_deadlineOfHarq; //!< HARQ id -> packet deadline
     void DoRemoveNrSlLcConfigReq(uint8_t lcid, uint32_t dstL2Id) override;
