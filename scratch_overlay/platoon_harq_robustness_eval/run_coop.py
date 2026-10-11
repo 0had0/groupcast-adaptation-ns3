@@ -29,7 +29,16 @@ Resumable (a run is skipped when its <tag>_run.csv exists).
 
 Outputs: results/coop_rlc0/<arm>/<tag>_*  and  results/coop_rlc0/analysis/:
   coop_runs.csv, coop_members.csv, coop_summary.csv (mean and 95 % CI over seeds),
-  figc1_prr.png, figc2_tail_prr_pdb.png, figc3_collision_sensing.png
+  figc1_prr.png, figc2_tail_prr_pdb.png, figc3_collision_sensing.png,
+  coop_latency_cdf.csv, figc4_latency.png, figc5_reliability_latency.png
+
+Latency = application end-to-end delay of a packet at a member: generation at the
+leader -> first delivery to the member's application (queueing for the resource,
+HARQ retransmissions and relayed copies included), read from <tag>_pkt.csv.gz (the
+program writes it with 2 significant digits: 0.1 ms below 10 ms, 1 ms above).
+Percentiles are over delivered packets only; the reliability-latency curve
+P(delivered within t) counts every packet (a lost packet never arrives), so it
+ends at the PRR.
 """
 
 import argparse
@@ -59,6 +68,8 @@ SEEDS = list(range(1, 11))
 BIN = None
 HELPER = 4
 RLC_MS = 0.0
+PDB_MS = {"periodic1": 100.0, "periodic2": 10.0}  # the program's packet delay budgets
+LAT_STEP_MS = {"periodic1": 0.5, "periodic2": 0.1}  # grid of the reliability-latency curve
 
 
 def tag_of(sc, ivd, tr, nbg, seed):
@@ -117,6 +128,28 @@ def run_job(job):
 
 
 # ---------------------------------------------------------------------------
+def latency_of_run(pkt_gz, traffic, tail):
+    """Latency statistics of one run (all members and the tail member) and its
+    reliability-latency curves P(delivered within t) on the LAT_STEP_MS grid."""
+    import numpy as np
+    import pandas as pd
+
+    d = pd.read_csv(pkt_gz, usecols=["member", "rx", "delay_ms"])
+    grid = np.arange(0.0, 1.2 * PDB_MS[traffic] + 1e-9, LAT_STEP_MS[traffic])
+    stats, curves = {}, {}
+    for who, sel in (("", d), ("_tail", d[d.member == tail])):
+        lat = np.sort(sel.delay_ms[sel.rx == 1].to_numpy(dtype=float))
+        n = len(sel)
+        ok = len(lat) > 0
+        stats[f"lat{who}_mean_ms"] = lat.mean() if ok else np.nan
+        for q in (50, 95, 99):
+            stats[f"lat{who}_p{q}_ms"] = np.percentile(lat, q) if ok else np.nan
+        # tiny tolerance: delays are rounded when written
+        curves[who] = (np.searchsorted(lat, grid + 1e-6, side="right") / n if n
+                       else np.full(len(grid), np.nan))
+    return stats, grid, curves
+
+
 def analyze(a):
     import matplotlib
     matplotlib.use("Agg")
@@ -128,7 +161,7 @@ def analyze(a):
     root = Path(a.results)
     out = root / "analysis"
     out.mkdir(parents=True, exist_ok=True)
-    runs, mems = [], []
+    runs, mems, pkts = [], [], []
     for arm in ARMS:
         for f in sorted((root / arm).glob("*_run.csv")):
             r = pd.read_csv(f)
@@ -137,6 +170,7 @@ def analyze(a):
                 x["arm"] = arm
             runs.append(r)
             mems.append(m)
+            pkts.append(Path(str(f).replace("_run.csv", "_pkt.csv.gz")))
     if not runs:
         print("no results")
         return
@@ -157,6 +191,29 @@ def analyze(a):
     tl = (per[per.member == tail].groupby(keys + ["seed"])
           .agg(prr_tail=("prr", "mean"), prr_pdb_tail=("prr_pdb", "mean")).reset_index())
     R = runs.merge(agg, on=keys + ["seed"], how="left").merge(tl, on=keys + ["seed"], how="left")
+
+    # latency per run, from the per-packet files
+    lat_rows, cdf_rows = [], []
+    for i, pf in enumerate(pkts):
+        row = {k: runs.loc[i, k] for k in keys + ["seed"]}
+        if not pf.exists():
+            print(f"latency: {pf.name} missing, run skipped")
+            lat_rows.append(row)
+            continue
+        st, grid, curves = latency_of_run(pf, row["traffic"], int(tail))
+        lat_rows.append({**row, **st})
+        for who, c in curves.items():
+            cdf_rows.append(pd.DataFrame({**row, "who": "tail" if who else "all",
+                                          "t_ms": grid, "p_within": c}))
+    L = pd.DataFrame(lat_rows)
+    lat_metrics = [c for c in L.columns if c.startswith("lat")]
+    R = R.merge(L, on=keys + ["seed"], how="left")
+    # reliability-latency curves: mean over seeds
+    C = (pd.concat(cdf_rows, ignore_index=True)
+         .groupby(keys + ["who", "t_ms"]).p_within.agg(["mean", "count"]).reset_index()
+         .rename(columns={"mean": "p_within", "count": "n_seeds"}))
+    C.to_csv(out / "coop_latency_cdf.csv", index=False)
+
     cats = ["neither", "helper_only", "leader_only", "both"]
     for role in ("l", "h"):
         tot = sum(R[f"{role}coll_{c}"] for c in cats)
@@ -166,7 +223,7 @@ def analyze(a):
                 "collision_loss_rate", "channel_loss_rate", "cbr", "tx_per_pkt",
                 "leader_tx_coll_rate", "helper_tx", "helper_tx_coll_rate", "coop_sent",
                 "coop_no_nack", "coop_no_resource", "helper_recovered"]
-               + [f"{r}coll_{c}_share" for r in ("l", "h") for c in cats])
+               + [f"{r}coll_{c}_share" for r in ("l", "h") for c in cats] + lat_metrics)
     rows = []
     for k, g in R.groupby(keys):
         row = dict(zip(keys, k))
@@ -188,24 +245,27 @@ def analyze(a):
                 ("highway", 45): "Highway, N = 45\n(collisions)",
                 ("highway", 60): "Highway, N = 60\n(collisions)"}
 
+    def bar_panel(ax, metric, tr):
+        w = 0.26
+        for k, arm in enumerate(ARMS):
+            ys, es = [], []
+            for sc, nbg in cells:
+                d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
+                ys.append(d[metric].iloc[0] if len(d) else np.nan)
+                es.append(d[metric + "_ci"].iloc[0] if len(d) else 0)
+            x = np.arange(len(cells)) + (k - 1) * w
+            ax.bar(x, ys, w * 0.92, yerr=es, color=colors[arm], hatch=hatches[arm],
+                   edgecolor="white", linewidth=0.5, capsize=2, label=ARMS[arm][0])
+        ax.set_xticks(np.arange(len(cells)))
+        ax.set_xticklabels([cell_lab[c] for c in cells], fontsize=8)
+
     def bars(metric, ylabel, fname, title):
         trs = [t for t in TRAFFIC if t in set(S.traffic)]
         fig, axes = plt.subplots(1, len(trs), figsize=(5.2 * len(trs), 3.8), sharey=True,
                                  squeeze=False)
-        w = 0.26
         for j, tr in enumerate(trs):
             ax = axes[0, j]
-            for k, arm in enumerate(ARMS):
-                ys, es = [], []
-                for sc, nbg in cells:
-                    d = S[(S.arm == arm) & (S.scenario == sc) & (S.nbg == nbg) & (S.traffic == tr)]
-                    ys.append(d[metric].iloc[0] if len(d) else np.nan)
-                    es.append(d[metric + "_ci"].iloc[0] if len(d) else 0)
-                x = np.arange(len(cells)) + (k - 1) * w
-                ax.bar(x, ys, w * 0.92, yerr=es, color=colors[arm], hatch=hatches[arm],
-                       edgecolor="white", linewidth=0.5, capsize=2, label=ARMS[arm][0])
-            ax.set_xticks(np.arange(len(cells)))
-            ax.set_xticklabels([cell_lab[c] for c in cells], fontsize=8)
+            bar_panel(ax, metric, tr)
             ax.set_title(tr, color=an.INK, fontsize=10)
             ax.set_ylim(0, 1.02)
             if j == 0:
@@ -265,9 +325,81 @@ def analyze(a):
     fig.savefig(out / "figc3_collision_sensing.png")
     plt.close(fig)
 
+    # latency of delivered packets: mean (all members) and 95th percentile (tail
+    # member), one column per traffic type (own y scale: the PDBs differ 10x)
+    rows_l = [("lat_mean_ms", "mean latency (ms),\nall members"),
+              ("lat_tail_p95_ms", f"95th pct latency (ms),\nmember {tail}")]
+    fig, axes = plt.subplots(len(rows_l), len(trs), figsize=(5.2 * len(trs), 3.4 * len(rows_l)),
+                             squeeze=False)
+    for i, (metric, ylabel) in enumerate(rows_l):
+        for j, tr in enumerate(trs):
+            ax = axes[i, j]
+            bar_panel(ax, metric, tr)
+            top = max(1.0, 1.25 * np.nanmax(S[S.traffic == tr][metric]))
+            if tr == "periodic2":
+                top = max(top, 1.15 * PDB_MS[tr])
+            ax.set_ylim(0, top)
+            if PDB_MS[tr] <= top:
+                ax.axhline(PDB_MS[tr], color=an.INK2, ls="--", lw=0.8)
+                ax.text(ax.get_xlim()[1], PDB_MS[tr], "PDB ", va="bottom", ha="right",
+                        fontsize=7, color=an.INK2)
+            if i == 0:
+                ax.set_title(tr, color=an.INK, fontsize=10)
+            if j == 0:
+                ax.set_ylabel(ylabel)
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle("Latency of delivered packets (generation at the leader -> delivery), "
+                 "IVD 30 m (95 % CI over seeds)", color=an.INK, fontsize=11, x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.95))
+    fig.savefig(out / "figc4_latency.png")
+    plt.close(fig)
+
+    # reliability-latency: P(packet delivered within t), tail member (solid) and
+    # mean over members (dashed); a lost packet never arrives, so the curve
+    # ends at the PRR
+    fig, axes = plt.subplots(len(trs), len(cells), figsize=(4.6 * len(cells), 3.4 * len(trs)),
+                             sharey=True, squeeze=False)
+    for i, tr in enumerate(trs):
+        ct = C[C.traffic == tr]
+        # x range: up to where every curve has (nearly) reached its plateau
+        xmax = PDB_MS[tr] * 1.2
+        plateau = ct.groupby(keys + ["who"]).p_within.transform("max")
+        reached = ct[ct.p_within >= plateau - 1e-3].groupby(keys + ["who"]).t_ms.min()
+        if len(reached):
+            xmax = min(xmax, max(PDB_MS[tr] * 0.3, 1.15 * reached.max()))
+        for j, (sc, nbg) in enumerate(cells):
+            ax = axes[i, j]
+            for arm in ARMS:
+                for who, ls, lw in (("tail", "-", 1.6), ("all", "--", 1.0)):
+                    d = ct[(ct.arm == arm) & (ct.scenario == sc) & (ct.nbg == nbg)
+                           & (ct.who == who)]
+                    if len(d):
+                        ax.plot(d.t_ms, d.p_within, ls=ls, lw=lw, color=colors[arm],
+                                label=f"{ARMS[arm][0]}, {'member ' + tail if who == 'tail' else 'all members'}")
+            if PDB_MS[tr] <= xmax:
+                ax.axvline(PDB_MS[tr], color=an.INK2, ls=":", lw=0.8)
+            ax.set_xlim(0, xmax)
+            ax.set_ylim(0, 1.0)
+            ax.grid(color=an.GRID, lw=0.5)
+            if i == 0:
+                ax.set_title(cell_lab[(sc, nbg)].replace("\n", " "), color=an.INK, fontsize=10)
+            if j == 0:
+                ax.set_ylabel(f"{tr}\nP(delivered within t)")
+            if i == len(trs) - 1:
+                ax.set_xlabel("latency t (ms)")
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle("Reliability vs latency (mean over seeds; dotted line = PDB)",
+                 color=an.INK, fontsize=11, x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0.09, 1, 0.95))
+    fig.savefig(out / "figc5_reliability_latency.png")
+    plt.close(fig)
+
     cols = keys[:1] + ["scenario", "traffic", "nbg", "n_seeds", "prr_mean", "prr_mean_ci",
                        "prr_tail", "prr_pdb_tail", "tx_per_pkt", "helper_tx", "coop_sent",
-                       "coop_no_resource", "helper_recovered"]
+                       "coop_no_resource", "helper_recovered", "lat_mean_ms", "lat_p95_ms",
+                       "lat_tail_mean_ms", "lat_tail_p95_ms"]
     with pd.option_context("display.width", 220, "display.max_rows", 200,
                            "display.float_format", "{:.3f}".format):
         print(S[cols].to_string(index=False))
