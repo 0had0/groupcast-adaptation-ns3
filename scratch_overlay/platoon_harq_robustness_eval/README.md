@@ -378,6 +378,18 @@ the TB (`leaderRes`); a member that misses a TB's first transmission may combine
 history of the same HARQ id (stock behaviour, rare); RNTIs exist only once the run starts
 (the helper is configured at ~2 s, before the KPI window).
 
+Comparison campaign (`run_coop.py`): arms `none` / `leaderRes` / `ownRes` x {roundabout
+IVD 30 N = 0 (blockage), highway IVD 30 N = 45, 60 (collisions)} x {periodic1, periodic2} x
+seeds 1-10, helper = member 4, t-Reordering 0; every run re-checked (mode, helper,
+t-Reordering, no explicit ACK, relay_without_nack = relay_without_decode = 0). Outputs in
+`results/coop_rlc0/` (`analysis/`: `coop_summary.csv`, `figc1_prr.png`, `figc1b_tail_prr.png`,
+`figc2_tail_prr_pdb.png`, `figc3_collision_sensing.png`).
+
+```bash
+python3 run_coop.py --jobs 7            # 180 runs
+python3 run_coop.py --analyze-only
+```
+
 ```bash
 ./ns3 build platoon_harq_robustness_eval
 build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-<profile> \
