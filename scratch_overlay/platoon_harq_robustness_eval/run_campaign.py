@@ -14,6 +14,12 @@ traffic types, so traffic types are compared on identical mobility.
 Resumable: a run is skipped when its <tag>_run.csv exists. Jobs are started
 largest first (nbg, then highway) to pack the pool well.
 
+RLC t-Reordering: NR RLC UM has none, but 5G-LENA's sidelink reuses LTE RLC UM
+(100 ms t-Reordering), which holds every packet behind a lost one and wrecks
+prr_pdb / delay (PRR is unaffected). Runs use --rlc-reordering-ms (default 0)
+and go to results/campaign_rlc<ms>/; results/campaign/ holds the original
+100 ms runs. Every finished run is checked: its rlc_reordering_ms must match.
+
   python3 run_campaign.py --seeds 1 2 3 --jobs 7
   python3 run_campaign.py --seeds 1 --jobs 7 --dry-run
 """
@@ -33,6 +39,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 BIN_DIR = REPO / "ns-3-dev/build/scratch/platoon_harq_robustness_eval"
 BIN = None   # resolved in main(): --bin, else the build-profile-specific binary in BIN_DIR
+RLC_REORDERING_MS = 0.0   # set in main() from --rlc-reordering-ms
 NET = HERE / "sumo/roundabout/roundabout.net.xml"
 
 SCENARIOS = ["highway", "roundabout"]
@@ -62,6 +69,16 @@ def make_trace(args):
     return str(out), "ok"
 
 
+def rlc_reordering_of(run_csv):
+    """t-Reordering (ms) a run used; runs from before the column existed used
+    the LTE default of 100 ms."""
+    import csv
+    with open(run_csv) as f:
+        r = next(csv.DictReader(f))
+    v = r.get("rlc_reordering_ms")
+    return 100.0 if v in (None, "") else float(v)
+
+
 def run_job(job):
     try:
         return _run_job(job)
@@ -77,7 +94,8 @@ def _run_job(job):
     if (rdir / f"{tag}_run.csv").exists():
         return tag, "cached", 0.0
     cmd = [str(BIN), f"--scenario={sc}", f"--mobility={trace_path(tdir, sc, ivd, nbg, seed)}",
-           f"--traffic={tr}", f"--seed={seed}", f"--run=1", f"--out={out}"]
+           f"--traffic={tr}", f"--seed={seed}", f"--run=1", f"--out={out}",
+           f"--ns3::LteRlcUm::ReorderingTimer={RLC_REORDERING_MS:g}ms"]
     if sc == "roundabout":
         cmd.append(f"--sumoNet={NET}")
     env = {k: v for k, v in os.environ.items() if not k.startswith("MAGIC_")}
@@ -93,6 +111,9 @@ def _run_job(job):
             with open(f, "rb") as fi, gzip.open(str(f) + ".gz", "wb") as fo:
                 shutil.copyfileobj(fi, fo)
             f.unlink()
+    got = rlc_reordering_of(rdir / f"{tag}_run.csv")
+    if abs(got - RLC_REORDERING_MS) > 1e-9:
+        return tag, f"FLAG CHECK FAILED rlc_reordering_ms={got:g}", dt
     return tag, "ok", dt
 
 
@@ -105,12 +126,18 @@ def main():
     ap.add_argument("--traffic", nargs="+", default=TRAFFIC)
     ap.add_argument("--nbg", type=int, nargs="+", default=NBG)
     ap.add_argument("--traces", default=str(HERE / "traces"))
-    ap.add_argument("--results", default=str(HERE / "results/campaign"))
+    ap.add_argument("--rlc-reordering-ms", type=float, default=0.0,
+                    help="RLC UM t-Reordering (ms); 0 = NR behaviour, 100 = LTE/ns-3 default")
+    ap.add_argument("--results", default=None,
+                    help="default: results/campaign_rlc<ms> (results/campaign = old 100 ms runs)")
     ap.add_argument("--bin", default=None, help="ns-3 binary (default: auto-detect in build/)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    global BIN
+    global BIN, RLC_REORDERING_MS
+    RLC_REORDERING_MS = a.rlc_reordering_ms
+    if a.results is None:
+        a.results = str(HERE / f"results/campaign_rlc{a.rlc_reordering_ms:g}")
     if a.bin:
         BIN = Path(a.bin)
     else:
@@ -120,6 +147,7 @@ def main():
             sys.exit(f"no binary in {BIN_DIR}; build it first or pass --bin")
         BIN = cands[0]
     print(f"binary: {BIN}")
+    print(f"RLC t-Reordering: {RLC_REORDERING_MS:g} ms, results: {a.results}")
 
     tdir, rdir = Path(a.traces), Path(a.results)
     tdir.mkdir(parents=True, exist_ok=True)

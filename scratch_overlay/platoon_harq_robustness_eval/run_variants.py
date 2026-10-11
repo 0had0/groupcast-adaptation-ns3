@@ -5,7 +5,7 @@ baseline (HANDOFF.md section 11, next steps 1-3), one factor at a time:
 
   variant    what changes w.r.t. the baseline              program flags
   ---------  --------------------------------------------  ---------------------------------
-  mcs14      baseline: MCS 14, shared TDD pool (9 SL slots  (none; reused from results/campaign)
+  mcs14      baseline: MCS 14, shared TDD pool (9 SL slots  (none; reused from --baseline-dir)
              per 20), HARQ Option 1 (NACK-only), 2 retx
   mcs5       MCS 5                                          --mcs=5
   mcs9       MCS 9                                          --mcs=9
@@ -23,8 +23,17 @@ Notes on the flags (checked with pilots, see README "Variants"):
   Without PSFCH the scheduler takes SelectResourcesForBlindRetransmissions and
   reserves all sl-MaxTxTransNumPSSCH = 3 resources.
 - After every run the run CSV is checked against the variant: MCS decoded by
-  the members, option1_tx, psfch_period and the SL slot fraction. A mismatch is
-  logged as "FLAG CHECK FAILED".
+  the members, option1_tx, psfch_period, the SL slot fraction and the RLC
+  t-Reordering. A mismatch is logged as "FLAG CHECK FAILED".
+- RLC t-Reordering (--rlc-reordering-ms, default 0): NR RLC UM has none, but
+  5G-LENA's sidelink reuses LTE RLC UM (100 ms), which holds every packet behind
+  a lost one and wrecks prr_pdb / delay; PRR is unaffected. Results go to
+  results/variants_rlc<ms>/ with the baseline from results/campaign_rlc<ms>/.
+  Baseline cells there with another t-Reordering are not reused (mcs14 runs
+  them here instead). The original 100 ms results are results/variants/ and
+  results/campaign/:
+    python3 run_variants.py --analyze-only --rlc-reordering-ms 100 \
+        --results results/variants --baseline-dir results/campaign
 
 The mobility traces are the campaign's (same trace for every variant), so the
 variants are compared on identical mobility and background seats.
@@ -36,7 +45,7 @@ Resumable: a run is skipped when its <tag>_run.csv exists.
   python3 run_variants.py --dry-run
   python3 run_variants.py --analyze-only
 
-Outputs: results/variants/<variant>/<tag>_*  and  results/variants/analysis/
+Outputs: results/variants_rlc<ms>/<variant>/<tag>_*  and  .../analysis/
   variants_runs.csv, variants_members.csv, variants_summary.csv (mean and 95 %
   CI over seeds), figv1_prr_vs_density.png, figv2_tail_prr_vs_density.png,
   figv3_tx_per_pkt.png, figv4_offered_load.png
@@ -80,6 +89,17 @@ VARIANTS = {
 BASELINE = "mcs14"
 BIN = None
 MAX_TIME = 0.0   # > 0: truncated runs (smoke tests only)
+RLC_REORDERING_MS = 0.0   # set in main() from --rlc-reordering-ms
+
+
+def rlc_matches(run_csv):
+    return abs(rc.rlc_reordering_of(run_csv) - RLC_REORDERING_MS) < 1e-9
+
+
+def baseline_ok(base, tag):
+    """A campaign run can stand in for an mcs14 cell only with the same t-Reordering."""
+    f = Path(base) / f"{tag}_run.csv"
+    return f.exists() and rlc_matches(f)
 
 
 def tag_of(sc, ivd, tr, nbg, seed):
@@ -105,6 +125,8 @@ def check_flags(run_csv, variant):
         bad.append(f"psfch_period={r['psfch_period']}")
     if "sl_slot_frac" in r and abs(float(r["sl_slot_frac"]) - exp["sl_slot_frac"]) > 1e-6:
         bad.append(f"sl_slot_frac={r['sl_slot_frac']}")
+    if not rlc_matches(run_csv):
+        bad.append(f"rlc_reordering_ms={rc.rlc_reordering_of(run_csv):g}")
     if int(float(r["explicit_ack_rx"])) != 0:   # Option-1 receivers never ACK
         bad.append(f"explicit_ack_rx={r['explicit_ack_rx']}")
     return bad
@@ -126,6 +148,7 @@ def _run_job(job):
     cmd = [str(BIN), f"--scenario={sc}", f"--mobility={rc.trace_path(tdir, sc, ivd, nbg, seed)}",
            f"--traffic={tr}", f"--seed={seed}", "--run=1", f"--out={vdir / tag}"]
     cmd += VARIANTS[variant][1]
+    cmd.append(f"--ns3::LteRlcUm::ReorderingTimer={RLC_REORDERING_MS:g}ms")
     if MAX_TIME > 0:
         cmd.append(f"--maxTime={MAX_TIME}")
     if sc == "roundabout":
@@ -167,6 +190,11 @@ def collect(a):
             if variant == BASELINE and not (d / f"{tag}_run.csv").exists():
                 d = Path(a.baseline_dir)
             if not (d / f"{tag}_run.csv").exists():
+                continue
+            if not rlc_matches(d / f"{tag}_run.csv"):
+                print(f"skipped {d / tag}: rlc_reordering_ms="
+                      f"{rc.rlc_reordering_of(d / f'{tag}_run.csv'):g}, "
+                      f"expected {RLC_REORDERING_MS:g}")
                 continue
             r = pd.read_csv(d / f"{tag}_run.csv")
             m = pd.read_csv(d / f"{tag}_member.csv")
@@ -302,10 +330,9 @@ def analyze(a):
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--variants", nargs="+", default=[v for v in VARIANTS if v != BASELINE],
-                    choices=list(VARIANTS),
-                    help="variants to run (the baseline is reused from --baseline-dir; "
-                         "missing baseline cells are run when mcs14 is listed)")
+    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=list(VARIANTS),
+                    help="variants to run; mcs14 only runs the cells that --baseline-dir "
+                         "lacks (or has with another t-Reordering)")
     ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS)
     ap.add_argument("--jobs", type=int, default=7)
     ap.add_argument("--scenarios", nargs="+", default=SCENARIOS)
@@ -313,8 +340,10 @@ def main():
     ap.add_argument("--traffic", nargs="+", default=TRAFFIC)
     ap.add_argument("--nbg", type=int, nargs="+", default=NBG)
     ap.add_argument("--traces", default=str(HERE / "traces"))
-    ap.add_argument("--results", default=str(HERE / "results/variants"))
-    ap.add_argument("--baseline-dir", default=str(HERE / "results/campaign"))
+    ap.add_argument("--rlc-reordering-ms", type=float, default=0.0,
+                    help="RLC UM t-Reordering (ms); 0 = NR behaviour, 100 = LTE/ns-3 default")
+    ap.add_argument("--results", default=None, help="default: results/variants_rlc<ms>")
+    ap.add_argument("--baseline-dir", default=None, help="default: results/campaign_rlc<ms>")
     ap.add_argument("--bin", default=None, help="ns-3 binary (default: newest in build/)")
     ap.add_argument("--max-time", type=float, default=0.0,
                     help="truncate every run at this time (s); smoke tests only, use a "
@@ -322,6 +351,14 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--analyze-only", action="store_true")
     a = ap.parse_args()
+    global RLC_REORDERING_MS
+    RLC_REORDERING_MS = a.rlc_reordering_ms
+    ms = f"{a.rlc_reordering_ms:g}"
+    if a.results is None:
+        a.results = str(HERE / f"results/variants_rlc{ms}")
+    if a.baseline_dir is None:
+        a.baseline_dir = str(HERE / f"results/campaign_rlc{ms}")
+    print(f"RLC t-Reordering: {ms} ms, results: {a.results}, baseline: {a.baseline_dir}")
 
     if a.analyze_only:
         analyze(a)
@@ -370,7 +407,7 @@ def main():
     for variant, sc, ivd, tr, nbg, seed in itertools.product(a.variants, a.scenarios, a.ivds,
                                                              a.traffic, a.nbg, a.seeds):
         tag = tag_of(sc, ivd, tr, nbg, seed)
-        if variant == BASELINE and (base / f"{tag}_run.csv").exists():
+        if variant == BASELINE and baseline_ok(base, tag):
             continue
         vdir = root / variant
         vdir.mkdir(exist_ok=True)

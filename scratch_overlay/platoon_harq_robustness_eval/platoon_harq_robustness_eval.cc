@@ -387,6 +387,13 @@ main(int argc, char* argv[])
     std::string out = "platoon";
     bool writePkt = true;
 
+    // NR RLC UM (TS 38.322) has no t-Reordering: complete SDUs go up as soon
+    // as they are received. 5G-LENA's sidelink reuses LTE RLC UM, whose 100 ms
+    // t-Reordering holds every SDU behind a lost PDU (tail member, periodic2:
+    // median delay 150 ms, prr_pdb ~ 0). 0 ms disables it; PRR is unchanged.
+    // Before cmd.Parse so --ns3::LteRlcUm::ReorderingTimer=... still overrides.
+    Config::SetDefault("ns3::LteRlcUm::ReorderingTimer", TimeValue(MilliSeconds(0)));
+
     CommandLine cmd(__FILE__);
     cmd.AddValue("scenario", "highway | roundabout", scenario);
     cmd.AddValue("mobility", "mobility trace (gen_mobility.py output)", mobility);
@@ -428,6 +435,17 @@ main(int argc, char* argv[])
     RngSeedManager::SetSeed(seed);
     RngSeedManager::SetRun(run);
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(999999999));
+    double rlcReorderingMs = -1.0; // the value in effect after the command line
+    {
+        TypeId::AttributeInformation info;
+        if (TypeId::LookupByName("ns3::LteRlcUm").LookupAttributeByName("ReorderingTimer", &info))
+        {
+            if (auto tv = DynamicCast<const TimeValue>(info.initialValue))
+            {
+                rlcReorderingMs = tv->Get().GetSeconds() * 1e3;
+            }
+        }
+    }
     Config::SetDefault("ns3::SpectrumChannel::MaxLossDb", DoubleValue(maxLossDb));
 
     // -----------------------------------------------------------------------
@@ -605,7 +623,8 @@ main(int argc, char* argv[])
               << tEnd - tailGuard << "] mu=" << mu << " BW=" << channelBwMHz
               << "MHz subch=" << subchPrbs << "PRB" << " mcs=" << mcs << " maxNumTx=" << maxNumTx
               << " psfch=" << psfchPeriod << " option1Tx=" << option1Tx
-              << " dedicatedCarrier=" << dedicatedCarrier << "\n";
+              << " dedicatedCarrier=" << dedicatedCarrier
+              << " rlcReorderingMs=" << rlcReorderingMs << "\n";
 
     // Local contrib/nr builds may carry NS_LOG_UNCOND debug prints in per-slot
     // paths; with badbit set every std::clog insertion is a no-op, so they
@@ -1015,7 +1034,7 @@ main(int argc, char* argv[])
               "pkt_any_coll_rate,nack_rx,implicit_ack,nack_decisions,stale_decisions,"
               "explicit_ack_rx,cbr,cbr_leader,prr_mean,prr_min,collision_loss_rate,"
               "channel_loss_rate,notx_rate,other_loss_rate,phy_unmatched,slot_misaligned,wall_s,"
-              "option1_tx,sl_slot_frac,mcs_rx_min,mcs_rx_max,cbr_occupied\n";
+              "option1_tx,sl_slot_frac,mcs_rx_min,mcs_rx_max,cbr_occupied,rlc_reordering_ms\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -1031,7 +1050,8 @@ main(int argc, char* argv[])
            << g.phyUnmatched
            << ',' << ctl.nSlotMisaligned << ',' << std::fixed << std::setprecision(1) << wall << ','
            << option1Tx << ',' << std::defaultfloat << std::setprecision(4) << slSlotFrac << ',' << g.mcsRxMin << ','
-           << g.mcsRxMax << ',' << std::setprecision(6) << cbrOccupied << '\n';
+           << g.mcsRxMax << ',' << std::setprecision(6) << cbrOccupied << ','
+           << rlcReorderingMs << '\n';
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx

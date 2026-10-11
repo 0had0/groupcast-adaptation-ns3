@@ -106,7 +106,40 @@ byte tag, read back from every MAC PDU handed to the PHY.
 
 Also reported: leader resource-collision rate (share of its transmissions that
 overlap another PSSCH), CBR, transmissions per packet, NACK statistics, mean
-SINR, LOS/NLOSv/NLOS share of the leader->member links, PRR within the PDB.
+SINR, LOS/NLOSv/NLOS share of the leader->member links, PRR within the PDB
+(`prr_pdb`) and mean delay. Run CSV columns added with the variants:
+`option1_tx`, `sl_slot_frac`, `mcs_rx_min/max` (MCS decoded by the members),
+`cbr_occupied` (each subchannel-slot once; `cbr` counts overlaps twice and is an
+offered load that can exceed 1) and `rlc_reordering_ms`.
+
+### RLC t-Reordering: delay KPIs of the original runs are invalid
+
+NR RLC UM (TS 38.322) has no t-Reordering: a complete SDU goes up as soon as it is
+received. 5G-LENA's sidelink reuses **LTE RLC UM** (`ns3::LteRlcUm`), whose
+in-order delivery and 100 ms `ReorderingTimer` hold every SDU behind a lost PDU.
+Members that lose packets often get up to ~100 ms of artificial delay: tail
+member, periodic2, highway IVD 30, N = 0: 92 % of its delivered packets arrive
+> 100 ms late (median 150 ms), member 1 within ~5 ms.
+
+Pilot (same trace, 20 s), t-Reordering 100 ms -> 0 ms:
+
+| traffic, MCS | PRR | tail PRR | tail `prr_pdb` | tail mean delay |
+|---|---|---|---|---|
+| periodic1, 14 | 0.963 (same) | 0.853 (same) | 0.73 -> 0.85 | 22.5 -> 7.4 ms |
+| periodic1, 5 | 0.954 (same) | 0.822 (same) | 0.66 -> 0.82 | 26.5 -> 5.8 ms |
+| periodic2, 14 | 0.874 (same) | 0.466 (same) | 0.00 -> 0.47 | 149 -> 6.8 ms |
+| periodic2, 5 | 0.767 (same) | 0.246 (same) | 0.00 -> 0.00 | 146 -> 15.3 ms |
+
+* **PRR is identical**, so every PRR / loss result in this README stands.
+* **`prr_pdb` and delays of the original runs (`results/campaign`,
+  `results/variants`) are invalid.** Without the artifact `prr_pdb` = PRR except
+  periodic2 at MCS 5/9, whose ~15 ms delay is real (2-3 TBs per packet).
+* The program now sets `ReorderingTimer` = 0 by default (before the command line,
+  so `--ns3::LteRlcUm::ReorderingTimer=100ms` reproduces the old behaviour) and
+  writes `rlc_reordering_ms` to the run CSV. The runners pass
+  `--rlc-reordering-ms` (default 0), check it after every run and write to
+  `results/campaign_rlc0/` and `results/variants_rlc0/`; `analyze.py` refuses to
+  mix values. Old CSVs without the column count as 100 ms.
 
 ## Files
 
@@ -117,14 +150,15 @@ SINR, LOS/NLOSv/NLOS share of the leader->member links, PRR within the PDB.
 | `nack_only_harq.{h,cc}` | Option-1 TX decision + packet->TB tagging |
 | `sumo_buildings.{h,cc}` | SUMO buildings -> ns3::BuildingList (from roundabout_rsu_eval) |
 | `sumo/highway`, `sumo/roundabout` | copied scenario assets |
-| `run_campaign.py` | resumable parallel sweep |
+| `run_campaign.py` | resumable parallel sweep (`results/campaign_rlc<ms>/`) |
 | `analyze.py` | aggregation + figures |
+| `run_variants.py` | MCS / dedicated carrier / blind sweep + its analysis (`results/variants_rlc<ms>/`) |
 
 ```bash
 cd ns-3-dev/cmake-cache && ninja scratch_platoon_harq_robustness_eval_platoon_harq_robustness_eval
 cd ../../scratch_overlay/platoon_harq_robustness_eval
-python3 run_campaign.py --seeds 1 2 3 --jobs 7
-python3 analyze.py
+python3 run_campaign.py --seeds 1 2 3 --jobs 7          # -> results/campaign_rlc0
+python3 analyze.py --results results/campaign_rlc0 --out results/analysis_rlc0
 ```
 
 Single run:
@@ -137,6 +171,9 @@ python3 gen_mobility.py --scenario roundabout --ivd 15 --nbg 30 --seed 1 --out t
 ```
 
 ## Results (3 seeds, 270 runs; `results/analysis/`)
+
+Original runs (`results/campaign`, RLC t-Reordering 100 ms): PRR and loss
+figures below are valid; their `prr_pdb` / delays are not (see "RLC t-Reordering").
 
 Reproduced on a second machine (stock-patch NR build, different SUMO
 version): mean |PRR difference| over the 81 cells 0.005, max 0.024, never
@@ -187,7 +224,8 @@ outside the 95 % CIs.
 
 Reduced one-factor-at-a-time sweep around the baseline (HANDOFF.md §11, steps 1-3):
 IVD 30 m × N ∈ {0, 45, 60} × both scenarios × the three traffic types × 3 seeds, same
-mobility traces as the campaign. The MCS-14 baseline is reused from `results/campaign`.
+mobility traces as the campaign. The MCS-14 baseline is reused from the campaign
+directory of the same RLC t-Reordering (`mcs14` runs the cells it lacks).
 
 | variant | flags |
 |---|---|
@@ -204,30 +242,92 @@ Flag checks (pilots, highway IVD 30 N = 0):
   resources: 2-3 transmissions per TB, periodic2 never gets a third. With `--psfchPeriod=0`
   CTTC uses `SelectResourcesForBlindRetransmissions` and reserves all 3: tx per TB = 3.00
   (periodic1/2), 0 NACKs.
-- `run_variants.py` re-checks MCS, option1_tx, psfch_period, slot fraction and explicit ACKs
-  after every run and logs `FLAG CHECK FAILED` on a mismatch.
+- `run_variants.py` re-checks MCS, option1_tx, psfch_period, slot fraction, RLC t-Reordering
+  and explicit ACKs after every run and logs `FLAG CHECK FAILED` on a mismatch.
 
 Caveats found on the way:
 - `cbr` sums all PSSCHs, so collided transmissions count twice: it is the offered load and can
   exceed 1 (MCS 5, periodic2, N = 45: 1.11). New column `cbr_occupied` counts each
   subchannel-slot once (0.69 in that cell). The campaign CSVs only have `cbr`.
 - periodic2 at MCS 5/9 needs 2-3 TBs per packet; segments pipeline with the next packet and
-  the delay settles at ≈ 15 ms > 10 ms PDB, so `prr_pdb` ≈ 0 although `prr` is not.
+  the delay settles at ≈ 15 ms > 10 ms PDB, so `prr_pdb` ≈ 0 although `prr` is not. This
+  delay is real; the much larger delays in the original runs are the RLC artifact above.
+- **Known issue (open):** MCS 5, roundabout, periodic2 can hit a truncated application
+  packet (`SeqTsSizeHeader::Deserialize` reads past the buffer). The debug build aborts
+  (laptop: N = 0 seed 3, deterministic, also with t-Reordering 0); the optimized build
+  hung once (server: N = 45 seed 3, killed). Each machine has that one cell at 2 seeds.
+  Runs that completed in the debug build cannot have hit it, and the server agrees with
+  them, so the results are not contaminated; fix before running more MCS 5/9 cells.
+
+### Variant results (server = reference, original runs with t-Reordering 100 ms)
+
+PRR is valid (unaffected by t-Reordering); `prr_pdb` is not reported here. IVD 30 m,
+3 seeds (2 for MCS 5 / roundabout / periodic2 / N = 45). Values highway / roundabout.
+
+**PRR, mean of the 8 members**
+
+| traffic | N | MCS 14 (base) | MCS 9 | MCS 5 | dedicated | blind |
+|---|---|---|---|---|---|---|
+| periodic1 | 0 | 0.97 / 0.86 | 0.96 / 0.87 | 0.96 / 0.86 | 0.97 / 0.86 | 0.97 / 0.86 |
+| periodic1 | 45 | 0.90 / 0.83 | 0.86 / 0.81 | 0.78 / 0.77 | 0.94 / 0.84 | 0.90 / 0.84 |
+| periodic1 | 60 | 0.89 / 0.80 | 0.83 / 0.77 | 0.73 / 0.73 | 0.93 / 0.83 | 0.90 / 0.81 |
+| periodic2 | 0 | 0.88 / 0.75 | 0.70 / 0.64 | 0.77 / 0.71 | 0.91 / 0.76 | 0.91 / 0.78 |
+| periodic2 | 45 | 0.80 / 0.71 | 0.37 / 0.44 | 0.36 / 0.44 | 0.88 / 0.76 | 0.84 / 0.75 |
+| periodic2 | 60 | 0.74 / 0.69 | 0.30 / 0.39 | 0.29 / 0.40 | 0.86 / 0.75 | 0.80 / 0.72 |
+| aperiodic1 | 0 | 0.74 / 0.67 | 0.78 / 0.68 | 0.79 / 0.74 | 0.74 / 0.66 | 0.74 / 0.66 |
+| aperiodic1 | 45 | 0.59 / 0.58 | 0.47 / 0.53 | 0.41 / 0.48 | 0.69 / 0.64 | 0.60 / 0.59 |
+| aperiodic1 | 60 | 0.55 / 0.55 | 0.38 / 0.45 | 0.30 / 0.43 | 0.66 / 0.61 | 0.54 / 0.54 |
+
+**PRR, tail member (member 8)** (95 % CIs ±0.1-0.5 with 3 seeds)
+
+| traffic | N | MCS 14 (base) | MCS 9 | MCS 5 | dedicated | blind |
+|---|---|---|---|---|---|---|
+| periodic1 | 0 | 0.86 / 0.58 | 0.87 / 0.64 | 0.85 / 0.62 | 0.88 / 0.61 | 0.89 / 0.60 |
+| periodic1 | 45 | 0.86 / 0.61 | 0.80 / 0.60 | 0.67 / 0.57 | 0.91 / 0.59 | 0.86 / 0.62 |
+| periodic1 | 60 | 0.85 / 0.56 | 0.75 / 0.53 | 0.52 / 0.49 | 0.87 / 0.60 | 0.85 / 0.58 |
+| periodic2 | 0 | 0.59 / 0.41 | 0.28 / 0.26 | 0.39 / 0.37 | 0.64 / 0.46 | 0.66 / 0.48 |
+| periodic2 | 45 | 0.54 / 0.44 | 0.14 / 0.19 | 0.13 / 0.22 | 0.65 / 0.51 | 0.60 / 0.49 |
+| periodic2 | 60 | 0.51 / 0.46 | 0.09 / 0.19 | 0.08 / 0.21 | 0.68 / 0.51 | 0.61 / 0.48 |
+| aperiodic1 | 0 | 0.37 / 0.31 | 0.43 / 0.33 | 0.43 / 0.41 | 0.37 / 0.32 | 0.37 / 0.31 |
+| aperiodic1 | 45 | 0.40 / 0.31 | 0.28 / 0.28 | 0.21 / 0.28 | 0.47 / 0.37 | 0.39 / 0.31 |
+| aperiodic1 | 60 | 0.30 / 0.28 | 0.19 / 0.21 | 0.18 / 0.26 | 0.37 / 0.32 | 0.32 / 0.28 |
+
+**Reproduction.** Laptop (local NR tree with extra coop-HARQ changes, debug build) vs
+server (committed NR patch only, optimized build), 90 common cells: mean |ΔPRR| 0.007,
+max 0.030; tail mean |Δ| 0.024; **no cell outside the combined 95 % CI** (PRR or tail).
+
+1. **Lower MCS does not rescue the tail.** Without background it helps only marginally
+   (aperiodic1 +0.05 / +0.09 hwy / rbt tail, inside the CIs); with background it hurts
+   everywhere. Per attempt, MCS 5 decodes more often (tail periodic1, N = 0: 0.68 -> 0.77
+   hwy, 0.35 -> 0.50 rbt) but (a) 23 dBm spread over ~3x more subchannels costs ~4 dB of
+   SINR, (b) on the roundabout the tail misses the SCI in ~20 % of attempts behind
+   buildings (blockage of tens of dB lasting 15-20 s; the PSCCH does not depend on the
+   data MCS), (c) packets split into 2-4 TBs that must all survive, (d) the platoon
+   occupies 2-3x more resources, so collisions dominate under load (offered load > 1 at
+   N = 60).
+2. **The dedicated carrier is the clear winner under load** (same traffic occupies
+   < half the pool): +0.03-0.12 mean PRR at N = 60; periodic2 gets its second
+   retransmission.
+3. **Blind retransmission ~ Option 1**, slightly better for periodic2 without background
+   (Option 1 cannot fit its second retransmission before the 10 ms PDB), paid with 3
+   transmissions per TB (more load under background).
 
 ```bash
-python3 run_variants.py --jobs 7            # 216 runs, then analysis
-python3 run_variants.py --analyze-only      # results/variants/analysis/
+python3 run_variants.py --jobs 7          # t-Reordering 0: mcs14 + 4 variants -> results/variants_rlc0
+python3 run_variants.py --analyze-only    # results/variants_rlc0/analysis/
+# original 100 ms results
+python3 run_variants.py --analyze-only --rlc-reordering-ms 100 \
+      --results results/variants --baseline-dir results/campaign
 ```
 
-On another machine (after `git pull` and `./ns3 build platoon_harq_robustness_eval`), list
-`mcs14` too: baseline cells missing from that machine's `results/campaign` are then run into
-`results/variants/mcs14` (cells present there are reused). Traces missing from `traces/` are
-generated with the local SUMO. Heavy runs (highway N = 60) take > 0.5 GB, so keep
-`--jobs` ≤ RAM/2.5 GB:
+On another machine (after `git pull` and `./ns3 build platoon_harq_robustness_eval`),
+traces missing from `traces/` are generated with the local SUMO. Heavy runs
+(highway N = 60) take > 0.5 GB, so keep `--jobs` ≤ RAM/2.5 GB. Run the campaign first
+so the variants reuse its MCS-14 cells:
 
 ```bash
-nohup python3 run_variants.py --variants mcs14 mcs5 mcs9 dedicated blind --jobs 12 \
-      > results/variants_stdout.log 2>&1 &
+nohup sh -c 'python3 run_campaign.py --jobs 12 && python3 run_variants.py --jobs 12' \
+      > results/rlc0_stdout.log 2>&1 &
 ```
 
 ## Running on another machine (e.g. a Linux server)
@@ -246,10 +346,10 @@ cd ns-3-dev
 ./ns3 configure --build-profile=optimized --disable-werror
 ./ns3 build platoon_harq_robustness_eval
 
-# 3. sweep (resumable; ~250 MB RAM per job) and analysis
+# 3. sweep (resumable; up to ~1 GB RAM per heavy job) and analysis
 cd ../scratch_overlay/platoon_harq_robustness_eval
-python3 run_campaign.py --seeds 1 2 3 --jobs $(( $(nproc) - 1 ))
-python3 analyze.py
+python3 run_campaign.py --seeds 1 2 3 --jobs 12        # -> results/campaign_rlc0
+python3 analyze.py --results results/campaign_rlc0 --out results/analysis_rlc0
 ```
 
 `run_campaign.py` picks up the newest `ns3*-platoon_harq_robustness_eval-*`

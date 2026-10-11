@@ -3,6 +3,11 @@
 analyze.py -- aggregate and plot the platoon_harq_robustness_eval campaign.
 
   python3 analyze.py [--results results/campaign] [--out results/analysis]
+  python3 analyze.py --results results/campaign_rlc0 --out results/analysis_rlc0
+
+results/campaign holds the original runs, made with LTE RLC UM's 100 ms
+t-Reordering: their PRR is valid, their prr_pdb and delays are not (see README
+"RLC t-Reordering"). run_campaign.py now writes results/campaign_rlc<ms>.
 
 Inputs : <tag>_run.csv, <tag>_member.csv, <tag>_pkt.csv.gz of every run
 Outputs: runs_all.csv, members_all.csv, summary.csv (mean and 95 % CI over
@@ -116,6 +121,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     runs, mem = load(rdir)
+    # runs from before the column existed used LTE RLC UM's 100 ms t-Reordering
+    rlc = (runs["rlc_reordering_ms"].fillna(100.0) if "rlc_reordering_ms" in runs
+           else pd.Series(100.0, index=runs.index))
+    if rlc.nunique() > 1:
+        raise SystemExit(f"mixed RLC t-Reordering in {rdir}: {sorted(rlc.unique())} ms")
+    print(f"RLC t-Reordering {rlc.iloc[0]:g} ms"
+          + ("" if rlc.iloc[0] == 0 else " -> prr_pdb and delays are distorted; PRR is valid"))
     runs.to_csv(out / "runs_all.csv", index=False)
     mem.to_csv(out / "members_all.csv", index=False)
     S = summarize(runs)
