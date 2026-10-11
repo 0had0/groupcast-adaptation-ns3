@@ -46,6 +46,7 @@ add_library(scratch_common OBJECT
   stack/nr_sl_stack.cc
   stack/nr-sl-adaptive-mcs-scheduler.cc
   stack/nr-sl-deterministic-scheduler.cc
+  stack/nr_sl_coop_scheduler.cc
   flows/groupcast_flows.cc
   kpi/kpi_hooks.cc
   kpi/v2x-kpi.cc

@@ -330,6 +330,62 @@ nohup sh -c 'python3 run_campaign.py --jobs 12 && python3 run_variants.py --jobs
       > results/rlc0_stdout.log 2>&1 &
 ```
 
+## Cooperative HARQ: helper arms (branch `coop-harq-nr`)
+
+A designated platoon member (the *helper*) retransmits the leader's TB for the members that
+NACKed it. Needs the `coop-harq-nr` NR patch (`patches/nr/local.patch` on that branch:
+`NrSlUeMac::EnableChainedRes`). With cooperation off the patched NR tree is **byte-identical**
+to the stock tree (4 pilots, Option 1 / blind / dedicated carrier / N = 45, every output file).
+
+| `--helperMode` | leader | helper (member `--helper`) |
+|---|---|---|
+| `off` (default) | stock scheduler, Option 1, 2 retx | — (original campaign) |
+| `none` | `NrSlCoopScheduler`, cooperation off: Option 1, 2 retx | — (leader-only arm of the comparison) |
+| `leaderRes` | 1 transmission; its 2 reserved retx slots are handed to the helper (SCI-2A) | relays in those slots |
+| `ownRes` | 1 transmission, no reservation; SCI-2A carries the packet deadline (allocation slot + PDB) and the relay budget (2) | selects its own resources (Mode 2, its own sensing) when the NACK is heard |
+
+Helper rules (both arms, HARQ Option 1): a relay goes out only if the helper **decoded** the
+leader's copy and **overheard a NACK** on the PSFCH of the previous transmission of the TB (the
+leader's, then the helper's own copy, which the members NACK too); no NACK = success, the
+remaining relay slots are cancelled. Receivers **soft-combine** a relayed copy in the leader's
+HARQ process (SCI-2A `relayedFromRnti`, leader's HARQ id and source L2 id). The helper relays
+the TB unchanged (MCS, TB size, subchannels).
+
+Run-CSV columns: `helper_tx`, `helper_tx_coll_rate`, `coop_*` (relay events: scheduled, sent,
+no NACK, too late, no HARQ process, no resource), the checks `relay_without_nack` and
+`relay_without_decode` (must be 0), `helper_att(_ok)`, `helper_recovered` (members that decoded
+a TB only thanks to the helper's copy), and the **sensing attribution of failed, collided
+attempts** `lcoll_*` (leader attempts) / `hcoll_*` (helper attempts): `neither`,
+`helper_only`, `leader_only`, `both` = which of leader / helper had decoded an SCI-1A of an
+interferer in the window [attempt − (100 ms sensing window + PDB), attempt). Per interferer:
+`<tag>_coll.csv`; helper transmissions: `<tag>_htx.csv`. Packet loss causes, attempts and
+`tx_per_pkt` include the helper's copies.
+
+Pilot (roundabout, IVD 30 m, N = 0, periodic1, helper = member 4, seed 1):
+
+| arm | PRR | worst member | leader retx | relays sent | relay w/o NACK | relay w/o decode |
+|---|---|---|---|---|---|---|
+| none | 0.839 | 0.576 | 459 | — | — | — |
+| leaderRes | 0.878 | 0.731 | 0 | 258 | 0 | 0 |
+| ownRes | 0.846 | 0.656 | 0 | 232 | 0 | 0 |
+
+Relayed copies at the members: 455 / 471 (leaderRes) combined with >= 1 earlier attempt
+(the other 16: members that had missed the leader's SCI, decoded alone).
+
+Caveats: PSFCH is lossless in 5G-LENA (overhearing is limited only by `MaxLossDb`); with Option 1
+the leader cannot tell who NACKed, so a handed-over slot is lost if the helper itself missed
+the TB (`leaderRes`); a member that misses a TB's first transmission may combine with a stale
+history of the same HARQ id (stock behaviour, rare); RNTIs exist only once the run starts
+(the helper is configured at ~2 s, before the KPI window).
+
+```bash
+./ns3 build platoon_harq_robustness_eval
+build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-<profile> \
+  --scenario=roundabout --mobility=traces/rbt_ivd30_n0_s1.csv.gz \
+  --sumoNet=sumo/roundabout/roundabout.net.xml --traffic=periodic1 \
+  --helper=4 --helperMode=leaderRes --out=results/x
+```
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

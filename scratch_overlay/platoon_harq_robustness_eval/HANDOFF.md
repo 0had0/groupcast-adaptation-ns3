@@ -13,6 +13,10 @@ independently reproduced on a second machine. Code on branch `platoon-harq-robus
   affected** (§4.8). The program now defaults to t-Reordering = 0; delay results need a
   re-run (`results/campaign_rlc0`, `results/variants_rlc0`, §9).
 - Open bug: truncated application packet in MCS 5 / roundabout / periodic2 (§8).
+- **Branch `coop-harq-nr`** (2026-10-11): cooperative HARQ helper arms (`--helperMode`
+  `none | leaderRes | ownRes`, `--helper`), NACK-triggered helper that overhears the PSFCH,
+  soft combining in the leader's HARQ process, sensing attribution of collided attempts; NR
+  patch byte-identical to stock with cooperation off. See README "Cooperative HARQ".
 
 ---
 
