@@ -141,7 +141,9 @@ def run_job(job):
     opts = job[8] if len(job) > 8 else {}
     helper = opts.get("helper", HELPER)
     tag = opts.get("tag", tag_of(sc, ivd, tr, nbg, seed))
+    tdir, adir = Path(tdir).resolve(), Path(adir).resolve()
     try:
+        adir.mkdir(parents=True, exist_ok=True)
         if (adir / f"{tag}_run.csv").exists():
             return arm, tag, "cached", 0.0
         cmd = [str(BIN), f"--scenario={sc}",
@@ -694,7 +696,8 @@ def main():
         BIN = cands[0]
     print(f"binary: {BIN}\nresults: {a.results}  helper: member {HELPER}")
 
-    tdir, root = Path(a.traces), Path(a.results)
+    # absolute: every run executes with its arm folder as working directory
+    tdir, root = Path(a.traces).resolve(), Path(a.results).resolve()
     tdir.mkdir(parents=True, exist_ok=True)
     root.mkdir(parents=True, exist_ok=True)
     progress = open(root / "progress.log", "a")
