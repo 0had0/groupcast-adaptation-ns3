@@ -140,6 +140,12 @@ Pilot (same trace, 20 s), t-Reordering 100 ms -> 0 ms:
   `--rlc-reordering-ms` (default 0), check it after every run and write to
   `results/campaign_rlc0/` and `results/variants_rlc0/`; `analyze.py` refuses to
   mix values. Old CSVs without the column count as 100 ms.
+* **Re-run done (server, 2026-10-11)**: `campaign_rlc0` (270 runs) and `variants_rlc0`
+  (MCS 14, dedicated, blind; MCS 5/9 not re-run). Same seeds and traces: PRR identical
+  (campaign: 80 / 81 cells to 3 decimals, the last one had 2 seeds before; variants:
+  ≤ 0.0015), losses, CBR and tx per packet unchanged. Now `prr_pdb` = PRR for periodic1 and
+  aperiodic1; periodic2 keeps a real gap (mean 0.03) from multi-TB packets finishing after
+  the 10 ms PDB. Results: "Variant results with t-Reordering 0".
 
 ## Files
 
@@ -153,6 +159,7 @@ Pilot (same trace, 20 s), t-Reordering 100 ms -> 0 ms:
 | `run_campaign.py` | resumable parallel sweep (`results/campaign_rlc<ms>/`) |
 | `analyze.py` | aggregation + figures |
 | `run_variants.py` | MCS / dedicated carrier / blind sweep + its analysis (`results/variants_rlc<ms>/`) |
+| `run_coop.py` | cooperative HARQ comparison + its analysis, branch `coop-harq-nr` (`results/coop_rlc0/`) |
 
 ```bash
 cd ns-3-dev/cmake-cache && ninja scratch_platoon_harq_robustness_eval_platoon_harq_robustness_eval
@@ -174,6 +181,9 @@ python3 gen_mobility.py --scenario roundabout --ivd 15 --nbg 30 --seed 1 --out t
 
 Original runs (`results/campaign`, RLC t-Reordering 100 ms): PRR and loss
 figures below are valid; their `prr_pdb` / delays are not (see "RLC t-Reordering").
+The t-Reordering 0 re-run (server `results/campaign_rlc0`, aggregates in
+`results/analysis_rlc0`) gives the same PRR and valid `prr_pdb` / `mean_delay_ms` per member
+(`members_all.csv`; `summary.csv` aggregates PRR and losses only).
 
 Reproduced on a second machine (stock-patch NR build, different SUMO
 version): mean |PRR difference| over the 81 cells 0.005, max 0.024, never
@@ -312,6 +322,25 @@ max 0.030; tail mean |Δ| 0.024; **no cell outside the combined 95 % CI** (PRR o
    (Option 1 cannot fit its second retransmission before the 10 ms PDB), paid with 3
    transmissions per TB (more load under background).
 
+### Variant results with t-Reordering 0 (server, `results/variants_rlc0`)
+
+periodic1 / periodic2 at MCS 14 and on the dedicated carrier have **10 seeds**, the other
+cells 3. PRR equals the 100 ms runs (tables above). **Tail member PRR within the PDB**
+(`prr_pdb_tail`), IVD 30 m, ± 95 % CI, highway / roundabout:
+
+| traffic, variant | N = 0 | N = 45 | N = 60 |
+|---|---|---|---|
+| periodic1, MCS 14 | 0.925 ± 0.044 / 0.608 ± 0.016 | 0.835 ± 0.029 / 0.607 ± 0.060 | 0.819 ± 0.056 / 0.585 ± 0.057 |
+| periodic1, dedicated | 0.930 ± 0.041 / 0.621 ± 0.023 | 0.879 ± 0.037 / 0.622 ± 0.047 | 0.897 ± 0.029 / 0.620 ± 0.060 |
+| periodic2, MCS 14 | 0.683 ± 0.106 / 0.418 ± 0.029 | 0.519 ± 0.101 / 0.449 ± 0.066 | 0.488 ± 0.098 / 0.416 ± 0.058 |
+| periodic2, dedicated | 0.751 ± 0.122 / 0.457 ± 0.028 | 0.691 ± 0.100 / 0.478 ± 0.069 | 0.687 ± 0.082 / 0.470 ± 0.075 |
+
+With 100 ms the highway periodic2 tail values were 0.002-0.086 — that was the RLC
+artifact. Under load the dedicated carrier gives the tail its largest gain on the highway
+(periodic2, N = 60: 0.687 vs 0.488); on the roundabout the tail stays at 0.42-0.62 whatever
+the load or carrier (building blockage). Mean PRR within the PDB and the 3-seed cells
+(aperiodic1, blind): `variants_summary.csv`.
+
 ```bash
 python3 run_variants.py --jobs 7          # t-Reordering 0: mcs14 + 4 variants -> results/variants_rlc0
 python3 run_variants.py --analyze-only    # results/variants_rlc0/analysis/
@@ -336,6 +365,8 @@ A designated platoon member (the *helper*) retransmits the leader's TB for the m
 NACKed it. Needs the `coop-harq-nr` NR patch (`patches/nr/local.patch` on that branch:
 `NrSlUeMac::EnableChainedRes`). With cooperation off the patched NR tree is **byte-identical**
 to the stock tree (4 pilots, Option 1 / blind / dedicated carrier / N = 45, every output file).
+On another machine: `git checkout coop-harq-nr && ./setup.sh --force` (installs that patch),
+then rebuild; back to stock the same way from `platoon-harq-robustness-eval`.
 
 | `--helperMode` | leader | helper (member `--helper`) |
 |---|---|---|
@@ -382,13 +413,59 @@ Comparison campaign (`run_coop.py`): arms `none` / `leaderRes` / `ownRes` x {rou
 IVD 30 N = 0 (blockage), highway IVD 30 N = 45, 60 (collisions)} x {periodic1, periodic2} x
 seeds 1-10, helper = member 4, t-Reordering 0; every run re-checked (mode, helper,
 t-Reordering, no explicit ACK, relay_without_nack = relay_without_decode = 0). Outputs in
-`results/coop_rlc0/` (`analysis/`: `coop_summary.csv`, `figc1_prr.png`, `figc1b_tail_prr.png`,
-`figc2_tail_prr_pdb.png`, `figc3_collision_sensing.png`).
+`results/coop_rlc0/` (`analysis/`: `coop_summary.csv`, `coop_runs.csv`, `coop_members.csv`,
+`coop_latency_cdf.csv`, `figc1_prr.png`, `figc1b_tail_prr.png`, `figc2_tail_prr_pdb.png`,
+`figc3_collision_sensing.png`, `figc4_latency.png`, `figc5_reliability_latency.png`).
+
+**Latency** (analysis only, from `<tag>_pkt.csv.gz`, no re-run needed): application
+end-to-end delay = first delivery at the member − generation at the leader (resource wait,
+HARQ retransmissions and relayed copies included). `coop_summary.csv`: `lat_mean_ms`,
+`lat_p50/p95/p99_ms` (all members) and `lat_tail_*` (tail member), over delivered packets,
+mean and 95 % CI over seeds. `coop_latency_cdf.csv` / figc5: P(delivered within t), every
+packet counted (lost = never), so the curve ends at the PRR — the fair comparison, since
+the percentiles ignore lost packets. `delay_ms` is written with 2 significant digits (0.1 ms
+below 10 ms, 1 ms above), too coarse to separate the arms in periodic2's p95 (≈ PDB).
 
 ```bash
-python3 run_coop.py --jobs 7            # 180 runs
-python3 run_coop.py --analyze-only
+python3 run_coop.py --jobs 7            # 180 runs (laptop: 7.9 h)
+python3 run_coop.py --analyze-only      # ~6 s
 ```
+
+**Results (laptop, 10 seeds; server re-run pending — quote the server once available).**
+Tail = member 8, ± 95 % CI; latency = mean over the members' delivered packets.
+
+| cell | leader only | helper, leader's slots | helper, own resources |
+|---|---|---|---|
+| rbt N 0 periodic1, tail PRR | 0.597 ± 0.013 | **0.697 ± 0.020** | 0.677 ± 0.016 |
+| rbt N 0 periodic2, tail PRR | **0.464 ± 0.031** | 0.462 ± 0.038 | 0.411 ± 0.050 |
+| hwy N 45 periodic1, tail PRR | **0.811 ± 0.048** | 0.785 ± 0.041 | 0.773 ± 0.040 |
+| hwy N 45 periodic2, tail PRR | **0.591 ± 0.105** | 0.510 ± 0.077 | 0.449 ± 0.096 |
+| hwy N 60 periodic1, tail PRR | **0.797 ± 0.040** | 0.766 ± 0.027 | 0.740 ± 0.036 |
+| hwy N 60 periodic2, tail PRR | **0.546 ± 0.085** | 0.465 ± 0.061 | 0.403 ± 0.076 |
+| periodic1, mean latency (3 cells) | 5.0-5.6 ms | 4.8-5.2 ms | 10.1-11.0 ms |
+| periodic1, tail p95 latency | 11.8-12.1 ms | 10.4-13.5 ms | 24.1-27.0 ms |
+| periodic2, mean latency | 4.9-5.6 ms | 5.8-6.2 ms | 6.5-6.9 ms |
+
+1. **Blockage: the helper helps** (roundabout periodic1, tail 0.60 -> 0.70, CIs disjoint);
+   not with periodic2 (not investigated yet).
+2. **Collisions: the helper hurts** (highway: mean PRR −0.03 to −0.13, tx per packet 1.6-1.8 ->
+   1.1-1.4). The leader sends once and hands its retx slots over; when the helper also missed
+   the TB nobody uses them (Option 1: the leader cannot tell who NACKed).
+3. An interferer of a collided, failed attempt had been sensed by **both** leader and helper
+   in 94-96 % (periodic1) / 79-82 % (periodic2) of the cases: not hidden-terminal
+   collisions, the helper's sensing cannot avoid them.
+4. **Latency**: on the leader's reserved slots the helper keeps the leader-only latency; on
+   its own resources (Mode-2 selection over the remaining PDB) it doubles the periodic1 mean
+   and tail p95.
+
+**Check `relay_without_nack` is too strict.** 2 of the 180 laptop runs flagged one relay each
+(`leaderRes`, highway N 45 periodic2 s1 and N 60 periodic1 s4). Debugged on the second
+(deterministic; PHY / channel logs): the tail member NACKed, the helper and every member got
+the NACK, but the leader's link had 156.9 dB path loss (TR 37.885 NLOSv log-normal blockage
+loss, drawn per transmission, in its tail) > `MaxLossDb` = 150 dB, so the PSFCH never reached
+it. The leader took "no NACK" as success; the helper relayed correctly. The check compares
+with the NACKs the leader *received*; it should use those the members *sent* (to do), and
+"NACK missed by the leader" is worth reporting as an Option-1 KPI.
 
 ```bash
 ./ns3 build platoon_harq_robustness_eval
