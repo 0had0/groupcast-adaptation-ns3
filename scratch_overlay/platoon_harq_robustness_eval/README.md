@@ -606,6 +606,62 @@ Results: step 1 `results/coop2_rlc0/analysis/` (`coop_verdict.csv`, `figc2_tail_
 `sweep_rule.csv`, `figs1_tail_vs_helper`, `figs2_oracle_timeline`). New per-run files:
 `<tag>_nack.csv` (every NACK a member sent), `<tag>_div.csv` (divergence per selection).
 
+### Results (server = reference, 10 seeds, 2026-10-12; every run passed every check)
+
+Tail (member 8) PRR within the PDB, mean over seeds; "paired" = per-seed difference to
+`none` with its 95 % CI (same trace and seed in every arm), wins = seeds where the arm is
+better; "CI" = the pre-registered criterion (disjoint 95 % CIs of the two means).
+
+| cell | none | leaderRes | ownRes | split | additive | tx/pkt none -> additive |
+|---|---|---|---|---|---|---|
+| rbt N 0 periodic1 | 0.597 | **0.695** (+0.099, 10/10, CI) | **0.683** (+0.086, 10/10, CI) | **0.667** (+0.070, 10/10, CI) | **0.691** (+0.094, 10/10, CI) | 1.86 -> 2.26 |
+| rbt N 0 periodic2 | 0.433 | 0.407 (n.s.) | 0.358 (worse, paired) | 0.423 (n.s.) | 0.463 (+0.030, 9/10, paired) | 1.64 -> 1.84 |
+| rbt N 45 periodic1 | 0.601 | 0.652 (+0.051, 10/10) | 0.661 (+0.060, 10/10) | 0.637 (+0.036, 10/10) | 0.661 (+0.060, 10/10) | 1.82 -> 2.19 |
+| rbt N 45 periodic2 | 0.441 | 0.414 (n.s.) | 0.373 (worse) | 0.443 (n.s.) | 0.461 (n.s.) | 1.65 -> 1.91 |
+| rbt N 60 periodic1 | 0.567 | 0.613 (+0.046, 10/10) | 0.625 (+0.059, 10/10) | 0.610 (+0.043, 10/10) | 0.628 (+0.061, 10/10) | 1.83 -> 2.19 |
+| rbt N 60 periodic2 | 0.416 | 0.375 (worse) | 0.328 (worse) | 0.412 (n.s.) | 0.417 (n.s.) | 1.67 -> 1.86 |
+| hwy N 45 periodic1 | 0.797 | 0.784 (n.s.) | 0.801 (n.s.) | 0.799 (n.s.) | 0.817 (+0.020, 8/10) | 1.62 -> 2.00 |
+| hwy N 45 periodic2 | 0.518 | 0.429 (worse) | 0.378 (worse) | 0.518 (n.s.) | 0.547 (+0.029, 10/10) | 1.77 -> 2.03 |
+| hwy N 60 periodic1 | 0.783 | 0.767 (n.s.) | 0.773 (n.s.) | 0.781 (n.s.) | 0.817 (+0.034, 9/10) | 1.64 -> 2.04 |
+| hwy N 60 periodic2 | 0.485 | 0.398 (worse) | 0.352 (worse) | 0.487 (n.s.) | 0.507 (+0.021, 8/10) | 1.71 -> 1.90 |
+
+(+x, k/10) = paired better; "worse" = paired worse; CI = also disjoint 95 % CIs (only
+roundabout N 0 periodic1). `cbr_occupied`: +0.001 to +0.014 for `additive`, down by up to
+0.05 for `leaderRes` / `ownRes` (fewer transmissions), unchanged for `split`. Tables (mean /
+worst-member `prr_pdb`, collision rates, latency, `helper_recovered`):
+`remote-results/coop2_rlc0/analysis/coop_summary.csv`, `coop_rbt_rlc0/analysis/`.
+
+**1. Can a helper beat the standard, and where?** With disjoint CIs only under blockage
+with periodic1 traffic (roundabout N 0: all four helper arms, +0.07 to +0.10). Paired, the
+same holds at N 45 / 60 on the roundabout (+0.04 to +0.06, 10/10 seeds). `additive` is the
+only arm that never loses: it also gains a little on the highway (+0.02 to +0.03, paired) at
+12-25 % more transmissions per packet; whether a leader with the same budget would do as
+well could not be tested (`none4` infeasible). Handing the leader's retransmissions over
+(`leaderRes`, `ownRes`) loses under collisions and with periodic2 (up to -0.14). `split`
+equals `none` on the highway (the helper rarely gets its slot) and gains under blockage.
+
+**2. Footprint hypothesis: supported by the pre-registered rule, but not as a turn effect.**
+Turn phase: `leader_only` + `helper_only` = 22.7 % of the collided failed leader attempts
+(rule: >= 15 %), median divergence of the leader's selections 0.40 (rule: >= 0.15). Outside
+the turn: 18.9 % and 0.40, also above the threshold — the leader-helper sensing difference
+on the roundabout exists all along, a little larger in the turn (periodic1: 10-11 % -> 17-19
+%). It comes from buildings: P(interferer sensed by the leader) vs distance falls to 0.29 at
+300-500 m and 0.06 at 500-750 m on the roundabout (highway: 0.80, 0.75); when the leader ->
+interferer link is building-NLOS and the helper's is not, the helper senses 0.90, the
+leader 0.61. In this simulator the difference cannot avoid collisions: dynamic grants skip
+the sensing exclusion (5G-LENA, HANDOFF §8), for the leader and the helper alike.
+
+**3. Helper position and dynamic selection.** Roundabout N 0, helpers 2 / 4 / 6 / 7: the
+best static helper picked on seeds 1-5 is helper 4 for periodic1 in every arm (seeds 6-10:
+same value as helper 4); rear helpers are worse (6, 7: 0.61-0.66 vs 0.69, leaderRes /
+ownRes). The leader-side rule (rearmost helper within X m, X tuned on seeds 1-5) picks
+X = 150 m, i.e. helper 4: no gain. The per-window dynamic oracle is +0.09 to +0.12 above
+(periodic1), with the best helper changing 8-10 times in ~23 turn windows per seed; with
+~10 packets per 1 s window this maximum over four noisy estimates is biased upward, so it
+is an upper bound, not evidence that dynamic selection would pay. Highway sweep: skipped
+as pre-registered (no arm beats `none` there with disjoint CIs); `additive`'s small paired
+gain on the highway was measured with helper 4 only.
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

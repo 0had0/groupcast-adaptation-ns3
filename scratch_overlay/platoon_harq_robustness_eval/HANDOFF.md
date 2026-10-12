@@ -23,8 +23,8 @@ independently reproduced on a second machine. Code on branch `platoon-harq-robus
 KPI, collision breakdown, sensing-map divergence, link conditions, helper sweep and oracle
 analysis, server driver `run_coop_followup.sh`. Found on the way: 5G-LENA dynamic grants
 skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs (fixed;
-re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Not run yet on the
-server.**
+re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Server campaign
+done 2026-10-12; verdicts in §7.8.**
 
 **Update (2026-10-11, evening).**
 - **t-Reordering 0 re-run done on the server** (reference): campaign 270/270 runs
@@ -400,9 +400,25 @@ all members of delivered packets; tail p95 = 95th percentile of member 8's deliv
 ### 7.8 Cooperative HARQ follow-up (2026-10-12): split / additive arms, footprint test, helper sweep
 
 Design, checks and the pre-registered decision rules: README "Cooperative HARQ: follow-up".
-Status: implemented and piloted on the laptop; **the campaign has not run yet** (server,
-`run_coop_followup.sh 1 2 3`). Pilots (laptop, seed 1): see README; results tables go here
-once the server runs exist (laptop vs server labelled).
+Status: **done on the server** (2026-10-11 22:30 -> 2026-10-12 06:52, 760 runs, every check
+0). Full tables: README "Cooperative HARQ: follow-up / Results"; data in
+`~/Documents/remote-results/{coop2_rlc0,coop_rbt_rlc0,coop_sweep_rlc0}`. The 2026-10-11
+server coop runs agree with the laptop (18 cells, none outside the combined CI).
+
+Verdicts (server, 10 seeds):
+1. **A helper beats the standard only under blockage with periodic1** (roundabout N 0: all
+   four arms +0.07 to +0.10 tail `prr_pdb`, disjoint CIs; N 45 / 60: +0.04 to +0.06,
+   paired 10/10). `additive` never loses and gains +0.02 to +0.03 on the highway (paired)
+   for 12-25 % more transmissions; a cost-matched leader-only arm is infeasible here.
+   Handing retransmissions over (`leaderRes`, `ownRes`) loses under collisions and with
+   periodic2 (up to -0.14).
+2. **Footprint: supported by the pre-registered rule** (turn phase: 22.7 % leader_only +
+   helper_only, median divergence 0.40) **but not a turn effect** (outside the turn: 18.9 %,
+   0.40). Buildings cause it (roundabout P(sensed) 0.29 at 300-500 m vs 0.80 highway). It
+   cannot avoid collisions in 5G-LENA, whose dynamic grants skip the sensing exclusion.
+3. **Helper position: helper 4 is the best static choice** (picked on seeds 1-5 for
+   periodic1 in every arm); rear helpers are worse; the leader-side rule reduces to helper 4.
+   The dynamic oracle (+0.09 to +0.12) is an upper bound inflated by noise, not evidence.
 
 - `split` = leader initial + 1st retx, 2nd reserved retx handed to the helper (NACK on the
   leader's retx required); `additive` = unchanged Option-1 leader + one helper copy on its
@@ -422,9 +438,7 @@ once the server runs exist (laptop vs server labelled).
 - Pilots (laptop, seed 1): both new arms pass every check (README "Pilots").
 - Sensing in 5G-LENA: dynamic grants never exclude sensed reservations (§8) — bears on the
   footprint question: the leader's own selections ignore what it senses.
-- Verdicts (pending the server runs): (1) can a helper beat the standard, and where;
-  (2) is the footprint hypothesis supported; (3) does helper position / dynamic selection
-  matter.
+- Highway helper sweep skipped (pre-registered condition not met).
 
 ## 8. Limitations / caveats
 
@@ -561,6 +575,9 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
       leader-side rule — step 3 of the follow-up (§7.8). A per-TB `HelperId` policy in the
       simulator is still not implemented (the rule is evaluated by composing static runs).
    e. ~~`delay_ms` precision, helper `tx_in_tb`~~ — done 2026-10-12 (1 us; reset per TB).
-   f. Run the follow-up campaign on the server (§7.8) and fill in its verdicts.
+   f. ~~Run the follow-up campaign on the server~~ — done, verdicts in §7.8.
+   h. If the sensing question is pursued: an opt-in, TS-conformant fix of the
+      dynamic-grant sensing gap (g) is the precondition — the measured leader-helper
+      sensing difference (§7.8.2) can only matter once selections use sensing.
    g. 5G-LENA: dynamic grants skip the sensing exclusion (§8); decide whether to add an
       opt-in, TS-conformant fix and re-run (it would change every result so far).
