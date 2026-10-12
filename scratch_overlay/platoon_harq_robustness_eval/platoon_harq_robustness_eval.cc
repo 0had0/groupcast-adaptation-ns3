@@ -710,6 +710,67 @@ OnMemberAppRx(uint32_t member,
     }
 }
 
+// Grants created by the schedulers (each SPS grant = one resource (re)selection)
+// and SPS grants that did not fit an RLC SDU (NrSlUeMac::SpsReselectOnMisfit).
+// role 0 = leader, 1 = background.
+struct GrantEvent
+{
+    double t{0.0};
+    uint8_t role{0};
+    bool sps{false};
+    uint16_t subch{0};
+    uint32_t bytes{0};
+    uint8_t slots{0}; //!< slots reserved per period (initial + retransmissions)
+};
+
+struct MisfitEvent
+{
+    double t{0.0};
+    uint8_t role{0};
+    bool reselected{false};
+};
+
+std::vector<GrantEvent> g_grants;
+std::vector<std::pair<double, uint8_t>> g_kept; // (t, role): SPS resource kept
+std::vector<MisfitEvent> g_misfits;
+
+void
+OnGrantCreated(uint32_t role, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t /*psfchPeriod*/)
+{
+    GrantEvent e;
+    e.t = Simulator::Now().GetSeconds();
+    e.role = static_cast<uint8_t>(role);
+    e.sps = !gi.isDynamic;
+    e.slots = gi.nSelected;
+    if (!gi.slotAllocations.empty())
+    {
+        e.subch = gi.slotAllocations.begin()->slPsschSubChLength;
+        for (const auto& r : gi.slotAllocations.begin()->slRlcPduInfo)
+        {
+            e.bytes += r.size;
+        }
+    }
+    g_grants.push_back(e);
+}
+
+void
+OnSpsKept(uint32_t role, uint32_t /*dstL2Id*/, uint8_t /*counter*/)
+{
+    g_kept.emplace_back(Simulator::Now().GetSeconds(), static_cast<uint8_t>(role));
+}
+
+void
+OnSpsMisfit(uint32_t role,
+            uint32_t /*dstL2Id*/,
+            uint8_t /*lcId*/,
+            uint32_t /*bufferSize*/,
+            uint32_t /*allocated*/,
+            uint32_t /*capacity*/,
+            bool reselected)
+{
+    g_misfits.push_back({Simulator::Now().GetSeconds(), static_cast<uint8_t>(role), reselected});
+}
+
 std::string
 TrafficFlowKeys(const std::string& traffic, bool sps)
 {
@@ -786,6 +847,20 @@ main(int argc, char* argv[])
     uint32_t helper = 0;            // member (1..numPlatoon-1) acting as helper
     uint32_t relayBudget = 1;       // additive: helper copies per TB
     bool collCond = false;          // _coll.csv: link condition leader / helper -> interferer
+    // Standard Mode-2 options (all off = stock 5G-LENA behaviour):
+    //   spsReselectOnMisfit  SPS reselection when an RLC SDU does not fit the grant
+    //                        (TS 38.321 sec. 5.22.1.1) instead of segmentation
+    //   slDynExclusion       sensing exclusion for dynamic grants (TS 38.214 sec. 8.1.4
+    //                        step 6 with C_resel = 1), "D1"
+    //   slProjectAnnounced   projection of the retransmissions announced in the current
+    //                        period and by dynamic grants, "D2"
+    bool spsReselectOnMisfit = false;
+    bool slDynExclusion = false;
+    bool slProjectAnnounced = false;
+    // SPS configuration: sl-ProbResourceKeep and sl-ResourceReservePeriodList
+    // (empty = the stack default: 0, 10-100, 150-1000 ms without 250, 27 values)
+    double slProbResourceKeep = 0.0;
+    std::string rriListStr;
                                     // (extra channel-condition queries: may perturb the run)
 
     // NR RLC UM (TS 38.322) has no t-Reordering: complete SDUs go up as soon
@@ -832,7 +907,49 @@ main(int argc, char* argv[])
                  "log the link condition leader / helper -> interferer of collided attempts "
                  "(extra channel-condition queries can change the random draws: step-2 runs)",
                  collCond);
+    cmd.AddValue("spsReselectOnMisfit",
+                 "SPS: resource reselection when an RLC SDU does not fit the grant "
+                 "(TS 38.321 5.22.1.1) instead of segmenting it across periods",
+                 spsReselectOnMisfit);
+    cmd.AddValue("slDynExclusion",
+                 "sensing exclusion also for dynamic grants (TS 38.214 8.1.4, C_resel = 1)",
+                 slDynExclusion);
+    cmd.AddValue("slProjectAnnounced",
+                 "sensing: project announced retransmissions of the current period and of "
+                 "dynamic grants",
+                 slProjectAnnounced);
+    cmd.AddValue("slProbResourceKeep",
+                 "sl-ProbResourceKeep: probability of keeping an SPS resource at counter "
+                 "expiry (TS 38.321 5.22.1.1, 0..0.8)",
+                 slProbResourceKeep);
+    cmd.AddValue("rriList",
+                 "sl-ResourceReservePeriodList in ms, comma separated (at most 16, RRC); "
+                 "empty = stack default (27 values)",
+                 rriListStr);
     cmd.Parse(argc, argv);
+    // ':'-separated copy for the run CSV
+    std::string rriListCsv = rriListStr;
+    std::replace(rriListCsv.begin(), rriListCsv.end(), ',', ':');
+    NS_ABORT_MSG_IF(slProbResourceKeep < 0.0 || slProbResourceKeep > 0.8,
+                    "--slProbResourceKeep must be in [0, 0.8]");
+    std::list<uint16_t> rriList;
+    {
+        std::stringstream ss(rriListStr);
+        std::string tok;
+        while (std::getline(ss, tok, ','))
+        {
+            if (!tok.empty())
+            {
+                rriList.push_back(static_cast<uint16_t>(std::stoul(tok)));
+            }
+        }
+        NS_ABORT_MSG_IF(rriList.size() > 16, "--rriList: at most 16 entries (TS 38.331)");
+    }
+    Config::SetDefault("ns3::NrSlUeMac::SpsReselectOnMisfit", BooleanValue(spsReselectOnMisfit));
+    Config::SetDefault("ns3::NrSlUeMac::SlDynExclusion", BooleanValue(slDynExclusion));
+    Config::SetDefault("ns3::NrSlUeMac::SlProjectAnnounced", BooleanValue(slProjectAnnounced));
+    // the leader's flow is on SPS only for periodic traffic (TrafficFlowKeys)
+    const bool leaderSpsCfg = leaderSps && traffic.rfind("periodic", 0) == 0;
 
     NS_ABORT_MSG_IF(mobility.empty(), "--mobility is required");
     NS_ABORT_MSG_IF(scenario != "highway" && scenario != "roundabout", "bad --scenario");
@@ -957,6 +1074,8 @@ main(int argc, char* argv[])
     sp.harqOption = 1;
     sp.mcrMeters = 0.0; // the Option-1 RX gate is installed below
     sp.adaptiveMcs = false;
+    sp.probResourceKeep = slProbResourceKeep;
+    sp.rriList = rriList;
     sp.shadowingEnabled = true;
     sp.scenario = (scenario == "highway") ? BandwidthPartInfo::V2V_Highway
                                           : BandwidthPartInfo::V2V_Urban;
@@ -1010,6 +1129,26 @@ main(int argc, char* argv[])
         Ptr<NrSlUeMacScheduler> csBase = cs;
         csBase->AssignStreams(stack.stream + 100000);
     }
+    // grant statistics of the leader (0) and the background (1); members only relay
+    for (uint32_t i = 0; i < nodes.GetN(); ++i)
+    {
+        if (i > 0 && i < numPlatoon)
+        {
+            continue;
+        }
+        Ptr<NrSlUeMac> mac =
+            nodes.Get(i)->GetDevice(0)->GetObject<NrUeNetDevice>()->GetMac(0)->GetObject<NrSlUeMac>();
+        PointerValue pv;
+        mac->GetAttribute("NrSlUeMacScheduler", pv);
+        Ptr<NrSlUeMacScheduler> sch = pv.Get<NrSlUeMacScheduler>();
+        if (sch)
+        {
+            const uint32_t role = (i == 0) ? 0 : 1;
+            sch->TraceConnectWithoutContext("GrantCreated", MakeBoundCallback(&OnGrantCreated, role));
+            sch->TraceConnectWithoutContext("SpsMisfit", MakeBoundCallback(&OnSpsMisfit, role));
+            sch->TraceConnectWithoutContext("SpsResourceKept", MakeBoundCallback(&OnSpsKept, role));
+        }
+    }
 
     // -----------------------------------------------------------------------
     // flows
@@ -1057,6 +1196,7 @@ main(int argc, char* argv[])
     }
     NackOnlyHarqController ctl;
     ctl.Install(leaderDev, memberDevs, 254, option1Tx, 3 /* SetSlMinTimeGapPsfch(3) */);
+    ctl.SetSpsSafeAck(leaderSpsCfg);
     g.leaderMac = leaderDev->GetMac(0)->GetObject<NrSlUeMac>();
     g.side[0].ctl = &ctl;
     g.side[0].node = 0;
@@ -1192,6 +1332,45 @@ main(int argc, char* argv[])
     // =======================================================================
     const auto& ltx = ctl.Txs();
     const double kpiEnd = tEnd - tailGuard;
+
+    // grant statistics in the KPI window
+    struct GrantAgg
+    {
+        uint64_t sps{0}, dyn{0}, spsAll{0}, dynAll{0}, misfitResel{0}, misfitEnlarged{0}, kept{0};
+        double subchSum{0.0}, bytesSum{0.0}, slotsSum{0.0};
+    } gAgg[2];
+    for (const auto& e : g_grants)
+    {
+        GrantAgg& A = gAgg[e.role];
+        (e.sps ? A.spsAll : A.dynAll) += 1;
+        if (e.t < kpiStart || e.t >= kpiEnd)
+        {
+            continue;
+        }
+        (e.sps ? A.sps : A.dyn) += 1;
+        A.subchSum += e.subch;
+        A.bytesSum += e.bytes;
+        A.slotsSum += e.slots;
+    }
+    for (const auto& e : g_misfits)
+    {
+        if (e.t >= kpiStart && e.t < kpiEnd)
+        {
+            (e.reselected ? gAgg[e.role].misfitResel : gAgg[e.role].misfitEnlarged) += 1;
+        }
+    }
+    for (const auto& [t, role] : g_kept)
+    {
+        if (t >= kpiStart && t < kpiEnd)
+        {
+            ++gAgg[role].kept;
+        }
+    }
+    const double winS = std::max(1e-9, kpiEnd - kpiStart);
+    // effective grant type of the leader's flow
+    const std::string leaderGrant = gAgg[0].spsAll > 0   ? "sps"
+                                    : gAgg[0].dynAll > 0 ? "dynamic"
+                                    : (leaderSpsCfg ? "sps" : "dynamic");
     std::cerr << "  total subchannels per slot: " << totalSubch << "\n";
 
     // -- all transmissions of the platoon's TBs: the leader's, and the helper's
@@ -2185,7 +2364,13 @@ main(int argc, char* argv[])
         rc << ",relay_budget,leader_tx_per_tb_max,leader_retx_without_nack,"
               "relay_into_reused_harq,relay_unmatched,relay_before_leader_retx,"
               "relay_without_initial_nack,helper_att_after_fail,helper_att_first,div_selections,"
-              "coll_cond\n";
+              "coll_cond,leader_grant,sps_reselect_on_misfit,sl_dyn_exclusion,"
+              "sl_project_announced,leader_grants_sps,leader_grants_dyn,leader_resel_per_s,"
+              "leader_misfit_resel,leader_misfit_enlarged,leader_grant_subch_mean,"
+              "leader_grant_bytes_mean,bg_sps_grants_per_s,bg_dyn_grants_per_s,"
+              "bg_misfit_resel_per_s,bg_misfit_enlarged_per_s,ack_no_retx_left,"
+              "leader_grant_slots_mean,sl_prob_resource_keep,rri_list,leader_kept_per_s,"
+              "bg_kept_per_s\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -2255,7 +2440,18 @@ main(int argc, char* argv[])
         rc << ',' << (helperMode == "additive" ? relayBudget : 0) << ',' << leaderTxPerTbMax << ','
            << leaderRetxNoNack << ',' << relayReusedHarq << ',' << relayUnmatched << ','
            << relayBeforeLeaderRetx << ',' << relayNoInitialNack << ',' << helperAttAfterFail
-           << ',' << helperAttFirst << ',' << g.div.size() << ',' << collCond << '\n';
+           << ',' << helperAttFirst << ',' << g.div.size() << ',' << collCond << ','
+           << leaderGrant << ',' << spsReselectOnMisfit << ',' << slDynExclusion << ','
+           << slProjectAnnounced << ',' << gAgg[0].sps << ',' << gAgg[0].dyn << ','
+           << gAgg[0].sps / winS << ',' << gAgg[0].misfitResel << ',' << gAgg[0].misfitEnlarged
+           << ',' << (gAgg[0].sps + gAgg[0].dyn ? gAgg[0].subchSum / (gAgg[0].sps + gAgg[0].dyn) : 0.0)
+           << ',' << (gAgg[0].sps + gAgg[0].dyn ? gAgg[0].bytesSum / (gAgg[0].sps + gAgg[0].dyn) : 0.0)
+           << ',' << gAgg[1].sps / winS << ',' << gAgg[1].dyn / winS << ','
+           << gAgg[1].misfitResel / winS << ',' << gAgg[1].misfitEnlarged / winS << ','
+           << ctl.nAckNoRetxLeft << ','
+           << (gAgg[0].sps + gAgg[0].dyn ? gAgg[0].slotsSum / (gAgg[0].sps + gAgg[0].dyn) : 0.0)
+           << ',' << slProbResourceKeep << ',' << (rriListStr.empty() ? "default" : rriListCsv)
+           << ',' << gAgg[0].kept / winS << ',' << gAgg[1].kept / winS << '\n';
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx
@@ -2267,6 +2463,11 @@ main(int argc, char* argv[])
               << " unmatched=" << g.phyUnmatched << " wall=" << std::setprecision(1) << wall
               << "s\n";
     std::cerr << "  RNTIs ready at " << rntiReadyAt << " s\n";
+    std::cerr << "  grants: leader " << leaderGrant << " (sps " << gAgg[0].sps << ", dynamic "
+              << gAgg[0].dyn << ", misfit reselections " << gAgg[0].misfitResel << ", enlarged "
+              << gAgg[0].misfitEnlarged << ", implicit ACKs with no retx left "
+              << ctl.nAckNoRetxLeft << "); background sps " << gAgg[1].sps << " dynamic "
+              << gAgg[1].dyn << " misfit reselections " << gAgg[1].misfitResel << "\n";
     if (g.numSides > 1)
     {
         std::cerr << "  helper " << helper << ": relay tx=" << hTx << " (coll " << hTxColl

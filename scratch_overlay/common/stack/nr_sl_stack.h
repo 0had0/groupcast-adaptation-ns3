@@ -47,6 +47,9 @@ struct SlStackParams
     // Allowed RRI values (ms) advertised in the resource pool.
     // Empty = use the full NR-V2X set: {0} ∪ {1..99} ∪ {100,200,...,1000}.
     std::list<uint16_t> rriList{};
+    // sl-ProbResourceKeep (TS 38.321 sec. 5.22.1.1, 0..0.8): probability of keeping
+    // an SPS resource when its reselection counter expires. 0 = always reselect.
+    double probResourceKeep{0.0};
     // Per-destination fixed-MCS overrides {dstL2Id → mcs}. When non-empty, TX
     // node 0 gets a NrSlAdaptiveMcsScheduler whose SetDstMcsOverride() pins each
     // listed destination to a fixed MCS (dual-MCS redundant groupcast). The

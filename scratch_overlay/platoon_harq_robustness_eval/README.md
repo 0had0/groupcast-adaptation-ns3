@@ -662,6 +662,209 @@ is an upper bound, not evidence that dynamic selection would pay. Highway sweep:
 as pre-registered (no arm beats `none` there with disjoint CIs); `additive`'s small paired
 gain on the highway was measured with helper 4 only.
 
+## Standard Mode-2 grant types and sensing fixes (2026-10-12, branch `coop-arms`)
+
+Four opt-in options, all off by default; **with all of them off every output file is
+byte-identical to `coop-arms` @ `7fd137f`** (9 pilots: highway N 45 periodic1/2/aperiodic1,
+roundabout N 0 `none` / `leaderRes` / `split` / `additive` + `--collCond`, highway `ownRes`,
+`--leaderSps=true` periodic1; the run CSV only gains the columns listed below).
+
+| program flag | NR attribute (`ns3::NrSlUeMac::`) | what |
+|---|---|---|
+| `--leaderSps` (existing) | — | periodic leader traffic on SB-SPS (RRI = period) instead of a dynamic grant per packet |
+| `--spsReselectOnMisfit` | `SpsReselectOnMisfit` | TS 38.321 sec. 5.22.1.1: an RLC SDU the selected SPS grant cannot accommodate at the configured MCS triggers a resource reselection sized for the new data, instead of CTTC's segmentation across periods. Every SPS UE (leader, background periodic1) |
+| `--slDynExclusion` (D1) | `SlDynExclusion` | TS 38.214 sec. 8.1.4 step 6 with C_resel = 1 when no reservation interval is given: dynamic grants exclude sensed reservations (stock: the loop runs C_resel = 0 times) |
+| `--slProjectAnnounced` (D2) | `SlProjectAnnounced` | step 6 also projects the retransmission resources an SCI-1A announces in its own period (TRIV gaps from the sensed slot), including SCIs of dynamic grants (stock: only into the next periods, nothing for a period of 0) |
+
+Misfit rule (both schedulers, stock `NrSlUeMacSchedulerFixedMcs` and
+`NrSlCoopScheduler`; trace `SpsMisfit` of `NrSlUeMacScheduler`): at the reselection
+check of an SPS grant with data pending, if the LC buffer exceeds what the grant
+allocates to the LC but fits the grant's TB (same sizing as the selection: 9 PSSCH
+symbols, configured MCS, 5 B SCI-2A) the allocation is enlarged (no segmentation, no
+reselection, "enlarged"); if it exceeds the TB the grant is cleared and the LCP selects a
+new SPS grant for the data, with a new reselection counter ("misfit reselection"). The old
+HARQ process is kept until the slots already published to the MAC (retransmissions of the
+previous TB) are used.
+
+Option-1 wrapper under SPS (`nack_only_harq`): the HARQ process is kept across periods,
+so an implicit ACK decided after the last reserved retransmission of a period has nothing
+to cancel and may hit the next period's TB (already handed to the HARQ buffer at publish
+time): the MAC would erase that grant and the HARQ entity flush the TB. With an SPS
+leader the ACK is delivered only while that period's reserved retransmissions remain
+(`NrSlUeMac::IsSlRetxPending`); otherwise it is counted in `ack_no_retx_left`. The MAC's
+ACK handling for SPS already erases only that period's published grant and keeps the
+HARQ id and the scheduler's grant. Check: `check_sps.py` (0 retransmissions after an
+implicit ACK, every retransmission after a NACK, share of TBs followed by the next period
+on the same HARQ id).
+
+Coop arms under SPS: `leaderRes` / `split` hand over each period's reserved
+retransmission slots via SCI-2A (the handover is applied to every published period);
+`ownRes` / `additive` helpers relay on dynamic (event-triggered) grants as before; the
+packet deadline signalled to them now moves with the reservation period.
+
+Which TB an overheard NACK is for (`ownRes` / `additive` helper; found with the SPS
+pilots: under SPS the HARQ id is the same in every period, so a late NACK of the previous
+period's retransmission matched the next TB the helper had just stored, by (source, HARQ
+id), and the helper relayed a TB nobody had NACKed, `relay_without_initial_nack` 2 / 37):
+- TS 38.213 sec. 16.3: a PSFCH carries no HARQ process id; it is tied to its PSSCH only
+  through the resource. The PSFCH is sent in the first slot with PSFCH resources at
+  least `sl-MinTimeGapPSFCH` resource-pool slots after the PSSCH. Within that slot,
+  `sl-PSFCH-RB-Set` is split into M_subch,slot = M_PRB,set / (N_subch * N) PRBs per
+  (PSSCH slot i of the N = `sl-PSFCH-Period` slots associated with the PSFCH slot,
+  subchannel j): PRBs [(i + j N) M_subch,slot, (i + 1 + j N) M_subch,slot - 1];
+  R_PRB,CS = N_type * M_subch,slot * N_CS (`sl-NumMuxCS-Pair`; N_type = 1 for
+  `startSubCH`, N_subch of the PSSCH for `allocSubCH`); index (P_ID + M_ID) mod R_PRB,CS
+  with P_ID the physical-layer source id of the SCI-2 and M_ID = 0 for groupcast
+  Option 1 (every member NACKs on the same resource, one NACK-only cyclic shift).
+- So (PSFCH slot, PRB, source id) identifies the PSSCH slot and subchannel. A third UE
+  overhearing the PSFCH is not specified by 3GPP (it is an assumption of the helper
+  scheme), but it can apply the same mapping. With N = 1 (this pool) every PSFCH slot
+  serves exactly one PSSCH slot (i = 0), and two transmissions on one HARQ process are in
+  different slots, so the PSFCH occasion alone identifies the transmission: matching by
+  time is the standard mapping. With N = 2 / 4 the slot index i (the PRB) would be needed.
+- 5G-LENA's PSFCH has no resources (lossless, `SlHarqInfo` without the PSSCH slot) and
+  counts the gap in physical slots, so the helper matches by time: a NACK counts for the
+  stored TB only if it arrives at or after that PSSCH's PSFCH occasion + 1 slot (the PHY's
+  PSFCH decode latency), in absolute slots (`m_currentSfn` advances only in SL slots,
+  a NACK can be delivered in a DL slot of the TDD pattern), with the PSSCH slot recovered
+  from the delivery time (the PHY hands the PSSCH over 100 us after its end, possibly
+  in the next slot). The existing upper bound stays (`additive`: occasion + 1 slot for a
+  member whose PSFCH is pushed to the next occasion by its processing time; `ownRes`:
+  the deadline). Verified: dynamic-grant `ownRes` / `additive` runs are byte-identical
+  (3 full roundabout runs + 2 short), and no SPS run has `relay_without_initial_nack` > 0.
+  A first version that used the slot of the PSSCH's delivery to the MAC rejected genuine
+  NACKs (68 of 296 in an 8 s pilot); it never reached a result.
+
+New run-CSV columns (appended): `leader_grant` (`sps` | `dynamic`, effective type of the
+leader's grants), `sps_reselect_on_misfit`, `sl_dyn_exclusion`, `sl_project_announced`
+(0/1), `leader_grants_sps`, `leader_grants_dyn`, `leader_resel_per_s` (SPS grants created
+per s in the KPI window = (re)selections), `leader_misfit_resel`, `leader_misfit_enlarged`,
+`leader_grant_subch_mean`, `leader_grant_bytes_mean`, `bg_sps_grants_per_s`,
+`bg_dyn_grants_per_s`, `bg_misfit_resel_per_s`, `bg_misfit_enlarged_per_s`,
+`ack_no_retx_left`, `leader_grant_slots_mean` (slots reserved per period, initial +
+retransmissions, mean over the leader's grants).
+
+SPS configuration of the re-run (`run_rerun_sps.sh`; program flags, defaults = old values):
+- `--slProbResourceKeep=0.8` (sl-ProbResourceKeep, its maximum; stack default 0).
+  **5G-LENA never applied it**: an SPS grant holds exactly `counter` periods of slots and
+  is erased when its last period is published, at the moment the counter expires, so
+  the keep branch of `TxResourceReselectionCheck` never finds the grant and a new
+  resource is always selected (keep 0.8 gave the same reselections/s as 0 in a pilot).
+  Now both schedulers decide at that moment (`KeepSpsResource`, trace `SpsResourceKept`):
+  with probability sl-ProbResourceKeep the same slots are reserved for another
+  `counter` periods (the counter drawn at the selection, 5G-LENA's own choice; whether
+  TS 38.321 re-draws it there is not checked). With 0 no random number is drawn
+  (stock streams). The HARQ process timer is renewed for `counter + 1` periods from that
+  publication (with `counter` the kept cycle's last retransmission coincided with the
+  timer expiry, the HARQ buffer was flushed first, and stock 5G-LENA leaves an empty
+  grant behind after a wasted retransmission: assertion in `DoNrSlSlotIndication`).
+- `--rriList=0,10,20,50,100,200,...,1000` (sl-ResourceReservePeriodList, 14 entries;
+  RRC allows <= 16; 10 and 100 ms needed by periodic2 / periodic1). The stack default
+  advertises 27 values, and step 5 projects the UE's own past transmissions with each.
+- Run-CSV columns `sl_prob_resource_keep`, `rri_list` (`:`-separated, `default` for the
+  stack's list), `leader_kept_per_s`, `bg_kept_per_s`; the re-run's `verify_dir` checks
+  the first two.
+
+Leader NACK attribution under SPS (`nack_only_harq`): the wrapper credited a received NACK
+to the *latest* pending transmission of its HARQ id. A PSFCH carries no HARQ id (TS
+38.213 sec. 16.3: the occasion and PRB identify the PSSCH); with SPS the next period's
+initial transmission on the same HARQ id can be pending while the NACK of the previous
+period's last retransmission arrives, so that TB was treated as delivered and the new
+one got a false NACK. Pilots: 0 misattributed with dynamic grants and SPS periodic1,
+540-715 NACKed transmissions taken as "no NACK" per SPS periodic2 run (column
+`leader_nack_missed`). Now the NACK goes to the pending transmission whose decision
+(its PSFCH occasion) comes first; with one pending transmission per HARQ id (dynamic)
+the two rules coincide.
+
+Pool checks for SPS:
+- `sl-ResourceReservePeriodList` (`nr_sl_stack.cc`) contains 10 ms (periodic2) and 100 ms
+  (periodic1); it advertises 27 values (0, 10-100, 150-1000 without 250), more than the 16
+  entries RRC allows, and step 5 projects the UE's own transmissions with every one of
+  them; the re-run uses a 14-entry list (`--rriList`, above).
+- NOTE 3A (TS 38.321 5.22.1.1, reservation interval larger than the remaining PDB):
+  periodic1 100 ms / PDB 100 ms, periodic2 10 ms / PDB 10 ms; the selection runs at or
+  after the arrival, so the remaining PDB is <= the interval (equal only at the arrival
+  slot itself).
+- Selection window <= period (`GetCandidateResources` abort): periodic2 T2 = PDB = 20
+  slots, (T2 - T1 + 1) x 0.5 ms = 9.5 ms < 10 ms (the check truncates to 9): no abort.
+
+### Pilots (laptop debug build, seed 1, whole trace, IVD 30 m, highway N 45 / roundabout N 0)
+
+`dynamic` = all new flags off (byte-identical to `coop-arms`); `SPS` = `--leaderSps=true
+--spsReselectOnMisfit=true`; `+D1 D2` = also `--slDynExclusion=true --slProjectAnnounced=true`
+(the `run_rerun_sps.sh` configuration). Delays over all members' delivered packets. One
+seed: differences of a few points are noise (server 10-seed CIs: +-0.03-0.10).
+
+| cell | version | PRR | tail `prr_pdb` | delay mean / p95 (ms) | tx/pkt | leader coll. rate | leader SPS (re)selections/s (misfit) | grant subch / bytes / slots | NACKed TBs with no retx left | bg SPS grants/s (misfit resel/s) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hwy p1 | dynamic | 0.907 | 0.826 | 4.4 / 10.5 | 1.62 | 0.25 | - | 1.20 / 247 / 2.93 | 0.00 | 29.7 (-) |
+| | SPS | 0.909 | 0.821 | 4.8 / 10.5 | 1.74 | 0.23 | 1.55 (0.69) | 1.55 / 286 / 2.95 | 0.00 | 41.4 (17.6) |
+| | SPS +D1 D2 | 0.956 | 0.912 | 4.7 / 11.0 | 1.68 | 0.07 | 1.55 (0.69) | 1.55 / 286 / 2.94 | 0.01 | 41.4 (17.6) |
+| hwy p2 | dynamic | 0.787 | 0.264 | 4.5 / 10.5 | 1.91 | 0.46 | - | 4.20 / 917 / 2.24 | 0.29 | 29.7 (-) |
+| | SPS | 0.690 | 0.172 | 6.1 / 10.5 | 1.31 | 0.39 | 3.49 (1.56) | 4.55 / 1055 / 1.44 | 0.66 | 41.4 (17.6) |
+| | SPS +D1 D2 | 0.761 | 0.214 | 5.7 / 10.5 | 1.35 | 0.20 | 3.49 (1.56) | 4.55 / 1055 / 1.43 | 0.61 | 41.4 (17.6) |
+| rbt p1 | dynamic | 0.857 | 0.591 | 5.7 / 9.4 | 1.83 | 0 | - | 1.20 / 247 / 2.80 | 0.07 | - |
+| | SPS (= +D1 D2) | 0.819 | 0.536 | 6.0 / 9.4 | 1.86 | 0 | 1.39 (0.53) | 1.62 / 293 / 2.77 | 0.13 | - |
+| rbt p2 | dynamic | 0.745 | 0.378 | 5.9 / 9.4 | 1.59 | 0 | - | 4.20 / 916 / 1.79 | 0.46 | - |
+| | SPS (= +D1 D2) | 0.736 | 0.404 | 5.9 / 9.4 | 1.69 | 0 | 3.58 (1.61) | 4.54 / 1053 / 1.81 | 0.40 | - |
+
+(misfit column: misfit reselections per s = `leader_misfit_resel` / KPI window; "enlarged"
+was 0 everywhere: a larger SDU never fitted the TB of a grant sized for a smaller one.)
+
+1. **The SPS leader's delay is a few ms** (mean 4.7-6.1 ms, p95 <= 11 ms) instead of
+   ~94 ms: with the misfit reselection no SDU is split across periods.
+2. **Reselections**: 1.4-1.6/s for periodic1 (38-45 % triggered by a 300 B SDU after a
+   grant sized on a 190 B one; the rest are counter expiries), 3.5-3.6/s for periodic2
+   (45 % misfit: 1200 B after an 800 B grant). Background periodic1 with the misfit
+   rule: 41 SPS grants/s instead of 30, 18 of them misfit reselections.
+3. **periodic2 on SPS loses retransmission slots under load** (highway): 1.44 reserved
+   slots per grant against 2.24 with dynamic grants, so 61-66 % of the TBs end on a NACK
+   with no retransmission left (29 % dynamic); PRR -0.10 (SPS) / -0.03 (+D1 D2), tail
+   `prr_pdb` -0.09 / -0.05. Without background (roundabout N 0) SPS and dynamic reserve
+   the same number of slots (1.8). Cause (confirmed with a dynamic leader + D1 + D2:
+   10.9 candidates after step 6, 2.11 slots, threshold raised in 4 % of selections;
+   SPS: 3.2 candidates, 1.44 slots, raised in 96 %): TS 38.214 step 6 checks an SPS
+   candidate at y + j P'_rsvp_TX for every j < C_resel = 10 x counter (50-150 periods of
+   10 ms, up to 1.5 s), against every sensed reservation projected into that horizon, so
+   with 10 ms periods almost every slot of the window collides with something. Standard
+   behaviour, not a 5G-LENA artifact; it is the price of announcing a 10 ms reservation
+   in a loaded, 45 % TDD pool with TBs of 4-5 of the 5 subchannels.
+4. **D1 + D2 cut the leader's resource-collision rate** on the highway (0.25 -> 0.07
+   periodic1, 0.46/0.39 -> 0.20 periodic2) and raise PRR (periodic1 +0.05, tail
+   `prr_pdb` +0.09). In a 10 s aperiodic1 pilot the leader's dynamic selections excluded
+   sensed candidates in 91 % of cases (0 % stock) and collisions on reservations sensed
+   above threshold ("not_excluded") fell 43 -> 2. Without background they change nothing
+   (roundabout N 0 rows identical).
+5. Option-1 wrapper under SPS (`check_sps.py`, every SPS pilot): 0 retransmissions after
+   an implicit ACK, 0 without a NACK; 86-97 % of the TBs with an implicit ACK are followed
+   by the next period on the same HARQ id (the grant is kept); the rest are reselections.
+6. Coop arms with SPS + D1 + D2 (roundabout N 0 periodic1/2, highway N 45 periodic2 25 s):
+   every `run_coop.py` check passes (after the NACK-matching fix above), `leader_grant` =
+   `sps`, helper copies only after members' NACKs (`leaderRes`, `ownRes`, `split`),
+   `additive` copies only after a NACK on the leader's initial transmission.
+
+Re-run configuration (SPS + misfit + D1 + D2 + keep 0.8 + 14-entry list + the corrected
+leader NACK attribution), same seed, against the table above:
+
+| cell | PRR | tail `prr_pdb` | delay mean | tx/pkt | leader coll. | leader (re)selections/s (misfit) | kept/s | slots/grant | NACKs misattributed | bg SPS grants/s (kept/s) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hwy p1 | 0.965 | 0.910 | 4.5 | 1.66 | 0.04 | 0.31 (0.12) | 0.75 | 2.93 | 0 | 10.1 (21.4) |
+| hwy p2 | 0.750 | 0.227 | 6.2 | 1.27 | 0.20 | 0.75 (0.36) | 1.61 | 1.49 | 0 (681 before) | 10.1 (21.4) |
+| rbt p1 | 0.834 | 0.583 | 5.1 | 1.95 | 0 | 0.39 (0.12) | 0.66 | 2.75 | 0 | - |
+| rbt p2 | 0.715 | 0.304 | 5.8 | 1.59 | 0 | 0.86 (0.37) | 1.45 | 1.77 | 0 (625 before) | - |
+
+Keep 0.8 cuts the leader's reselections ~4-5x and the background's ~4x. Every check of
+`check_sps.py` and `run_coop.py` passes (4 cells + 4 arms x roundabout N 0 / highway N 45
+periodic2). The roundabout periodic2 tail drops 0.40 -> 0.30 with the attribution fix: the
+misattributed NACKs had also given the next TBs extra (false-NACK) retransmissions
+(tx/pkt 1.69 -> 1.59); one seed.
+
+Decision for the full re-run (2026-10-12): **accepted** — periodic traffic on SB-SPS in
+every experiment, with the periodic2 retransmission-slot loss as a stated property of the
+configuration (finding 3: standard step-6 sensing over C_resel periods in a loaded 45 %
+TDD pool with 4-5-subchannel TBs; no pool change). Code and checks ready
+(`run_rerun_sps.sh check` passes locally).
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

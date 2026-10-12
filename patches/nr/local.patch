@@ -274,11 +274,346 @@ index 19f6c903..475d0ca6 100644
      /**
       * Stop and restart the timer protecting the deallocation of the
       * HARQ process ID.  If the HARQ ID is not allocated, this method
+diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
+index 18b4e5a3..8ee176ab 100644
+--- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
++++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
+@@ -556,6 +556,15 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
+                 {
+                     NS_LOG_DEBUG("slResoReselCounter != 0");
+                 }
++                if (!pass && GetMac()->GetSpsReselectOnMisfit())
++                {
++                    pass = SpsMisfitCheck(sfn,
++                                          dstL2Id,
++                                          lcId,
++                                          lcBufferSize,
++                                          itGrantInfo->second,
++                                          itGrantFoundLc);
++                }
+             }
+         }
+     }
+@@ -567,6 +576,131 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
+     return pass;
+ }
+ 
++bool
++NrSlUeMacSchedulerFixedMcs::KeepSpsResource(const SfnSf& sfn,
++                       GrantInfo& grant,
++                       const NrSlUeMac::NrSlGrant& published)
++{
++    const double keep = GetMac()->GetSlProbResourceKeep();
++    // no draw at all with sl-ProbResourceKeep = 0 (stock random streams)
++    if (keep <= 0.0 || grant.prevSlResoReselCounter == 0 || grant.cReselCounter <= 1)
++    {
++        return false;
++    }
++    if (!(keep > m_ueSelectedUniformVariable->GetValue(0, 1)))
++    {
++        return false;
++    }
++    --grant.cReselCounter; // the period just published
++    grant.slResoReselCounter = grant.prevSlResoReselCounter;
++    const uint16_t resPeriodSlots = GetMac()->GetResvPeriodInSlots(grant.rri);
++    for (uint16_t i = 1; i <= grant.slResoReselCounter; i++)
++    {
++        for (const auto& it : published.slotAllocations)
++        {
++            auto slAlloc = it;
++            slAlloc.sfn.Add(i * resPeriodSlots);
++            slAlloc.slHasPsfch = GetMac()->SlotHasPsfch(slAlloc.sfn);
++            slAlloc.slPsschSymLength = slAlloc.slHasPsfch ? 9 : 12;
++            grant.slotAllocations.emplace(slAlloc);
++        }
++    }
++    // counted from the publication of the last period, 2 slots before its new
++    // transmission: one more period than at the selection, so the kept cycle's
++    // last retransmission is used before the HARQ process times out
++    GetMacHarq()->RenewHarqProcessIdTimer(
++        grant.harqId,
++        GetSpsGrantTimeout(sfn, grant.slResoReselCounter + 1, grant.rri));
++    NS_LOG_INFO("SPS resource to " << published.slotAllocations.begin()->dstL2Id
++                                   << " kept for " << +grant.slResoReselCounter << " periods");
++    NotifySpsKept(published.slotAllocations.begin()->dstL2Id, grant.slResoReselCounter);
++    return true;
++}
++
++bool
++NrSlUeMacSchedulerFixedMcs::SpsMisfitCheck(const SfnSf& sfn,
++                                           uint32_t dstL2Id,
++                                           uint8_t lcId,
++                                           uint32_t lcBufferSize,
++                                           std::vector<GrantInfo>& grants,
++                                           std::vector<GrantInfo>::iterator itGrant)
++{
++    NS_LOG_FUNCTION(this << sfn << dstL2Id << +lcId << lcBufferSize);
++    if (itGrant->slotAllocations.empty())
++    {
++        return false;
++    }
++    const SlGrantResource& first = *itGrant->slotAllocations.begin();
++    uint32_t allocated = 0;
++    uint32_t allocatedOthers = 0;
++    for (const auto& r : first.slRlcPduInfo)
++    {
++        (r.lcid == lcId ? allocated : allocatedOthers) += r.size;
++    }
++    if (lcBufferSize <= allocated)
++    {
++        return false;
++    }
++    // TB of the grant at the configured MCS, same sizing as at the selection
++    // (9 PSSCH symbols, 5 bytes of SCI-2A)
++    const auto itDstInfo = m_dstMap.find(dstL2Id);
++    uint32_t capacity = CalculateTbSize(GetAmc(),
++                                        itDstInfo->second->GetDstMcs(),
++                                        9,
++                                        first.slPsschSubChLength,
++                                        GetMac()->GetNrSlSubChSize());
++    capacity = capacity > 5 ? capacity - 5 : 0;
++    const uint32_t room = capacity > allocatedOthers ? capacity - allocatedOthers : 0;
++    if (lcBufferSize <= room)
++    {
++        // the grant accommodates the SDU: allocate it whole instead of a segment
++        std::set<SlGrantResource> updated;
++        for (auto slot : itGrant->slotAllocations)
++        {
++            for (auto& r : slot.slRlcPduInfo)
++            {
++                if (r.lcid == lcId)
++                {
++                    r.size = lcBufferSize;
++                }
++            }
++            updated.insert(slot);
++        }
++        itGrant->slotAllocations = updated;
++        NS_LOG_INFO("SPS grant to " << dstL2Id << " LC " << +lcId << " enlarged from "
++                                    << allocated << " to " << lcBufferSize << " bytes");
++        NotifySpsMisfit(dstL2Id, lcId, lcBufferSize, allocated, capacity, false);
++        return false;
++    }
++    NS_LOG_INFO("SPS grant to " << dstL2Id << " LC " << +lcId << " (TB " << capacity
++                                << " bytes) cannot carry " << lcBufferSize
++                                << " bytes: resource reselection");
++    NotifySpsMisfit(dstL2Id, lcId, lcBufferSize, allocated, capacity, true);
++    const uint8_t harqId = itGrant->harqId;
++    grants.erase(itGrant);
++    // the HARQ process may still be in use by the slots already published to the
++    // MAC (retransmissions of the previous TB): release it after them
++    SfnSf last;
++    if (GetMac()->GetSlGrantLastSlot(dstL2Id, harqId, last) && sfn <= last)
++    {
++        SfnSf end = last;
++        end.Add(1);
++        for (uint16_t k = 0; GetMac()->GetPsfchPeriod() && k < 64 && !GetMac()->SlotHasPsfch(end);
++             ++k)
++        {
++            end.Add(1);
++        }
++        const auto timePerSlot = MicroSeconds(1000 >> sfn.GetNumerology());
++        const auto timeout = timePerSlot * (end.Normalize() + 2 - sfn.Normalize());
++        GetMacHarq()->RenewHarqProcessIdTimer(harqId, timeout);
++    }
++    else
++    {
++        GetMacHarq()->DeallocateHarqProcessId(harqId);
++    }
++    return true;
++}
++
+ uint32_t
+ NrSlUeMacSchedulerFixedMcs::LogicalChannelPrioritization(
+     const SfnSf& sfn,
+@@ -1423,7 +1557,12 @@ NrSlUeMacSchedulerFixedMcs::CheckForGrantsToPublish(const SfnSf& sfn)
+             NS_LOG_INFO("Publishing grant with " << grant.slotAllocations.size()
+                                                  << " slots to destination " << currentSlot.dstL2Id
+                                                  << " HARQ ID " << +grant.harqId);
+-            if (itGrantVector->isDynamic || !itGrantVector->slotAllocations.size())
++            if (!itGrantVector->isDynamic && itGrantVector->slotAllocations.empty() &&
++                KeepSpsResource(sfn, *itGrantVector, grant))
++            {
++                ++itGrantVector;
++            }
++            else if (itGrantVector->isDynamic || !itGrantVector->slotAllocations.size())
+             {
+                 itGrantVector = itGrantInfo->second.erase(itGrantVector);
+             }
+diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h b/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
+index 80a0473c..b2ba8d91 100644
+--- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
++++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
+@@ -82,6 +82,47 @@ class NrSlUeMacSchedulerFixedMcs : public NrSlUeMacScheduler
+      * \return True if the LC passes the check, false otherwise
+      */
+     bool TxResourceReselectionCheck(const SfnSf& sfn, uint32_t dstL2Id, uint8_t lcId);
++
++    /**
++     * \brief sl-ProbResourceKeep (TS 38.321 sec. 5.22.1.1) at the expiry of an SPS
++     *        grant's reselection counter, i.e. when its last reserved period has just
++     *        been published: with that probability the resource is kept and the same
++     *        slots are reserved for another counter's worth of periods (the counter
++     *        drawn at the selection, as in 5G-LENA's own keep branch, which is never
++     *        reached because the grant is erased with its last period)
++     *
++     * \param sfn The SfnSf
++     * \param grant The SPS grant, with no slot left
++     * \param published The grant of the period just published
++     * \return True if the resource is kept
++     */
++    bool KeepSpsResource(const SfnSf& sfn,
++                         GrantInfo& grant,
++                         const NrSlUeMac::NrSlGrant& published);
++
++    /**
++     * \brief SPS grant vs the LC's pending data (NrSlUeMac::SpsReselectOnMisfit,
++     *        TS 38.321 sec. 5.22.1.1): if the data exceeds what the grant allocates
++     *        to the LC but fits its TB at the configured MCS, the allocation is
++     *        enlarged; if it exceeds the TB, the grant is cleared so that a new one
++     *        is selected for the data (the HARQ process is kept until the slots
++     *        already published to the MAC are used)
++     *
++     * \param sfn The SfnSf
++     * \param dstL2Id The destination layer 2 ID
++     * \param lcId The logical channel ID
++     * \param lcBufferSize The LC buffer size
++     * \param grants The grants of the destination
++     * \param itGrant The SPS grant of the LC
++     * \return True if the grant was cleared (the LC passes the reselection check)
++     */
++
++    bool SpsMisfitCheck(const SfnSf& sfn,
++                        uint32_t dstL2Id,
++                        uint8_t lcId,
++                        uint32_t lcBufferSize,
++                        std::vector<GrantInfo>& grants,
++                        std::vector<GrantInfo>::iterator itGrant);
+     /**
+      * \brief Select the destinations and logical channels that need scheduling
+      *
+diff --git a/model/nr-sl-ue-mac-scheduler.cc b/model/nr-sl-ue-mac-scheduler.cc
+index 724a3150..aa6ec9e4 100644
+--- a/model/nr-sl-ue-mac-scheduler.cc
++++ b/model/nr-sl-ue-mac-scheduler.cc
+@@ -36,7 +36,17 @@ NrSlUeMacScheduler::GetTypeId()
+             .AddTraceSource("GrantPublished",
+                             "Trace the publishing of a grant to the NrSlUeMac",
+                             MakeTraceSourceAccessor(&NrSlUeMacScheduler::m_grantPublishedTrace),
+-                            "ns3::NrSlUeMacScheduler::GrantPublishedCallback");
++                            "ns3::NrSlUeMacScheduler::GrantPublishedCallback")
++            .AddTraceSource("SpsMisfit",
++                            "An RLC SDU not accommodated by the selected SPS grant "
++                            "(NrSlUeMac::SpsReselectOnMisfit)",
++                            MakeTraceSourceAccessor(&NrSlUeMacScheduler::m_spsMisfitTrace),
++                            "ns3::NrSlUeMacScheduler::SpsMisfitTracedCallback")
++            .AddTraceSource("SpsResourceKept",
++                            "An SPS resource kept at reselection-counter expiry "
++                            "(sl-ProbResourceKeep)",
++                            MakeTraceSourceAccessor(&NrSlUeMacScheduler::m_spsKeptTrace),
++                            "ns3::NrSlUeMacScheduler::SpsKeptTracedCallback");
+     return tid;
+ }
+ 
+@@ -130,4 +140,21 @@ NrSlUeMacScheduler::NotifyGrantPublished(const struct NrSlUeMac::NrSlGrant& gran
+     m_grantPublishedTrace(grant, m_ueMac->GetPsfchPeriod());
+ }
+ 
++void
++NrSlUeMacScheduler::NotifySpsKept(uint32_t dstL2Id, uint8_t counter) const
++{
++    m_spsKeptTrace(dstL2Id, counter);
++}
++
++void
++NrSlUeMacScheduler::NotifySpsMisfit(uint32_t dstL2Id,
++                                    uint8_t lcId,
++                                    uint32_t bufferSize,
++                                    uint32_t allocated,
++                                    uint32_t capacity,
++                                    bool reselected) const
++{
++    m_spsMisfitTrace(dstL2Id, lcId, bufferSize, allocated, capacity, reselected);
++}
++
+ } // namespace ns3
+diff --git a/model/nr-sl-ue-mac-scheduler.h b/model/nr-sl-ue-mac-scheduler.h
+index 1c987513..f681df6e 100644
+--- a/model/nr-sl-ue-mac-scheduler.h
++++ b/model/nr-sl-ue-mac-scheduler.h
+@@ -172,6 +172,32 @@ class NrSlUeMacScheduler : public Object
+     typedef void (*GrantPublishedTracedCallback)(const struct NrSlUeMac::NrSlGrant& grant,
+                                                  uint16_t psfchPeriod);
+ 
++    /**
++     * TracedCallback signature for an RLC SDU that the selected SPS grant does not
++     * accommodate (SpsReselectOnMisfit of NrSlUeMac)
++     * \param [in] dstL2Id destination layer 2 id
++     * \param [in] lcId logical channel id
++     * \param [in] bufferSize LC buffer size (bytes)
++     * \param [in] allocated bytes the grant allocates to the LC
++     * \param [in] capacity bytes the grant's TB carries at the configured MCS
++     * \param [in] reselected true if a resource reselection was triggered (the data
++     *             exceeds the TB), false if the grant's allocation was enlarged
++     */
++    /**
++     * TracedCallback signature for an SPS resource kept at reselection-counter
++     * expiry (sl-ProbResourceKeep)
++     * \param [in] dstL2Id destination layer 2 id
++     * \param [in] counter the new reselection counter
++     */
++    typedef void (*SpsKeptTracedCallback)(uint32_t dstL2Id, uint8_t counter);
++
++    typedef void (*SpsMisfitTracedCallback)(uint32_t dstL2Id,
++                                            uint8_t lcId,
++                                            uint32_t bufferSize,
++                                            uint32_t allocated,
++                                            uint32_t capacity,
++                                            bool reselected);
++
+   protected:
+     void DoDispose() override;
+ 
+@@ -187,6 +213,21 @@ class NrSlUeMacScheduler : public Object
+      */
+     void NotifyGrantPublished(const struct NrSlUeMac::NrSlGrant& grant) const;
+ 
++    /**
++     * Trigger the 'SpsMisfit' trace source (see SpsMisfitTracedCallback)
++     */
++    /**
++     * Trigger the 'SpsResourceKept' trace source (dstL2Id, new reselection counter)
++     */
++    void NotifySpsKept(uint32_t dstL2Id, uint8_t counter) const;
++
++    void NotifySpsMisfit(uint32_t dstL2Id,
++                         uint8_t lcId,
++                         uint32_t bufferSize,
++                         uint32_t allocated,
++                         uint32_t capacity,
++                         bool reselected) const;
++
+   private:
+     // Implementation of SCHED API primitives for NR Sidelink
+     /**
+@@ -238,6 +279,12 @@ class NrSlUeMacScheduler : public Object
+ 
+     TracedCallback<const struct NrSlUeMac::NrSlGrant&, uint16_t>
+         m_grantPublishedTrace; //!< Trace source for grant publishing
++
++    TracedCallback<uint32_t, uint8_t, uint32_t, uint32_t, uint32_t, bool>
++        m_spsMisfitTrace; //!< Trace source for SPS grants that do not fit an RLC SDU
++
++    TracedCallback<uint32_t, uint8_t>
++        m_spsKeptTrace; //!< Trace source for SPS resources kept at counter expiry
+ };
+ 
+ } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..b6904401 100644
+index 57e4cf29..02937db3 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
-@@ -55,6 +55,29 @@ NrSlUeMac::GetTypeId()
+@@ -55,6 +55,57 @@ NrSlUeMac::GetTypeId()
          TypeId("ns3::NrSlUeMac")
              .SetParent<NrUeMac>()
              .AddConstructor<NrSlUeMac>()
@@ -305,10 +640,38 @@ index 57e4cf29..b6904401 100644
 +                          UintegerValue(1),
 +                          MakeUintegerAccessor(&NrSlUeMac::m_leaderTxCount),
 +                          MakeUintegerChecker<uint32_t>())
++            .AddAttribute("SlDynExclusion",
++                          "Sensing (TS 38.214 sec. 8.1.4 step 6) for a selection without a "
++                          "resource reservation interval (dynamic grant): check the candidate "
++                          "itself against the sensed reservations (C_resel = 1). False: stock "
++                          "behaviour, the step-6 loop runs C_resel = 0 times and no candidate "
++                          "of a dynamic grant is excluded by sensing",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&NrSlUeMac::m_slDynExclusion),
++                          MakeBooleanChecker())
++            .AddAttribute("SlProjectAnnounced",
++                          "Sensing (TS 38.214 sec. 8.1.4 step 6): also project the "
++                          "retransmission resources an SCI-1A announces in its own period "
++                          "(TRIV gaps from the sensed slot), including those of SCIs without "
++                          "a reservation period (dynamic grants). False: stock behaviour, "
++                          "announced retransmissions are projected only into the next "
++                          "reservation periods, never for a period of 0",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&NrSlUeMac::m_slProjectAnnounced),
++                          MakeBooleanChecker())
++            .AddAttribute("SpsReselectOnMisfit",
++                          "SPS (TS 38.321 sec. 5.22.1.1): when an RLC SDU cannot be "
++                          "accommodated by the selected SPS grant at the configured MCS, the "
++                          "scheduler triggers a resource reselection sized for the new data "
++                          "instead of segmenting the SDU across reservation periods. False: "
++                          "stock behaviour (the grant keeps the size of its first SDU)",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&NrSlUeMac::m_spsReselectOnMisfit),
++                          MakeBooleanChecker())
              .AddAttribute("EnableSensing",
                            "Flag to enable NR Sidelink resource selection based on sensing; "
                            "otherwise, use random selection",
-@@ -120,6 +143,10 @@ NrSlUeMac::GetTypeId()
+@@ -120,6 +171,10 @@ NrSlUeMac::GetTypeId()
                              "Information regarding NR SL PSCCH UE scheduling",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_slPscchScheduling),
                              "ns3::SlPscchUeMacStatParameters::TracedCallback")
@@ -319,7 +682,7 @@ index 57e4cf29..b6904401 100644
              .AddTraceSource("SlPsschScheduling",
                              "Information regarding NR SL PSSCH UE scheduling",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_slPsschScheduling),
-@@ -131,7 +158,11 @@ NrSlUeMac::GetTypeId()
+@@ -131,7 +186,11 @@ NrSlUeMac::GetTypeId()
              .AddTraceSource("SensingAlgorithm",
                              "Candidates selected by the mode 2 sensing algorithm",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_tracedSensingAlgorithm),
@@ -332,7 +695,56 @@ index 57e4cf29..b6904401 100644
      return tid;
  }
  
-@@ -890,6 +921,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
+@@ -560,7 +619,11 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+             std::list<SlResourceInfo> resourceInfoList;
+             uint16_t pPrimeRsvpTx =
+                 txPool->GetResvPeriodInSlots(bwpId, poolId, params.m_pRsvpTx, slotPeriod);
+-            for (uint16_t i = 0; i < params.m_cResel; i++)
++            // TS 38.214 sec. 8.1.4: C_resel = 1 when no reservation interval is
++            // provided; stock 5G-LENA passes 0 for a dynamic grant (no exclusion)
++            const uint16_t nCandPeriods =
++                (m_slDynExclusion && params.m_cResel == 0) ? 1 : params.m_cResel;
++            for (uint16_t i = 0; i < nCandPeriods; i++)
+             {
+                 auto slResourceInfo = *itCandidate;
+                 slResourceInfo.sfn.Add(i * pPrimeRsvpTx);
+@@ -783,6 +846,35 @@ NrSlUeMac::ExcludeReservedResources(SensingData sensedData,
+     }
+     uint16_t pPrimeRsvpRx = resvPeriodSlots;
+ 
++    if (m_slProjectAnnounced)
++    {
++        // retransmissions announced by the sensed SCI-1A in its own period (the
++        // TRIV gaps count from the sensed slot); for a sensed SCI without a
++        // reservation period (dynamic grant) these are its only reservations
++        if (sensedData.gapReTx1 != std::numeric_limits<uint8_t>::max())
++        {
++            ReservedResource reTx1Slot(sensedData.sfn,
++                                       sensedData.rsvp,
++                                       sensedData.sbChLength,
++                                       sensedData.sbChStartReTx1,
++                                       sensedData.prio,
++                                       sensedData.slRsrp);
++            reTx1Slot.sfn = sensedData.sfn.GetFutureSfnSf(sensedData.gapReTx1);
++            resourceList.emplace_back(reTx1Slot);
++        }
++        if (sensedData.gapReTx2 != std::numeric_limits<uint8_t>::max())
++        {
++            ReservedResource reTx2Slot(sensedData.sfn,
++                                       sensedData.rsvp,
++                                       sensedData.sbChLength,
++                                       sensedData.sbChStartReTx2,
++                                       sensedData.prio,
++                                       sensedData.slRsrp);
++            reTx2Slot.sfn = sensedData.sfn.GetFutureSfnSf(sensedData.gapReTx2);
++            resourceList.emplace_back(reTx2Slot);
++        }
++    }
++
+     for (uint16_t i = 1; i <= q; i++)
+     {
+         ReservedResource resource(sensedData.sfn,
+@@ -890,6 +982,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
      {
          // oldest data will be at the front of the queue
          m_sensingData.push_back(sensingData);
@@ -340,7 +752,7 @@ index 57e4cf29..b6904401 100644
      }
  }
  
-@@ -933,6 +965,177 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
+@@ -933,6 +1026,194 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
          NS_FATAL_ERROR("Received PHY PDU with unknown destination " << sciF2a.GetDstId());
      }
  
@@ -389,6 +801,23 @@ index 57e4cf29..b6904401 100644
 +            p.nackUntil =
 +                NackKnownAfter(m_currentSfn, m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId)) +
 +                1;
++        }
++        // first slot at which a NACK of this PSSCH can arrive (its PSFCH
++        // occasion + 1), in slots since t = 0: m_currentSfn advances only in
++        // sidelink slots, a NACK can be delivered in another one. The PHY
++        // delivers the PSSCH a TB decode latency (default 100 us, < half a slot)
++        // after its end, possibly in the next slot.
++        {
++            const uint8_t gap = m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId);
++            const int64_t slotNs = m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds();
++            const int64_t nowNs = Simulator::Now().GetNanoSeconds();
++            const int64_t psschAbs = nowNs / slotNs - ((nowNs % slotNs < slotNs / 2) ? 1 : 0);
++            const int64_t cur = static_cast<int64_t>(m_currentSfn.Normalize());
++            const int64_t psschNorm = psschAbs - m_absSlotOffset;
++            const int64_t k0 = std::max<int64_t>(0, psschNorm + gap - cur);
++            p.nackFrom = static_cast<uint64_t>(
++                static_cast<int64_t>(NackKnownAfter(m_currentSfn, static_cast<uint8_t>(k0))) +
++                m_absSlotOffset);
 +        }
 +        m_pendingOwnRelays.remove_if([&p](const PendingOwnRelay& q) {
 +            return q.dstL2Id == p.dstL2Id && q.fromRnti == p.fromRnti && q.harqId == p.harqId;
@@ -518,11 +947,14 @@ index 57e4cf29..b6904401 100644
      for (auto& pktIt : dataPkts)
      {
          pktIt->RemovePacketTag(tag);
-@@ -985,6 +1188,25 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -985,6 +1266,28 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                           << " slot " << sfn.GetSlot() << " Normalized slot number "
                           << sfn.Normalize());
  
 +    m_currentSfn = sfn;
++    m_absSlotOffset = Simulator::Now().GetNanoSeconds() /
++                          m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds() -
++                      static_cast<int64_t>(sfn.Normalize());
 +    if (m_enableChainedRes && !m_pendingOwnRelays.empty())
 +    {
 +        for (auto it = m_pendingOwnRelays.begin(); it != m_pendingOwnRelays.end();)
@@ -544,7 +976,7 @@ index 57e4cf29..b6904401 100644
      bool atLeastOneTransmissionInSlot = false;
      // If a grant is scheduled for this slot, code below will provide the
      // TTI indication to the PHY (for either PSCCH or PSSCH).  However,
-@@ -1025,29 +1247,73 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1025,29 +1328,73 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
              bool removeGrant = false;
              NrSlGrant currentGrant = *itGrant;
              // Rename use of *itGrant (and currentGrant) below with "nrSlGrant"
@@ -629,7 +1061,7 @@ index 57e4cf29..b6904401 100644
              if (!removeGrant && currentGrant.slotAllocations.begin()->sfn == sfn)
              {
                  NS_LOG_INFO("Grant at : Frame = " << currentSlot.sfn.GetFrame()
-@@ -1065,7 +1331,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1065,7 +1412,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                          << currentSlot.dstL2Id
                                          << " harqId: " << +currentGrant.harqId
                                          << " Packet Size: " << itPkt->GetSize());
@@ -642,7 +1074,7 @@ index 57e4cf29..b6904401 100644
                          }
                      }
                      else
-@@ -1098,13 +1368,32 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1098,13 +1449,32 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                           << currentSlot.dstL2Id
                                           << " harqId: " << +currentGrant.harqId
                                           << " Packet Size: " << itPkt->GetSize());
@@ -676,7 +1108,7 @@ index 57e4cf29..b6904401 100644
                  }
                  // Remove current slot allocation from this grant
                  if (currentGrant.tbTxCounter == currentGrant.nSelected)
-@@ -1123,169 +1412,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1123,169 +1493,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                   << " slot = " << currentSlot.sfn.GetSlot());
                      continue;
                  }
@@ -837,7 +1269,7 @@ index 57e4cf29..b6904401 100644
 -                                          "Incorrect computation of ReTx slot gaps");
 -                            sciF1a.SetIndexStartSbChReTx2(sbChIndex.at(1));
 +                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
-+                        }
+                         }
 +                        else if (currentGrant.helperId != 0)
 +                        {
 +                            // later reserved slots handed to the helper (the current
@@ -897,7 +1329,7 @@ index 57e4cf29..b6904401 100644
 +                                    coop.deadline = lastOwn->sfn.GetEncoding();
 +                                }
 +                            }
-                         }
++                        }
 +                        sciF2a.SetCoopInfo(coop);
                      }
  
@@ -1080,7 +1512,7 @@ index 57e4cf29..b6904401 100644
                  }
              }
              else
-@@ -1317,6 +1691,138 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1317,6 +1772,138 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
      }
  }
  
@@ -1219,7 +1651,62 @@ index 57e4cf29..b6904401 100644
  std::vector<uint8_t>
  NrSlUeMac::ComputeGaps(const SfnSf& sfn,
                         std::set<SlGrantResource>::const_iterator it,
-@@ -1741,6 +2247,54 @@ void
+@@ -1737,10 +2324,112 @@ NrSlUeMac::EnableSensing(bool enableSensing)
+     m_enableSensing = enableSensing;
+ }
+ 
++bool
++NrSlUeMac::GetSpsReselectOnMisfit() const
++{
++    return m_spsReselectOnMisfit;
++}
++
++bool
++NrSlUeMac::IsSlRetxPending(uint32_t dstL2Id, uint8_t harqId) const
++{
++    auto itGrants = m_slGrants.find(dstL2Id);
++    if (itGrants == m_slGrants.end())
++    {
++        return false;
++    }
++    for (const auto& grant : itGrants->second)
++    {
++        // the slots are erased as they are used: a grant whose first remaining
++        // slot is a retransmission has already sent its new data
++        if (grant.harqId == harqId && !grant.slotAllocations.empty() &&
++            grant.slotAllocations.begin()->ndi == 0)
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
++bool
++NrSlUeMac::GetSlGrantLastSlot(uint32_t dstL2Id, uint8_t harqId, SfnSf& last) const
++{
++    bool found = false;
++    auto itGrants = m_slGrants.find(dstL2Id);
++    if (itGrants == m_slGrants.end())
++    {
++        return false;
++    }
++    for (const auto& grant : itGrants->second)
++    {
++        if (grant.harqId == harqId && !grant.slotAllocations.empty())
++        {
++            const SfnSf s = grant.slotAllocations.rbegin()->sfn;
++            if (!found || last < s)
++            {
++                last = s;
++            }
++            found = true;
++        }
++    }
++    return found;
++}
++
+ void
  NrSlUeMac::DoReceivePsfch(uint32_t sendingNodeId, SlHarqInfo harqInfo)
  {
      NS_LOG_FUNCTION(this << sendingNodeId << harqInfo.m_rnti);
@@ -1246,7 +1733,10 @@ index 57e4cf29..b6904401 100644
 +            for (auto it = m_pendingOwnRelays.begin(); it != m_pendingOwnRelays.end(); ++it)
 +            {
 +                if (it->dstL2Id == harqInfo.m_dstL2Id && it->fromRnti == harqInfo.m_txRnti &&
-+                    it->harqId == harqInfo.m_harqProcessId)
++                    it->harqId == harqInfo.m_harqProcessId &&
++                    Simulator::Now().GetNanoSeconds() /
++                            m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds() >=
++                        static_cast<int64_t>(it->nackFrom))
 +                {
 +                    PendingOwnRelay p = *it;
 +                    m_pendingOwnRelays.erase(it);
@@ -1275,7 +1765,7 @@ index 57e4cf29..b6904401 100644
      {
          // This HARQ is for us.  If this is a HARQ ACK, check whether to cancel
 diff --git a/model/nr-sl-ue-mac.h b/model/nr-sl-ue-mac.h
-index 9562ebd0..c7e5fa98 100644
+index 9562ebd0..f9f0fc8d 100644
 --- a/model/nr-sl-ue-mac.h
 +++ b/model/nr-sl-ue-mac.h
 @@ -8,6 +8,7 @@
@@ -1345,11 +1835,53 @@ index 9562ebd0..c7e5fa98 100644
      /**
       * \brief Structure to pass parameters to trigger the selection of candidate
       * resources as per TR 38.214 Section 8.1.4
-@@ -808,6 +852,38 @@ class NrSlUeMac : public NrUeMac
+@@ -349,6 +393,37 @@ class NrSlUeMac : public NrUeMac
+      */
+     bool SlotHasPsfch(const SfnSf& sfn) const;
+ 
++    /**
++     * \brief Whether an SPS grant whose RLC SDU does not fit triggers a resource
++     *        reselection (TS 38.321 sec. 5.22.1.1) instead of segmentation
++     *        (attribute SpsReselectOnMisfit; read by the schedulers)
++     *
++     * \return true if the reselection on misfit is enabled
++     */
++    bool GetSpsReselectOnMisfit() const;
++
++    /**
++     * \brief Whether a published grant to dstL2Id on harqId has already sent its
++     *        new transmission and still holds reserved retransmission slots, i.e.
++     *        whether a HARQ ACK for this TB would cancel retransmissions of it (and
++     *        not a later TB on the same HARQ process, as with SPS)
++     *
++     * \param dstL2Id The destination layer 2 id
++     * \param harqId The HARQ process id
++     * \return true if retransmission slots of the TB being transmitted remain
++     */
++    bool IsSlRetxPending(uint32_t dstL2Id, uint8_t harqId) const;
++
++    /**
++     * \brief Last slot of the published grants to dstL2Id on harqId
++     *
++     * \param dstL2Id The destination layer 2 id
++     * \param harqId The HARQ process id
++     * \param last Set to the last remaining slot, if any
++     * \return true if a published grant with remaining slots exists
++     */
++    bool GetSlGrantLastSlot(uint32_t dstL2Id, uint8_t harqId, SfnSf& last) const;
++
+     /**
+      * \brief Get the reservation period in slots
+      *
+@@ -808,6 +883,47 @@ class NrSlUeMac : public NrUeMac
      std::unordered_set<uint32_t>
          m_sidelinkRxDestinations; //!< vector holding Sidelink communication destinations for
                                    //!< reception
 +    bool m_enableChainedRes{false}; //!< Cooperative HARQ chained reservations
++    bool m_slDynExclusion{false};      //!< sensing: step 6 also for grants with P_rsvp_TX = 0
++    bool m_slProjectAnnounced{false};  //!< sensing: project the retransmissions announced in
++                                       //!< the current period (and by dynamic grants)
++    bool m_spsReselectOnMisfit{false}; //!< SPS: reselect when an RLC SDU does not fit
 +    bool m_helperNackTriggered{false}; //!< helper relays only after an overheard NACK
 +    std::map<std::pair<uint32_t, uint8_t>, Time>
 +        m_relayFbKeys; //!< (dstL2Id, HARQ id) of relayed copies awaiting PSFCH -> expiry
@@ -1368,8 +1900,13 @@ index 9562ebd0..c7e5fa98 100644
 +        NrSlSciF2aHeader::CoopInfo coop;
 +        uint64_t nackUntil{0}; //!< additive: last normalized slot at which a NACK of the
 +                               //!< transmitter's initial transmission can arrive
++        uint64_t nackFrom{0};  //!< first slot (since t = 0) at which a NACK of that
++                               //!< transmission can arrive: an earlier NACK on the same
++                               //!< HARQ id is for an earlier transmission (SPS keeps the
++                               //!< HARQ id across reservation periods)
 +    };
 +    std::list<PendingOwnRelay> m_pendingOwnRelays; //!< helper: TBs awaiting a NACK
++    int64_t m_absSlotOffset{0}; //!< slots since t = 0 minus the normalized SFN (last SL slot)
 +    /**
 +     * \brief Helper-picks-resource arm: Mode-2 selection of the relay resources
 +     * (sensing-based candidates of this UE, within the packet deadline) after
@@ -1384,7 +1921,7 @@ index 9562ebd0..c7e5fa98 100644
      bool m_enableSensing{false};  //!< Flag to enable NR Sidelink resource selection based on
                                    //!< sensing; otherwise, use random selection
      uint8_t m_minTimeGapProcessing{
-@@ -870,6 +946,8 @@ class NrSlUeMac : public NrUeMac
+@@ -870,6 +986,8 @@ class NrSlUeMac : public NrUeMac
                     const std::list<SensingData>&,
                     const std::list<SfnSf>&>
          m_tracedSensingAlgorithm;

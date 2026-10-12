@@ -94,6 +94,7 @@ struct LeaderTx
     std::vector<uint32_t> seqs;   //!< application packets carried
     uint8_t nNack{0};             //!< NACKs received for this transmission
     int8_t decision{-1};          //!< -1 pending, 0 NACK (retx kept), 1 implicit ACK, 2 stale
+    double decideAtS{0.0};        //!< time of the decision (its PSFCH occasion + 1 slot + 13.5 sym)
 };
 
 class NackOnlyHarqController
@@ -126,6 +127,16 @@ class NackOnlyHarqController
     uint64_t nNackDecision{0};    //!< decisions "NACK -> keep retransmission"
     uint64_t nStale{0};           //!< decisions skipped (HARQ id already reused)
     uint64_t nSlotMisaligned{0};  //!< MAC trace not at a slot boundary (sanity)
+    uint64_t nAckNoRetxLeft{0};   //!< SPS: implicit ACK not delivered, no reserved retx left
+
+    /**
+     * SPS leader: deliver an implicit ACK only while the TB's reserved
+     * retransmissions of the current period remain. After the last of them the
+     * ACK has nothing to cancel, and the HARQ process (kept across periods) may
+     * already hold the next period's TB: the MAC would erase that grant and the
+     * HARQ entity flush that TB.
+     */
+    void SetSpsSafeAck(bool on) { m_spsSafeAck = on; }
 
     // hooks used by the SAP wrappers
     void OnPsschPdu(Ptr<Packet> p, uint32_t dstL2Id);
@@ -140,6 +151,7 @@ class NackOnlyHarqController
     std::vector<Ptr<NrUeNetDevice>> m_members;
     uint32_t m_dst{254};
     bool m_option1{true};
+    bool m_spsSafeAck{false};
     uint8_t m_gap{3};
     uint8_t m_mu{1};
     Time m_slot;

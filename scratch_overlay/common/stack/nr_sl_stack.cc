@@ -446,7 +446,7 @@ BuildSlStack(const SlStackParams& p,
     psschTxList.slPsschTxParameters[0] = psschParams;
 
     LteRrcSap::SlUeSelectedConfig slUeSel;
-    slUeSel.slProbResourceKeep = 0.0;
+    slUeSel.slProbResourceKeep = p.probResourceKeep;
     slUeSel.slPsschTxConfigList = psschTxList;
 
     LteRrcSap::SidelinkPreconfigNr slPreConfig;

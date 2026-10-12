@@ -26,6 +26,16 @@ skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs
 re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Server campaign
 done 2026-10-12; verdicts in §7.8.**
 
+**Update (2026-10-12, later).** Standard Mode-2 grant types and the sensing fixes,
+implemented on `coop-arms` (README "Standard Mode-2 grant types and sensing fixes"),
+all opt-in: `--spsReselectOnMisfit` (TS 38.321 5.22.1.1 reselection when an SDU does not
+fit the SPS grant), `--slDynExclusion` (D1, dynamic grants apply the step-6 exclusion),
+`--slProjectAnnounced` (D2, announced current-period / dynamic retransmissions are
+projected), with the existing `--leaderSps`. All off: byte-identical to `7fd137f` (9
+pilots). Option-1 wrapper fixed for SPS (an implicit ACK after a period's last reserved
+retransmission could erase the next period's grant and flush its TB). Pilots (seed 1) and
+the decision on the full re-run (`run_rerun_sps.sh`): README section above / §7.9.
+
 **Update (2026-10-11, evening).**
 - **t-Reordering 0 re-run done on the server** (reference): campaign 270/270 runs
   (`results/campaign_rlc0`, 3 seeds) and variants (`results/variants_rlc0`: MCS 14, dedicated,
@@ -133,7 +143,8 @@ Liang–Barsky segment test). Roundabout buildings make NLOS reachable.
    and never re-selects when a larger SDU arrives (3GPP would). Pilot with SPS: every 300 B
    periodic1 packet was split across two 100 ms periods, mean delay 94 ms, 28 % within PDB.
    `--leaderSps=true` reproduces it. Background periodic1 keeps SPS (its segmentation only shifts
-   load slightly and is not measured).
+   load slightly and is not measured). *Since 2026-10-12* `--spsReselectOnMisfit=true`
+   adds the 3GPP reselection (every SPS UE); with it the SPS leader's delay is a few ms (§7.9).
 3. **Densities capped at 60** because the roundabout gridlocks above ~70–80 vehicles in the
    500 m area; same N used in both scenarios. Measured ≈ 0.73 % of the pool per background
    vehicle → background CBR ≈ 0.11 / 0.22 / 0.32 / 0.43 for N = 15/30/45/60; the leader adds
@@ -440,6 +451,19 @@ Verdicts (server, 10 seeds):
   footprint question: the leader's own selections ignore what it senses.
 - Highway helper sweep skipped (pre-registered condition not met).
 
+### 7.9 Standard grant types and sensing fixes: pilots (2026-10-12, laptop, seed 1)
+
+README "Standard Mode-2 grant types and sensing fixes / Pilots" (table). In short: the SPS
+leader with the misfit reselection has a few-ms delay (not ~94 ms); 1.4-1.6 (periodic1) /
+3.5-3.6 (periodic2) reselections/s, about half of them misfits; D1 + D2 cut the highway
+leader's collision rate 0.25 -> 0.07 (periodic1) and 0.39-0.46 -> 0.20 (periodic2);
+periodic2 SPS grants reserve only 1.44 slots under load (2.24 dynamic), so the SPS
+periodic2 arm loses retransmissions (PRR -0.03 with D1 + D2). Flags off: byte-identical
+(9 short + 4 full + 3 full coop pilots). Every coop check passes under SPS. Later: sl-ProbResourceKeep 0.8 (5G-LENA never applied keep: implemented),
+14-entry sl-ResourceReservePeriodList, leader NACK attribution fixed for SPS; the
+periodic2 retransmission-slot loss is SPS-specific (step 6 over C_resel periods; a
+dynamic leader with D1 + D2 keeps 2.11 slots).
+
 ## 8. Limitations / caveats
 
 - Single MCS (14). High MCS + power spread over wide allocations (6 dBm/PRB at 5 subchannels)
@@ -477,7 +501,17 @@ Verdicts (server, 10 seeds):
   0. Also, retransmission reservations announced in an SCI (TRIV gaps) are projected only
   into the next period, not the current one. The collision breakdown (`_coll.csv` column
   `why`, run columns `cc_*`) shows the consequence: reservations sensed well above the
-  threshold and still selected (`not_excluded`).
+  threshold and still selected (`not_excluded`). *Opt-in fixes since 2026-10-12*:
+  `--slDynExclusion` (D1) and `--slProjectAnnounced` (D2), README "Standard Mode-2 grant
+  types"; no campaign result uses them yet.
+- **periodic2 on SB-SPS loses retransmission slots under load (accepted, 2026-10-12)**:
+  an SPS candidate must be free of sensed reservations at y + j P' for every j < C_resel =
+  10 x counter (TS 38.214 sec. 8.1.4 step 6); with 10 ms periods, a loaded 45 % TDD pool and
+  TBs of 4-5 of the 5 subchannels, few candidates survive (3.2 vs 10.9 for a dynamic grant
+  with D1 + D2) and the leader reserves ~1.5 slots per TB instead of ~2.1-2.2, so most
+  periodic2 TBs get at most one retransmission (highway N 45, seed 1). Standard behaviour,
+  kept as a property of the configuration in the SB-SPS re-run; periodic1 is not affected
+  (2.9 slots).
 - `--collCond` (link condition leader / helper -> interferer in `_coll.csv`) queries the
   channel-condition model for extra pairs, which can change its random draws: used only in
   fresh campaigns (step 2), never mixed seed by seed with runs made without it.

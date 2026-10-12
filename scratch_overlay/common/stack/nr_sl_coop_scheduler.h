@@ -69,6 +69,8 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
     uint32_t m_additiveRelays{0}; //!< additive arm: helper copies on its own resources (0 = off)
     SfnSf m_pendingDeadline;          //!< deadline of the TB being allocated
     std::map<uint8_t, SfnSf> m_deadlineOfHarq; //!< HARQ id -> packet deadline
+    std::map<uint8_t, uint64_t>
+        m_spsDeadlineOffset; //!< SPS HARQ id -> deadline - first new-data slot (slots)
     void DoRemoveNrSlLcConfigReq(uint8_t lcid, uint32_t dstL2Id) override;
 
     void DoSchedNrSlRlcBufferReq(
@@ -91,6 +93,47 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
      * \return True if the LC passes the check, false otherwise
      */
     bool TxResourceReselectionCheck(const SfnSf& sfn, uint32_t dstL2Id, uint8_t lcId);
+
+    /**
+     * \brief sl-ProbResourceKeep (TS 38.321 sec. 5.22.1.1) at the expiry of an SPS
+     *        grant's reselection counter, i.e. when its last reserved period has just
+     *        been published: with that probability the resource is kept and the same
+     *        slots are reserved for another counter's worth of periods (the counter
+     *        drawn at the selection, as in 5G-LENA's own keep branch, which is never
+     *        reached because the grant is erased with its last period)
+     *
+     * \param sfn The SfnSf
+     * \param grant The SPS grant, with no slot left
+     * \param published The grant of the period just published
+     * \return True if the resource is kept
+     */
+    bool KeepSpsResource(const SfnSf& sfn,
+                         GrantInfo& grant,
+                         const NrSlUeMac::NrSlGrant& published);
+
+    /**
+     * \brief SPS grant vs the LC's pending data (NrSlUeMac::SpsReselectOnMisfit,
+     *        TS 38.321 sec. 5.22.1.1): if the data exceeds what the grant allocates
+     *        to the LC but fits its TB at the configured MCS, the allocation is
+     *        enlarged; if it exceeds the TB, the grant is cleared so that a new one
+     *        is selected for the data (the HARQ process is kept until the slots
+     *        already published to the MAC are used)
+     *
+     * \param sfn The SfnSf
+     * \param dstL2Id The destination layer 2 ID
+     * \param lcId The logical channel ID
+     * \param lcBufferSize The LC buffer size
+     * \param grants The grants of the destination
+     * \param itGrant The SPS grant of the LC
+     * \return True if the grant was cleared (the LC passes the reselection check)
+     */
+
+    bool SpsMisfitCheck(const SfnSf& sfn,
+                        uint32_t dstL2Id,
+                        uint8_t lcId,
+                        uint32_t lcBufferSize,
+                        std::vector<GrantInfo>& grants,
+                        std::vector<GrantInfo>::iterator itGrant);
     /**
      * \brief Select the destinations and logical channels that need scheduling
      *

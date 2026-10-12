@@ -287,6 +287,7 @@ NackOnlyHarqController::OnPsschScheduling(SlPsschUeMacStatParameters p)
     // NACKs reach the MAC at  t(m) + 13 sym (end of PSFCH) + 1 slot;
     // decide half a symbol later, before slot m + 2 starts.
     const Time decideAt = m_slot * static_cast<int64_t>(k + 1) + m_sym * 13 + m_sym / 2;
+    m_txs[idx].decideAtS = (Simulator::Now() + decideAt).GetSeconds();
     Simulator::Schedule(decideAt, &NackOnlyHarqController::Decide, this, idx);
 }
 
@@ -303,19 +304,31 @@ NackOnlyHarqController::OnPsfch(uint32_t nodeId, const SlHarqInfo& info)
         return;
     }
     ++nNackRx;
-    // attribute the NACK to the latest pending transmission of this HARQ id
+    // attribute the NACK to the pending transmission of this HARQ id whose
+    // PSFCH occasion this is: the one decided next. A PSFCH carries no HARQ id
+    // (TS 38.213 sec. 16.3: the occasion and PRB identify the PSSCH); with SPS
+    // the HARQ id is the same in every period, so the latest pending
+    // transmission can be the next period's TB while this NACK is for the last
+    // retransmission of the previous one. With one pending transmission per
+    // HARQ id (dynamic grants) both rules pick the same one.
+    const double now = Simulator::Now().GetSeconds();
+    LeaderTx* best = nullptr;
     for (size_t i = m_txs.size(); i-- > 0;)
     {
         LeaderTx& tx = m_txs[i];
-        if (tx.harqId == info.m_harqProcessId && tx.decision < 0 &&
-            tx.tS < Simulator::Now().GetSeconds())
+        if (tx.harqId == info.m_harqProcessId && tx.decision < 0 && tx.tS < now &&
+            (!best || tx.decideAtS < best->decideAtS))
         {
-            if (tx.nNack < 255)
-            {
-                ++tx.nNack;
-            }
-            return;
+            best = &tx;
         }
+        if (now - tx.tS > 0.1)
+        {
+            break; // older than any pending decision
+        }
+    }
+    if (best && best->nNack < 255)
+    {
+        ++best->nNack;
     }
 }
 
@@ -340,6 +353,11 @@ NackOnlyHarqController::Decide(size_t idx)
     ++nImplicitAck;
     if (!m_option1)
     {
+        return;
+    }
+    if (m_spsSafeAck && !m_mac->IsSlRetxPending(m_dst, tx.harqId))
+    {
+        ++nAckNoRetxLeft;
         return;
     }
     // Option 1: no NACK => positive acknowledgement. Deliver it through the
