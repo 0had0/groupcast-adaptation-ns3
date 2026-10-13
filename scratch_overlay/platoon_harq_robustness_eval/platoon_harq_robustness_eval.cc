@@ -38,10 +38,12 @@
 //   <out>_pkt.csv      one row per (packet, member)            [--writePkt]
 //   <out>_ltx.csv      one row per leader PSSCH transmission   [--writePkt]
 
+#include "helper_select.h"
 #include "nack_only_harq.h"
 #include "sumo_buildings.h"
 
 #include "common/channel/geometric_channel.h"
+#include "common/channel/three-gpp-geometric-nlosv.h"
 #include "common/flows/groupcast_flows.h"
 #include "common/mcd/mcr_nack_only_gate.h"
 #include "common/stack/nr_sl_coop_scheduler.h"
@@ -49,6 +51,8 @@
 #include "common/traffic/custom-traffic-application.h"
 
 #include "ns3/applications-module.h"
+#include "ns3/building-list.h"
+#include "ns3/building.h"
 #include "ns3/core-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
@@ -200,6 +204,45 @@ struct TxSide
     // road segment of the leader / tail at the transmission (Segment())
     std::vector<int8_t> legSeg;
     std::vector<int8_t> tailSeg;
+    // --writeAtt: deterministic link geometry at the transmission (GeoCond():
+    // 0 building, 1 vehicle box, 2 LOS): transmitter -> member, helper -> member,
+    // leader -> helper
+    std::vector<std::vector<int8_t>> geoTx;
+    std::vector<std::vector<int8_t>> geoHelper;
+    std::vector<int8_t> geoLH;
+    // member k -> last member, every member as a candidate helper (leader tx only)
+    std::vector<std::vector<int8_t>> geoToTail;
+};
+
+/// --writeAllTx: one PSSCH transmission of any UE
+struct TxLogRow
+{
+    double t;
+    uint32_t node;
+    uint16_t rbStart;
+    uint16_t rbLen;
+    uint8_t harqId;
+    uint8_t ndi;
+    uint8_t rv;
+    uint32_t dst;
+    float x, y;
+};
+
+/// --writeGrants: a grant created, an SPS resource kept, or an SPS misfit
+struct GrantLog
+{
+    double t;
+    uint32_t node;
+    char ev;           // 'c' created, 'k' kept, 'm' misfit
+    uint8_t sps;
+    uint16_t rriMs;
+    int64_t firstSlot; // normalized SFN of the first slot (created)
+    uint16_t sbStart;
+    uint16_t sbLen;
+    uint16_t slots;    // created: slots per period; kept: new counter; misfit: allocated B
+    uint32_t bytes;    // created: allocated bytes; misfit: LC buffer
+    uint32_t extra;    // created: reselection counter; misfit: TB capacity
+    uint8_t flag;      // misfit: 1 = reselected, 0 = enlarged
 };
 
 /// A NACK a member sent (forwarded by the Option-1 gate to its PHY)
@@ -277,6 +320,17 @@ struct Global
     std::vector<DivRow> div;
     // collCond: (slotAbs, interferer) -> link condition leader / helper -> interferer
     bool collCond{false};
+    bool writeAtt{false};
+    bool writeAllTx{false};
+    bool writeGrants{false};
+    // per-TB helper selection (--helperSelect): helper copies may come from any member
+    bool hselOn{false};
+    std::unordered_set<uint16_t> memberRnti;
+    std::unordered_map<uint8_t, uint32_t> chosenOfHarq; // HARQ id -> member chosen at publish
+    std::vector<uint32_t> chosenOfLeaderTx;              // leader tx index -> chosen member
+    Ptr<ThreeGppGeometricNlosvModel> geom; // deterministic vehicle-blocking test
+    std::vector<TxLogRow> txLog;
+    std::vector<GrantLog> grantLog;
     std::unordered_map<uint64_t, std::pair<int8_t, int8_t>> condOf;
     std::unordered_set<int64_t> condSlotsDone;
     uint32_t numMembers{8};
@@ -450,6 +504,44 @@ inline Vector PosOf(uint32_t node);
 void RecordCollCond(int64_t slotAbs);
 void HnRecordUse(uint32_t sideIdx, const SlPsschUeMacStatParameters& p, size_t idx);
 
+/// Deterministic link geometry, no channel-model query (so no random draw):
+/// 0 = a building intersects a -> b, 1 = another vehicle's box does, 2 = LOS
+int8_t
+GeoCond(Ptr<const MobilityModel> a, Ptr<const MobilityModel> b)
+{
+    const Vector pa = a->GetPosition();
+    const Vector pb = b->GetPosition();
+    for (auto it = BuildingList::Begin(); it != BuildingList::End(); ++it)
+    {
+        if ((*it)->IsIntersect(pa, pb))
+        {
+            return 0;
+        }
+    }
+    if (g.geom && g.geom->IsBlockedByVehicle(a, b))
+    {
+        return 1;
+    }
+    return 2;
+}
+
+/// --writeAllTx: every PSSCH transmission of every UE
+void
+OnTxLog(uint32_t node, SlPsschUeMacStatParameters p)
+{
+    const Vector pos = g.nodes.Get(node)->GetObject<MobilityModel>()->GetPosition();
+    g.txLog.push_back({Simulator::Now().GetSeconds(),
+                       node,
+                       p.rbStart,
+                       p.rbLength,
+                       p.harqId,
+                       p.ndi,
+                       p.rv,
+                       p.dstL2Id,
+                       static_cast<float>(pos.x),
+                       static_cast<float>(pos.y)});
+}
+
 /// Runs after the side's controller's own SlPsschScheduling callback
 /// (connected later), so the LeaderTx record of this transmission exists.
 void
@@ -468,7 +560,18 @@ OnPlatoonPsschTx(uint32_t sideIdx, SlPsschUeMacStatParameters p)
     S.dist.resize(idx + 1, std::vector<float>(g.numMembers, 0.0f));
     std::vector<int8_t> c(g.numMembers, -1);
     std::vector<float> d(g.numMembers, 0.0f);
-    Ptr<MobilityModel> a = g.nodes.Get(S.node)->GetObject<MobilityModel>();
+    Ptr<MobilityModel> a = g.nodes.Get(txs[idx].node)->GetObject<MobilityModel>();
+    uint32_t hNode = g.helperNode; // this TB's helper
+    if (g.hselOn && sideIdx == 0)
+    {
+        auto itc = g.chosenOfHarq.find(p.harqId);
+        if (itc != g.chosenOfHarq.end())
+        {
+            hNode = itc->second;
+        }
+        g.chosenOfLeaderTx.resize(idx + 1, 0);
+        g.chosenOfLeaderTx[idx] = hNode;
+    }
     for (uint32_t m = 0; m < g.numMembers; ++m)
     {
         Ptr<MobilityModel> b = g.nodes.Get(m + 1)->GetObject<MobilityModel>();
@@ -481,6 +584,39 @@ OnPlatoonPsschTx(uint32_t sideIdx, SlPsschUeMacStatParameters p)
     }
     S.cond[idx] = std::move(c);
     S.dist[idx] = std::move(d);
+    if (g.writeAtt)
+    {
+        S.geoTx.resize(idx + 1);
+        S.geoHelper.resize(idx + 1);
+        S.geoLH.resize(idx + 1, -1);
+        S.geoTx[idx].assign(g.numMembers, -1);
+        S.geoHelper[idx].assign(g.numMembers, -1);
+        Ptr<MobilityModel> h = hNode ? g.nodes.Get(hNode)->GetObject<MobilityModel>() : nullptr;
+        for (uint32_t m = 0; m < g.numMembers; ++m)
+        {
+            Ptr<MobilityModel> b = g.nodes.Get(m + 1)->GetObject<MobilityModel>();
+            S.geoTx[idx][m] = GeoCond(a, b);
+            if (h && m + 1 != hNode)
+            {
+                S.geoHelper[idx][m] = GeoCond(h, b);
+            }
+        }
+        if (h)
+        {
+            S.geoLH[idx] = GeoCond(g.nodes.Get(0)->GetObject<MobilityModel>(), h);
+        }
+        if (sideIdx == 0)
+        {
+            S.geoToTail.resize(idx + 1);
+            S.geoToTail[idx].assign(g.numMembers, -1);
+            Ptr<MobilityModel> tail = g.nodes.Get(g.numMembers)->GetObject<MobilityModel>();
+            for (uint32_t k = 1; k < g.numMembers; ++k)
+            {
+                S.geoToTail[idx][k - 1] =
+                    GeoCond(g.nodes.Get(k)->GetObject<MobilityModel>(), tail);
+            }
+        }
+    }
     S.legSeg.resize(idx + 1, -1);
     S.tailSeg.resize(idx + 1, -1);
     S.legSeg[idx] = Segment(PosOf(0));
@@ -767,6 +903,10 @@ OnMemberPsschRx(uint32_t member, SlRxDataPacketTraceParams p)
             sideIdx = k;
         }
     }
+    if (sideIdx < 0 && g.hselOn && g.numSides > 1 && g.memberRnti.count(p.m_txRnti))
+    {
+        sideIdx = 1; // a copy relayed by a member other than --helper
+    }
     if (sideIdx < 0)
     {
         return;
@@ -784,7 +924,8 @@ OnMemberPsschRx(uint32_t member, SlRxDataPacketTraceParams p)
     size_t best = SIZE_MAX;
     for (size_t idx : it->second)
     {
-        if (txs[idx].tS <= now + 1e-9 && now - txs[idx].tS < 0.01)
+        if (txs[idx].tS <= now + 1e-9 && now - txs[idx].tS < 0.01 &&
+            (!g.hselOn || txs[idx].rnti == p.m_txRnti))
         {
             best = idx;
         }
@@ -1048,8 +1189,9 @@ std::vector<std::pair<double, uint8_t>> g_kept; // (t, role): SPS resource kept
 std::vector<MisfitEvent> g_misfits;
 
 void
-OnGrantCreated(uint32_t role, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t /*psfchPeriod*/)
+OnGrantCreated(uint32_t node, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t /*psfchPeriod*/)
 {
+    const uint32_t role = (node == 0) ? 0 : 1;
     GrantEvent e;
     e.t = Simulator::Now().GetSeconds();
     e.role = static_cast<uint8_t>(role);
@@ -1064,6 +1206,19 @@ OnGrantCreated(uint32_t role, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t 
         }
     }
     g_grants.push_back(e);
+    if (g.writeGrants)
+    {
+        GrantLog l{e.t, node, 'c', static_cast<uint8_t>(e.sps), 0, -1, 0, e.subch, e.slots,
+                   e.bytes, 0, 0};
+        l.rriMs = static_cast<uint16_t>(gi.rri.GetMilliSeconds());
+        if (!gi.slotAllocations.empty())
+        {
+            l.firstSlot = static_cast<int64_t>(gi.slotAllocations.begin()->sfn.Normalize());
+            l.sbStart = gi.slotAllocations.begin()->slPsschSubChStart;
+        }
+        l.extra = e.sps ? gi.slResoReselCounter : 0;
+        g.grantLog.push_back(l);
+    }
     if (hn.on && role == 0)
     {
         HnGrantCreated(gi);
@@ -1071,9 +1226,15 @@ OnGrantCreated(uint32_t role, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t 
 }
 
 void
-OnSpsKept(uint32_t role, uint32_t /*dstL2Id*/, uint8_t /*counter*/)
+OnSpsKept(uint32_t node, uint32_t /*dstL2Id*/, uint8_t counter)
 {
+    const uint32_t role = (node == 0) ? 0 : 1;
     g_kept.emplace_back(Simulator::Now().GetSeconds(), static_cast<uint8_t>(role));
+    if (g.writeGrants)
+    {
+        g.grantLog.push_back(
+            {Simulator::Now().GetSeconds(), node, 'k', 1, 0, -1, 0, 0, counter, 0, 0, 0});
+    }
     if (hn.on && role == 0)
     {
         HnKept();
@@ -1081,15 +1242,31 @@ OnSpsKept(uint32_t role, uint32_t /*dstL2Id*/, uint8_t /*counter*/)
 }
 
 void
-OnSpsMisfit(uint32_t role,
+OnSpsMisfit(uint32_t node,
             uint32_t /*dstL2Id*/,
             uint8_t /*lcId*/,
-            uint32_t /*bufferSize*/,
-            uint32_t /*allocated*/,
-            uint32_t /*capacity*/,
+            uint32_t bufferSize,
+            uint32_t allocated,
+            uint32_t capacity,
             bool reselected)
 {
+    const uint32_t role = (node == 0) ? 0 : 1;
     g_misfits.push_back({Simulator::Now().GetSeconds(), static_cast<uint8_t>(role), reselected});
+    if (g.writeGrants)
+    {
+        g.grantLog.push_back({Simulator::Now().GetSeconds(),
+                              node,
+                              'm',
+                              1,
+                              0,
+                              -1,
+                              0,
+                              0,
+                              static_cast<uint16_t>(std::min<uint32_t>(allocated, 65535)),
+                              bufferSize,
+                              capacity,
+                              static_cast<uint8_t>(reselected)});
+    }
 }
 
 std::string
@@ -1171,6 +1348,22 @@ main(int argc, char* argv[])
     uint32_t helper = 0;            // member (1..numPlatoon-1) acting as helper
     uint32_t relayBudget = 1;       // additive: helper copies per TB
     bool collCond = false;          // _coll.csv: link condition leader / helper -> interferer
+    // validation logs (opt-in, no random draw: outputs otherwise unchanged)
+    bool writeAtt = false;          // _att.csv: platoon transmission x member, with geometry
+    bool writeAllTx = false;        // _alltx.csv: every PSSCH transmission of every UE
+    bool writeGrants = false;       // _grants.csv: every grant created / kept / misfit
+    // per-TB helper selection (Kuo et al. 2021), on top of a cooperative arm:
+    //   off     the static --helper for every TB (default)
+    //   static  the static --helper through the selector (tests the selector path)
+    //   kuo     max-mean GPRR, distance-only LOS probability (TR 37.885 urban)
+    //   map     max-mean GPRR, link state from the building map + CAM positions
+    std::string helperSelect = "off";
+    bool helperBlind = false;       // relay in every handed-over slot (no NACK needed)
+    double camPeriodMs = 100.0;     // CAM period: positions known to the leader
+    double helperDecisionMs = 0.0;  // positions usable only this long after sampling
+    bool helperSelectShadow = false;// compute + log the choice, signal --helper instead
+    double kuoPlMaxDb = 0.0;        // link budget override (0 = from power, noise, SINR)
+    double kuoSinrReqDb = 8.0;      // MCS 14 decoding threshold of the link budget
     // Standard Mode-2 options (all off = stock 5G-LENA behaviour):
     //   spsReselectOnMisfit  SPS reselection when an RLC SDU does not fit the grant
     //                        (TS 38.321 sec. 5.22.1.1) instead of segmentation
@@ -1232,6 +1425,31 @@ main(int argc, char* argv[])
                  helperMode);
     cmd.AddValue("helper", "member acting as helper (also the sensing observer)", helper);
     cmd.AddValue("relayBudget", "additive arm: helper copies per TB", relayBudget);
+    cmd.AddValue("helperSelect", "per-TB helper selection: off | static | kuo | map",
+                 helperSelect);
+    cmd.AddValue("helperBlind", "the helper relays in every handed-over slot (no NACK needed)",
+                 helperBlind);
+    cmd.AddValue("camPeriodMs", "CAM period (ms): member positions known to the leader",
+                 camPeriodMs);
+    cmd.AddValue("helperDecisionMs",
+                 "positions usable by the selection only this long (ms) after sampling",
+                 helperDecisionMs);
+    cmd.AddValue("helperSelectShadow",
+                 "compute and log the per-TB choice but signal --helper (non-interference test)",
+                 helperSelectShadow);
+    cmd.AddValue("kuoPlMaxDb", "selection link budget (dB); 0 = from power, noise and SINR",
+                 kuoPlMaxDb);
+    cmd.AddValue("kuoSinrReqDb", "selection link budget: SINR needed at MCS 14 (dB)",
+                 kuoSinrReqDb);
+    cmd.AddValue("writeAtt",
+                 "write <out>_att.csv: every platoon transmission (leader, helper copies) x "
+                 "member: status, SINR, channel condition, deterministic link geometry",
+                 writeAtt);
+    cmd.AddValue("writeAllTx", "write <out>_alltx.csv: every PSSCH transmission of every UE",
+                 writeAllTx);
+    cmd.AddValue("writeGrants",
+                 "write <out>_grants.csv: every grant created, SPS resource kept, SPS misfit",
+                 writeGrants);
     cmd.AddValue("collCond",
                  "log the link condition leader / helper -> interferer of collided attempts "
                  "(extra channel-condition queries can change the random draws: step-2 runs)",
@@ -1319,7 +1537,7 @@ main(int argc, char* argv[])
     if (coop)
     {
         Config::SetDefault("ns3::NrSlUeMac::EnableChainedRes", BooleanValue(true));
-        Config::SetDefault("ns3::NrSlUeMac::HelperNackTriggered", BooleanValue(true));
+        Config::SetDefault("ns3::NrSlUeMac::HelperNackTriggered", BooleanValue(!helperBlind));
     }
 
     RngSeedManager::SetSeed(seed);
@@ -1424,9 +1642,20 @@ main(int argc, char* argv[])
                                           : BandwidthPartInfo::V2V_Urban;
     SlStackCtx stack = BuildSlStack(sp, geomCfg, nodes);
     g.ccm = stack.channelConditionModel;
+    g.geom = DynamicCast<ThreeGppGeometricNlosvModel>(stack.channelConditionModel);
+    NS_ABORT_MSG_IF(writeAtt && !g.geom, "--writeAtt needs the geometric NLOSv channel wrapper");
     g.roundabout = (scenario == "roundabout");
     g.helperNode = helper;
     g.collCond = collCond;
+    g.writeAtt = writeAtt;
+    g.writeAllTx = writeAllTx;
+    g.writeGrants = writeGrants;
+    NS_ABORT_MSG_IF(helperSelect != "off" && helperSelect != "static" && helperSelect != "kuo" &&
+                        helperSelect != "map",
+                    "bad --helperSelect " << helperSelect);
+    NS_ABORT_MSG_IF(helperSelect != "off" && !coop, "--helperSelect needs a cooperative arm");
+    NS_ABORT_MSG_IF(helperBlind && !coop, "--helperBlind needs a cooperative arm");
+    g.hselOn = (helperSelect != "off");
 
     // Option 1 at the receivers: NACK only, inside the MCR
     InstallMcrNackOnlyGate(stack.ueNetDev, mcr, true);
@@ -1472,6 +1701,15 @@ main(int argc, char* argv[])
         Ptr<NrSlUeMacScheduler> csBase = cs;
         csBase->AssignStreams(stack.stream + 100000);
     }
+    if (writeAllTx)
+    {
+        for (uint32_t i = 0; i < nodes.GetN(); ++i)
+        {
+            nodes.Get(i)->GetDevice(0)->GetObject<NrUeNetDevice>()->GetMac(0)->TraceConnectWithoutContext(
+                "SlPsschScheduling",
+                MakeBoundCallback(&OnTxLog, i));
+        }
+    }
     // grant statistics of the leader (0) and the background (1); members only relay
     for (uint32_t i = 0; i < nodes.GetN(); ++i)
     {
@@ -1486,10 +1724,9 @@ main(int argc, char* argv[])
         Ptr<NrSlUeMacScheduler> sch = pv.Get<NrSlUeMacScheduler>();
         if (sch)
         {
-            const uint32_t role = (i == 0) ? 0 : 1;
-            sch->TraceConnectWithoutContext("GrantCreated", MakeBoundCallback(&OnGrantCreated, role));
-            sch->TraceConnectWithoutContext("SpsMisfit", MakeBoundCallback(&OnSpsMisfit, role));
-            sch->TraceConnectWithoutContext("SpsResourceKept", MakeBoundCallback(&OnSpsKept, role));
+            sch->TraceConnectWithoutContext("GrantCreated", MakeBoundCallback(&OnGrantCreated, i));
+            sch->TraceConnectWithoutContext("SpsMisfit", MakeBoundCallback(&OnSpsMisfit, i));
+            sch->TraceConnectWithoutContext("SpsResourceKept", MakeBoundCallback(&OnSpsKept, i));
             if (hiddenNode && i == 0)
             {
                 sch->TraceConnectWithoutContext("GrantPublished", MakeCallback(&OnGrantPublished));
@@ -1587,6 +1824,25 @@ main(int argc, char* argv[])
             hmac->TraceConnectWithoutContext("SlPsschScheduling",
                                              MakeBoundCallback(&OnPlatoonPsschTx, 1u));
             hmac->TraceConnectWithoutContext("CoopRelay", MakeCallback(&OnCoopRelay));
+            if (g.hselOn)
+            {
+                // per-TB helper: every member may relay; the same observe-only
+                // controller records their copies (after its own trace callback,
+                // OnPlatoonPsschTx of the same MAC)
+                for (uint32_t m = 1; m <= numMembers; ++m)
+                {
+                    if (m == helper)
+                    {
+                        continue;
+                    }
+                    NS_ABORT_MSG_IF(nodes.Get(m)->GetId() != m, "node index != node id");
+                    hctl.AddObservedDevice(memberDevs[m - 1], m);
+                    Ptr<NrSlUeMac> mm = memberDevs[m - 1]->GetMac(0)->GetObject<NrSlUeMac>();
+                    mm->TraceConnectWithoutContext("SlPsschScheduling",
+                                                   MakeBoundCallback(&OnPlatoonPsschTx, 1u));
+                    mm->TraceConnectWithoutContext("CoopRelay", MakeCallback(&OnCoopRelay));
+                }
+            }
         }
         if (hiddenNode)
         {
@@ -1600,6 +1856,21 @@ main(int argc, char* argv[])
             g.leaderMac->SetSensingPeer(hn.helperMac, iucOracle);
             g.leaderMac->TraceConnectWithoutContext("SensingGap", MakeCallback(&OnSensingGap));
         }
+    }
+
+    HelperSelector hsel;
+    if (g.hselOn)
+    {
+        HelperSelector::Config hc;
+        hc.policy = helperSelect;
+        hc.camPeriodS = camPeriodMs / 1000.0;
+        hc.decisionDelayS = helperDecisionMs / 1000.0;
+        hc.fallback = helper;
+        hc.shadow = helperSelectShadow;
+        hc.plMaxDb = kuoPlMaxDb;
+        hc.sinrReqDb = kuoSinrReqDb;
+        hc.subchPrbs = subchPrbs;
+        hsel.Init(hc, nodes, numMembers, g.geom);
     }
 
     // poll until every UE has its RNTI (assigned by the MAC at run time)
@@ -1625,6 +1896,29 @@ main(int argc, char* argv[])
             if (coop && coopSched)
             {
                 coopSched->SetAttribute("HelperId", UintegerValue(g.side[1].rnti));
+                if (g.hselOn)
+                {
+                    for (uint32_t m = 1; m <= numMembers; ++m)
+                    {
+                        g.memberRnti.insert(rntiOfNode(m));
+                    }
+                    // called when the leader publishes a period's grant, after its
+                    // resource selection: only the SCI-2A helper id depends on it
+                    coopSched->SetHelperSelector(
+                        [&hsel, rntiOfNode](uint32_t dst, const SfnSf& ndi, uint8_t harq,
+                                            uint16_t nSubch) -> uint16_t {
+                            if (dst != 254)
+                            {
+                                return 0;
+                            }
+                            const uint32_t m = hsel.Choose(Simulator::Now().GetSeconds(),
+                                                           ndi.Normalize() * g.tSlot,
+                                                           harq,
+                                                           nSubch);
+                            g.chosenOfHarq[harq] = m;
+                            return rntiOfNode(m);
+                        });
+                }
             }
         }
     };
@@ -1769,7 +2063,7 @@ main(int argc, char* argv[])
                     }
                 }
             }
-            utx.push_back({1, j, helper, &htx[j], tb});
+            utx.push_back({1, j, htx[j].node, &htx[j], tb});
         }
     }
     std::stable_sort(utx.begin(), utx.end(), [](const UTx& a, const UTx& b) {
@@ -1877,6 +2171,10 @@ main(int argc, char* argv[])
                     side = s;
                 }
             }
+            if (side < 0 && g.hselOn && g.numSides > 1 && g.memberRnti.count(k.txRnti))
+            {
+                side = 1;
+            }
             auto it = txOfHarq.find({side, k.harqId});
             if (side < 0 || it == txOfHarq.end())
             {
@@ -1884,6 +2182,10 @@ main(int argc, char* argv[])
             }
             for (auto rit = it->second.rbegin(); rit != it->second.rend(); ++rit)
             {
+                if (g.hselOn && utx[*rit].x->rnti != k.txRnti)
+                {
+                    continue; // another member's copy on the same HARQ id
+                }
                 const double dt = k.t - utx[*rit].x->tS;
                 if (dt >= 0.0)
                 {
@@ -2673,6 +2975,88 @@ main(int argc, char* argv[])
         {
             writeTx(out + "_htx.csv", 1);
         }
+    }
+    if (writeAtt)
+    {
+        // one row per (platoon transmission, member): tb = the leader TB it carries
+        std::ofstream at(out + "_att.csv");
+        at << "side,t,slot_abs,tb,tx_in_tb,ndi,member,status,sinr_db,cond,dist_m,geo_tx,"
+              "geo_helper,geo_leader_helper,geo_member_tail\n";
+        for (int sideIdx = 0; sideIdx < g.numSides; ++sideIdx)
+        {
+            const TxSide& S = g.side[sideIdx];
+            const auto& txs = S.ctl->Txs();
+            for (size_t i = 0; i < txs.size() && i < S.phy.size(); ++i)
+            {
+                const LeaderTx& x = txs[i];
+                const size_t u = uOf[sideIdx][i];
+                const int64_t tb = (u < utx.size()) ? utx[u].tb : -1;
+                for (uint32_t m = 0; m < numMembers; ++m)
+                {
+                    const MemberRx& r = S.phy[i][m];
+                    at << sideIdx << ',' << std::fixed << std::setprecision(5) << x.tS << ','
+                       << x.slotAbs << ',' << tb << ',' << +x.txInTb << ',' << +x.ndi << ','
+                       << m + 1 << ',' << +r.status << ',' << std::setprecision(1) << r.sinrDb
+                       << ',' << +S.cond[i][m] << ',' << S.dist[i][m] << ','
+                       << (i < S.geoTx.size() ? +S.geoTx[i][m] : -1) << ','
+                       << (i < S.geoHelper.size() ? +S.geoHelper[i][m] : -1) << ','
+                       << (i < S.geoLH.size() ? +S.geoLH[i] : -1) << ','
+                       << (i < S.geoToTail.size() ? +S.geoToTail[i][m] : -1) << '\n';
+                }
+            }
+        }
+    }
+    if (writeAllTx)
+    {
+        std::ofstream ax(out + "_alltx.csv");
+        ax << "t,node,slot_abs,rb_start,rb_len,harq_id,ndi,rv,dst,x,y\n";
+        for (const TxLogRow& x : g.txLog)
+        {
+            ax << std::fixed << std::setprecision(5) << x.t << ',' << x.node << ','
+               << std::llround(x.t / g.tSlot) << ',' << x.rbStart << ',' << x.rbLen << ','
+               << +x.harqId << ',' << +x.ndi << ',' << +x.rv << ',' << x.dst << ','
+               << std::setprecision(1) << x.x << ',' << x.y << '\n';
+        }
+    }
+    if (g.hselOn)
+    {
+        std::ofstream hs(out + "_hsel.csv");
+        hs << "t_decide,t_ndi,decide_to_ndi_ms,cam_age_ms,harq_id,n_subch,pl_max_db,chosen,"
+              "applied";
+        for (uint32_t m = 1; m <= numMembers; ++m)
+        {
+            hs << ",score_m" << m;
+        }
+        hs << '\n';
+        for (const HelperSelectRow& r : hsel.Rows())
+        {
+            hs << std::fixed << std::setprecision(5) << r.tDecide << ',' << r.tNdi << ','
+               << std::setprecision(2) << (r.tNdi - r.tDecide) * 1e3 << ',' << r.camAge * 1e3
+               << ',' << +r.harqId << ',' << r.nSubch << ',' << std::setprecision(1) << r.plMaxDb
+               << ',' << r.chosen << ',' << r.applied;
+            hs << std::setprecision(4);
+            for (float sc : r.score)
+            {
+                hs << ',' << sc;
+            }
+            hs << '\n';
+        }
+    }
+    if (writeGrants)
+    {
+        std::ofstream gl(out + "_grants.csv");
+        gl << "t,node,event,sps,rri_ms,first_slot,sb_start,sb_len,slots_or_counter,bytes,extra,"
+              "reselected\n";
+        for (const GrantLog& l : g.grantLog)
+        {
+            gl << std::fixed << std::setprecision(5) << l.t << ',' << l.node << ',' << l.ev << ','
+               << +l.sps << ',' << l.rriMs << ',' << l.firstSlot << ',' << l.sbStart << ','
+               << l.sbLen << ',' << l.slots << ',' << l.bytes << ',' << l.extra << ','
+               << +l.flag << '\n';
+        }
+    }
+    if (writePkt)
+    {
         if (hn.on)
         {
             std::ofstream us(out + "_use.csv");
@@ -2768,6 +3152,11 @@ main(int argc, char* argv[])
     //    takes the TB as delivered)
     uint64_t lTx = 0, lTxColl = 0, lNew = 0, lRetx = 0, hTx = 0, hTxColl = 0;
     uint64_t relayNoNack = 0, relayNoRxNack = 0, relayNoDecode = 0;
+    // per-TB helper: copies by a member other than the TB's chosen helper (must be 0),
+    // and the delay of a TB's first copy after the leader's initial transmission
+    uint64_t relayByUnchosen = 0;
+    std::set<int64_t> tbRelayed;
+    std::vector<double> relayAfterInitial;
     uint64_t leaderTxNacked = 0, leaderNackMissed = 0, nackSentWin = 0;
     // arm-design checks: leader transmissions per TB (and a retransmission only
     // after a NACK the leader received, Option 1), a helper copy combined into a
@@ -2825,9 +3214,22 @@ main(int argc, char* argv[])
             }
             prev = v;
             if (utx[v].side == 0 && utx[v].idx < g.side[0].phy.size() &&
-                g.side[0].phy[utx[v].idx][helper - 1].status == 1)
+                g.side[0].phy[utx[v].idx][utx[u].node - 1].status == 1)
             {
                 decoded = true;
+            }
+        }
+        if (utx[u].tb >= 0 && static_cast<size_t>(utx[u].tb) < ltx.size())
+        {
+            const size_t tb0 = static_cast<size_t>(utx[u].tb);
+            if (g.hselOn && tb0 < g.chosenOfLeaderTx.size() &&
+                g.chosenOfLeaderTx[tb0] != utx[u].node)
+            {
+                ++relayByUnchosen;
+            }
+            if (tbRelayed.insert(utx[u].tb).second)
+            {
+                relayAfterInitial.push_back((x.tS - ltx[tb0].tS) * 1e3);
             }
         }
         if (prev == SIZE_MAX || nNackSent[prev] == 0)
@@ -3008,7 +3410,12 @@ main(int argc, char* argv[])
               "hn_succ_l,hn_succ_h,hn_succ_h_hidden,hn_succ_h_other,hn_succ_h_veto,"
               "hn_succ_h_noveto,hn_n_h_hidden,hn_n_h_veto,hn_n_h_noveto,hn_coll_rear_h,"
               "hn_coll_tail_h,hn_coll_rear_l,hn_chk_sel_in_l,hn_chk_age0_unexplained,"
-              "hn_chk_gap_mismatch,hn_chk_link,hn_chk_unlinked_uses,hn_chk_iuc_sel_in_h\n";
+              "hn_chk_gap_mismatch,hn_chk_link,hn_chk_unlinked_uses,hn_chk_iuc_sel_in_h,"
+              "helper_select,helper_blind,cam_period_ms,helper_decision_ms,helper_shadow,"
+              "relay_by_unchosen,helper_changes_per_s,helper_share_m1,helper_share_m2,"
+              "helper_share_m3,helper_share_m4,helper_share_m5,helper_share_m6,helper_share_m7,"
+              "helper_share_m8,hsel_cam_age_ms_mean,hsel_cam_age_ms_p95,"
+              "relay_after_initial_ms_mean,relay_after_initial_ms_p95\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -3113,7 +3520,50 @@ main(int argc, char* argv[])
            << ',' << HH.nVeto[0] << ',' << hnRatio(HH.collRear, HH.linked) << ','
            << hnRatio(HH.collTail, HH.linked) << ',' << hnRatio(HL.collRear, HL.linked) << ','
            << hnSelInL << ',' << hnAge0Unexplained << ',' << hnGapMismatch << ',' << hn.linkErr
-           << ',' << hnUnlinked << ',' << hnIucSelInH << '\n';
+           << ',' << hnUnlinked << ',' << hnIucSelInH;
+        {
+            // per-TB helper selection statistics (KPI window, by the TB's new transmission)
+            std::vector<uint32_t> applied;
+            std::vector<double> age;
+            for (const HelperSelectRow& r : hsel.Rows())
+            {
+                if (r.tNdi >= kpiStart && r.tNdi < kpiEnd)
+                {
+                    applied.push_back(r.applied);
+                    age.push_back(r.camAge * 1e3);
+                }
+            }
+            uint64_t changes = 0;
+            double share[9] = {0};
+            for (size_t k = 0; k < applied.size(); ++k)
+            {
+                changes += (k > 0 && applied[k] != applied[k - 1]) ? 1 : 0;
+                if (applied[k] >= 1 && applied[k] <= 8)
+                {
+                    share[applied[k]] += 1.0 / applied.size();
+                }
+            }
+            auto meanOf = [](const std::vector<double>& v) {
+                return v.empty() ? 0.0 : std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+            };
+            auto p95Of = [](std::vector<double> v) {
+                if (v.empty())
+                {
+                    return 0.0;
+                }
+                std::sort(v.begin(), v.end());
+                return v[std::min(v.size() - 1, static_cast<size_t>(0.95 * v.size()))];
+            };
+            rc << ',' << helperSelect << ',' << helperBlind << ',' << camPeriodMs << ','
+               << helperDecisionMs << ',' << helperSelectShadow << ',' << relayByUnchosen << ','
+               << changes / std::max(1e-9, kpiEnd - kpiStart);
+            for (int m = 1; m <= 8; ++m)
+            {
+                rc << ',' << share[m];
+            }
+            rc << ',' << meanOf(age) << ',' << p95Of(age) << ',' << meanOf(relayAfterInitial)
+               << ',' << p95Of(relayAfterInitial) << '\n';
+        }
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx

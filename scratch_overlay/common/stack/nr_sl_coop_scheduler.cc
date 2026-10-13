@@ -1553,6 +1553,30 @@ NrSlCoopScheduler::CreateSinglePduGrantInfo(const std::set<SlGrantResource>& slo
 }
 
 void
+NrSlCoopScheduler::SetHelperSelector(
+    std::function<uint16_t(uint32_t, const SfnSf&, uint8_t, uint16_t)> selector)
+{
+    m_helperSelector = std::move(selector);
+}
+
+uint16_t
+NrSlCoopScheduler::HelperFor(uint32_t dstL2Id,
+                             const SfnSf& ndiSlot,
+                             uint8_t harqId,
+                             uint16_t nSubch) const
+{
+    if (m_helperSelector)
+    {
+        const uint16_t rnti = m_helperSelector(dstL2Id, ndiSlot, harqId, nSubch);
+        if (rnti != 0)
+        {
+            return rnti;
+        }
+    }
+    return static_cast<uint16_t>(m_helperId);
+}
+
+void
 NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
 {
     NS_LOG_FUNCTION(this << sfn.Normalize());
@@ -1618,7 +1642,10 @@ NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
             {
                 // additive: the leader keeps all its transmissions, the helper may add
                 // copies on its own resources
-                grant.helperId = m_helperId;
+                grant.helperId = HelperFor(currentSlot.dstL2Id,
+                                           currentSlot.sfn,
+                                           grant.harqId,
+                                           currentSlot.slPsschSubChLength);
                 grant.helperOwnRes = true;
                 grant.helperAdditive = true;
                 grant.relayTxMax = static_cast<uint8_t>(m_additiveRelays);
@@ -1638,7 +1665,10 @@ NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
             else if (m_chainedResActive && m_helperId != 0 && m_helperOwnResources)
             {
                 // the helper selects its own relay resources: nothing is handed over
-                grant.helperId = m_helperId;
+                grant.helperId = HelperFor(currentSlot.dstL2Id,
+                                           currentSlot.sfn,
+                                           grant.harqId,
+                                           currentSlot.slPsschSubChLength);
                 grant.helperOwnRes = true;
                 grant.relayTxMax = static_cast<uint8_t>(
                     GetSlMaxTxTransNumPssch() > m_leaderTxCount
@@ -1658,7 +1688,10 @@ NrSlCoopScheduler::CheckForGrantsToPublish(const SfnSf& sfn)
                 }
             }
             else if (m_chainedResActive && m_helperId != 0 && grant.slotAllocations.size() > 1) {
-                grant.helperId = m_helperId;
+                grant.helperId = HelperFor(currentSlot.dstL2Id,
+                                           currentSlot.sfn,
+                                           grant.harqId,
+                                           currentSlot.slPsschSubChLength);
                 // the slots after the leader's first LeaderTxCount ones are handed to
                 // the helper (LeaderTxCount = 1: all but the first; = 2, split arm:
                 // the 2nd reserved retransmission only, none if only 2 slots fit)

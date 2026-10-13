@@ -95,6 +95,8 @@ struct LeaderTx
     uint8_t nNack{0};             //!< NACKs received for this transmission
     int8_t decision{-1};          //!< -1 pending, 0 NACK (retx kept), 1 implicit ACK, 2 stale
     double decideAtS{0.0};        //!< time of the decision (its PSFCH occasion + 1 slot + 13.5 sym)
+    uint32_t node{0};             //!< transmitting node (index in the node container)
+    uint16_t rnti{0};             //!< transmitting UE's RNTI
 };
 
 class NackOnlyHarqController
@@ -113,6 +115,15 @@ class NackOnlyHarqController
                  uint32_t dstL2Id,
                  bool option1Tx,
                  uint8_t minTimeGapPsfch);
+
+    /**
+     * Observe-only (option1Tx false) controllers: also record the platoon-destination
+     * transmissions of another device (e.g. every member that may relay as helper);
+     * each record carries its transmitting node and RNTI.
+     * @param dev       the device
+     * @param nodeIndex the device's node index (stored in LeaderTx::node)
+     */
+    void AddObservedDevice(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex);
 
     /// Application TagDecorator: stamps the next sequence number.
     void TagAppPacket(Ptr<Packet> p);
@@ -139,11 +150,12 @@ class NackOnlyHarqController
     void SetSpsSafeAck(bool on) { m_spsSafeAck = on; }
 
     // hooks used by the SAP wrappers
-    void OnPsschPdu(Ptr<Packet> p, uint32_t dstL2Id);
-    void OnPsfch(uint32_t nodeId, const SlHarqInfo& info);
+    void OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id);
+    void OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& info);
 
   private:
-    void OnPsschScheduling(SlPsschUeMacStatParameters p);
+    void Attach(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex);
+    void OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters p);
     void Decide(size_t idx);
 
     Ptr<NrUeNetDevice> m_leader;
@@ -158,12 +170,13 @@ class NackOnlyHarqController
     Time m_sym;
     uint32_t m_nextSeq{0};
 
-    NrSlUePhySapUser* m_origUser{nullptr};
-    NrSlUePhySapProvider* m_origProv{nullptr};
-    std::unique_ptr<NrSlUePhySapUser> m_userWrap;
-    std::unique_ptr<NrSlUePhySapProvider> m_provWrap;
-
-    std::set<uint32_t> m_pendingSeqs;
+    NrSlUePhySapUser* m_origUser{nullptr}; //!< first device's (ACK injection)
+    // per observed device (index 0 = the device given to Install)
+    std::vector<Ptr<NrSlUeMac>> m_macs;
+    std::vector<uint32_t> m_devNode;
+    std::vector<std::unique_ptr<NrSlUePhySapUser>> m_userWraps;
+    std::vector<std::unique_ptr<NrSlUePhySapProvider>> m_provWraps;
+    std::vector<std::set<uint32_t>> m_pendingSeqs;
     std::vector<LeaderTx> m_txs;
     std::map<uint8_t, uint32_t> m_curGen;      //!< harqId -> current TB generation
     std::map<uint8_t, size_t> m_lastTxOfHarq;  //!< harqId -> index of its last transmission

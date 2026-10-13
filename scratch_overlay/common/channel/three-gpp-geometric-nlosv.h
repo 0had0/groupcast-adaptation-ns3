@@ -55,6 +55,12 @@ class ThreeGppGeometricNlosvModel : public ChannelConditionModel
     // Physical dimensions of each blocker.
     void SetBlockerDimensions(double lengthM, double widthM);
 
+    // Deterministic geometric test (no random draw, no cache): true iff another
+    // vehicle's blocker box intersects the segment a -> b. Public so that
+    // simulations can log link geometry without querying the wrapped model.
+    bool IsBlockedByVehicle(Ptr<const MobilityModel> a,
+                            Ptr<const MobilityModel> b) const;
+
   private:
     // Liang–Barsky segment-vs-AABB: true iff (x1,y1)→(x2,y2) intersects
     // the rectangle centred at (cx,cy) with half-extents (hl,hw).
@@ -62,9 +68,6 @@ class ThreeGppGeometricNlosvModel : public ChannelConditionModel
                                       double x2, double y2,
                                       double cx, double cy,
                                       double hl, double hw);
-
-    bool IsBlockedByVehicle(Ptr<const MobilityModel> a,
-                            Ptr<const MobilityModel> b) const;
 
     // NS-3 attribute accessors (member-function pointer form).
     void   SetBlockerLengthM(double v) { m_blockerHalfLength = v / 2.0; }

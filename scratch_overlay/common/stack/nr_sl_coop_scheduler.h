@@ -60,7 +60,19 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
      */
     ~NrSlCoopScheduler() override;
 
+    /**
+     * \brief Per-TB helper selection: called when a period's grant is published (after
+     *        the resource selection, which it cannot change) with the destination, the
+     *        slot of the new transmission, the HARQ id and the TB's subchannels; returns the helper's RNTI for
+     *        this TB (signalled in SCI-2A), 0 = use the static HelperId attribute.
+     *        Unset (default): the static HelperId for every TB.
+     */
+    void SetHelperSelector(std::function<uint16_t(uint32_t, const SfnSf&, uint8_t, uint16_t)> selector);
+
   private:
+    /// helper RNTI of the TB published now (selector, else the static HelperId)
+    uint16_t HelperFor(uint32_t dstL2Id, const SfnSf& ndiSlot, uint8_t harqId, uint16_t nSubch) const;
+    std::function<uint16_t(uint32_t, const SfnSf&, uint8_t, uint16_t)> m_helperSelector;
     uint32_t m_helperId{0};
   uint32_t m_leaderTxCount{1};
     bool m_chainedResActive{false};

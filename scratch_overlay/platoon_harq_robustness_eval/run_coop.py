@@ -81,10 +81,24 @@ ARMS = {
     # and no signalling); README "Hidden-node test"
     "leaderResIuc": ("Helper, leader's resources + oracle IUC (upper bound)", "leaderResIuc",
                      []),
+    # per-TB helper selection (README "Per-TB helper selection"): the leader hands its
+    # reserved retransmission slots to one member per TB; static member 4 = Kuo's "middle
+    # Tx"; kuo = max-mean GPRR with distance-only LOS probability; map = the same with the
+    # building map; Nack = Option-1 NACK-triggered relaying, Blind = every handed slot
+    "s4Nack": ("Static helper 4, NACK", "leaderRes", []),
+    "s4Blind": ("Static helper 4, blind", "leaderRes", ["--helperBlind=true"]),
+    "kuoNack": ("Kuo selection, NACK", "leaderRes", ["--helperSelect=kuo"]),
+    "kuoBlind": ("Kuo selection, blind", "leaderRes",
+                 ["--helperSelect=kuo", "--helperBlind=true"]),
+    "mapNack": ("Map-aware selection, NACK", "leaderRes", ["--helperSelect=map"]),
+    "mapBlind": ("Map-aware selection, blind", "leaderRes",
+                 ["--helperSelect=map", "--helperBlind=true"]),
 }
+DYN_ARMS = ["none", "s4Nack", "s4Blind", "kuoNack", "kuoBlind", "mapNack", "mapBlind"]
 DEFAULT_ARMS = ["none", "leaderRes", "ownRes"]  # the 2026-10-11 comparison
 SHORT_ARM = {"none": "LO", "none4": "LO4", "leaderRes": "LR", "ownRes": "OR", "split": "SP",
-             "additive": "AD", "leaderResIuc": "LRI"}
+             "additive": "AD", "leaderResIuc": "LRI", "s4Nack": "S4N", "s4Blind": "S4B",
+             "kuoNack": "KN", "kuoBlind": "KB", "mapNack": "MN", "mapBlind": "MB"}
 CELLS = [("roundabout", 30, 0), ("highway", 30, 45), ("highway", 30, 60)]  # default design
 # further cells selectable with --cells (roundabout with background: is the helper's
 # sensing different when buildings, not distance, separate it from the leader?)
@@ -128,12 +142,20 @@ def check(run_csv, arm, helper=None):
         # leader's own retransmission comes first and reaches everyone, the copy is
         # redundant (relay_without_nack counts those, by design not 0)
         must0 += ["relay_without_initial_nack"]
-    elif ARMS[arm][1] not in ("none", "off"):
-        must0 += ["relay_without_nack"]
+    elif ARMS[arm][1] not in ("none", "off") and "--helperBlind=true" not in ARMS[arm][2]:
+        must0 += ["relay_without_nack"]  # blind arms relay without a NACK by design
+    if any(f.startswith("--helperSelect=") for f in ARMS[arm][2]):
+        must0 += ["relay_by_unchosen"]  # a copy only by the TB's chosen helper
+        want_sel = [f.split("=", 1)[1] for f in ARMS[arm][2] if f.startswith("--helperSelect=")][0]
+        if r.get("helper_select") != want_sel:
+            bad.append(f"helper_select={r.get('helper_select')}")
+    if "helper_blind" in r and int(float(r["helper_blind"])) != int("--helperBlind=true" in ARMS[arm][2]):
+        bad.append(f"helper_blind={r['helper_blind']}")
     for k in must0:
         if k in r and int(float(r[k])) != 0:
             bad.append(f"{k}={r[k]}")
-    max_leader = {"split": 2, "leaderRes": 1, "ownRes": 1, "leaderResIuc": 1}.get(arm, want_tx)
+    max_leader = {"split": 2, "leaderRes": 1, "ownRes": 1, "leaderResIuc": 1}.get(
+        ARMS[arm][1] if arm not in ("none", "none4", "additive") else arm, want_tx)
     if "leader_tx_per_tb_max" in r and int(float(r["leader_tx_per_tb_max"])) > max_leader:
         bad.append(f"leader_tx_per_tb_max={r['leader_tx_per_tb_max']}")
     return bad
@@ -167,7 +189,8 @@ def run_job(job):
         if r.returncode != 0:
             return arm, tag, f"FAILED rc={r.returncode}", dt
         for suffix in ("_pkt.csv", "_ltx.csv", "_htx.csv", "_coll.csv", "_div.csv", "_nack.csv",
-                       "_use.csv", "_sel.csv"):
+                       "_use.csv", "_sel.csv", "_att.csv", "_hsel.csv", "_alltx.csv",
+                       "_grants.csv"):
             f = adir / f"{tag}{suffix}"
             if f.exists():
                 with open(f, "rb") as fi, gzip.open(str(f) + ".gz", "wb") as fo:
@@ -483,6 +506,12 @@ def analyze(a):
               "split": "#4a3aa7", "additive": "#eda100"}
     hatches = {"none": "", "none4": "xx", "leaderRes": "//", "ownRes": "..", "split": "\\\\",
                "additive": "oo"}
+    # hidden-node and per-TB helper-selection arms (Nack = solid, Blind = lighter)
+    colors.update({"leaderResIuc": "#c0392b", "s4Nack": "#eb6834", "s4Blind": "#f5b48f",
+                   "kuoNack": "#1baf7a", "kuoBlind": "#8fdcc0", "mapNack": "#4a3aa7",
+                   "mapBlind": "#a99fe0"})
+    hatches.update({"leaderResIuc": "xx", "s4Nack": "//", "s4Blind": "//", "kuoNack": "..",
+                    "kuoBlind": "..", "mapNack": "\\\\", "mapBlind": "\\\\"})
     arms = [arm for arm in ARMS if arm in set(S.arm)]
     present = set(zip(S.scenario, S.nbg))
     cells = [(sc, nbg) for sc, _, nbg in ALL_CELLS if (sc, nbg) in present]
@@ -667,6 +696,11 @@ def main():
                          "attempts (--collCond; extra channel-condition queries: use for fresh "
                          "campaigns only, results are not comparable seed by seed with runs "
                          "made without it)")
+    ap.add_argument("--write-att", action="store_true",
+                    help="--writeAtt=true: per-attempt geometry log (_att.csv)")
+    ap.add_argument("--extra", action="append", default=[],
+                    help="a further program flag for every run, repeatable, written "
+                         "--extra=--helperDecisionMs=10")
     ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS)
     ap.add_argument("--traffic", nargs="+", default=TRAFFIC)
     ap.add_argument("--cells", nargs="+", default=None,
@@ -734,6 +768,8 @@ def main():
         jobs.append((arm, sc, ivd, tr, nbg, seed, tdir, adir,
                      {"helper": HELPER,
                       "extra": (["--collCond=true"] if a.coll_cond else [])
+                      + (["--writeAtt=true"] if a.write_att else [])
+                      + list(a.extra)
                       + ([f"--maxTime={a.max_time:g}"] if a.max_time > 0 else [])}))
     # replicate by replicate, most expensive first
     jobs.sort(key=lambda j: (j[5], -j[4], j[1] != "highway", j[3] != "periodic2"))

@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# run_dynhelper.sh -- per-TB helper selection (Kuo et al. 2021) vs static member 4, blind vs
+# NACK-triggered relaying, on the roundabout (README "Per-TB helper selection").
+#
+# Arms (run_coop.py DYN_ARMS): none, s4Nack, s4Blind, kuoNack, kuoBlind, mapNack, mapBlind
+# Cells: roundabout IVD 30, N in {0, 45, 60} x periodic1 / periodic2 x seeds 1-10 = 420 runs,
+# on top of the SB-SPS re-run configuration (run_rerun_sps.sh), --collCond, --writeAtt.
+#
+# Usage (server, inside tmux; resumable -- relaunch the same command):
+#   tmux new -d -s dynhelper -c "$PWD" 'JOBS=24 ./run_dynhelper.sh'
+#   ./run_dynhelper.sh status
+#   ./run_dynhelper.sh [step ...]     # steps: build check campaign analyze
+#                                     # default: check campaign analyze
+#   `build` runs ./setup.sh --force (reinstalls patches/ into the submodules) and rebuilds.
+# Environment: JOBS (default 24), TAG (default dyn -> results/coop_dyn_sps), BIN (binary).
+# Rough cost at 24 jobs: 2-3 h (roundabout N 45 / 60 dominate).
+
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+cd "$HERE"
+REPO=$(cd ../.. && pwd)
+JOBS=${JOBS:-24}
+TAG=${TAG:-dyn}
+OUT="$HERE/results/rerun_$TAG"
+COOP="$HERE/results/coop_${TAG}_sps"
+LOG="$OUT/progress.log"
+WRAP="$OUT/ns3_$TAG"
+mkdir -p "$OUT"
+
+# the SB-SPS re-run configuration (run_rerun_sps.sh)
+RRI_LIST=0,10,20,50,100,200,300,400,500,600,700,800,900,1000
+PROB_KEEP=0.8
+BASE_FLAGS=(--leaderSps=true --spsReselectOnMisfit=true --slDynExclusion=true --slProjectAnnounced=true
+            --slProbResourceKeep=$PROB_KEEP --rriList=$RRI_LIST)
+REQUIRED_OPTS=(leaderSps spsReselectOnMisfit slDynExclusion slProjectAnnounced slProbResourceKeep
+               rriList helperSelect helperBlind camPeriodMs helperDecisionMs helperSelectShadow
+               writeAtt)
+ARMS=(none s4Nack s4Blind kuoNack kuoBlind mapNack mapBlind)
+CELLS=(roundabout:0 roundabout:45 roundabout:60)
+EXP_RUNS=420
+
+log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
+count_runs() { find "$1" -name '*_run.csv' -not -path '*/analysis*' 2>/dev/null | wc -l | tr -d ' '; }
+count_failed() { cat "$1"/progress.log 2>/dev/null | grep -c 'FAILED' || true; }
+
+find_bin() {
+  if [ -n "${BIN:-}" ]; then echo "$BIN"; return; fi
+  ls -t "$REPO"/ns-3-dev/build/scratch/platoon_harq_robustness_eval/ns3*-platoon_harq_robustness_eval-* \
+     2>/dev/null | head -1
+}
+
+status() {
+  echo "dynhelper '$TAG' in $HERE"
+  printf '  coop  %4s / %-4s  failed: %s\n' "$(count_runs "$COOP")" $EXP_RUNS "$(count_failed "$COOP")"
+  echo "--- last steps ($LOG):"; tail -n 6 "$LOG" 2>/dev/null
+  [ -f "$COOP/progress.log" ] && { echo "--- $COOP/progress.log:"; tail -n 2 "$COOP/progress.log"; }
+  if command -v flock >/dev/null; then
+    if flock -n "$OUT/.lock" true 2>/dev/null; then echo "driver: not running"; else echo "driver: running"; fi
+  fi
+}
+
+# every run CSV: the SB-SPS flags, t-Reordering 0, effective SPS grant for periodic traffic
+verify_dir() {
+  python3 - "$1" "$PROB_KEEP" "$RRI_LIST" <<'PY'
+import csv, glob, sys
+root = sys.argv[1]
+need = {"sps_reselect_on_misfit": 1, "sl_dyn_exclusion": 1, "sl_project_announced": 1,
+        "rlc_reordering_ms": 0, "sl_prob_resource_keep": float(sys.argv[2])}
+want_rri = sys.argv[3].replace(",", ":")
+n = bad = 0
+missing = set()
+for f in sorted(glob.glob(f"{root}/**/*_run.csv", recursive=True)):
+    if "/analysis" in f:
+        continue
+    with open(f) as fh:
+        for r in csv.DictReader(fh):
+            n += 1
+            for k, v in need.items():
+                if k not in r:
+                    missing.add(k)
+                elif float(r[k]) != v:
+                    bad += 1
+                    print(f"MISMATCH {f}: {k}={r[k]} (want {v})")
+            if r.get("rri_list") != want_rri:
+                bad += 1
+                print(f"MISMATCH {f}: rri_list={r.get('rri_list')}")
+            if r.get("leader_grant") != ("sps" if r["traffic"].startswith("periodic") else "dynamic"):
+                bad += 1
+                print(f"MISMATCH {f}: leader_grant={r.get('leader_grant')}")
+            for k in ("helper_select", "relay_by_unchosen", "hsel_cam_age_ms_mean"):
+                if k not in r:
+                    missing.add(k)
+print(f"verified {n} runs under {root}: {bad} mismatches; missing columns: "
+      f"{', '.join(sorted(missing)) or 'none'}")
+sys.exit(1 if (bad or missing or n == 0) else 0)
+PY
+}
+
+provenance() {
+  local real=$1
+  {
+    echo "date: $(date '+%F %T')   host: $(hostname)   jobs: $JOBS   tag: $TAG"
+    echo "branch: $(git -C "$REPO" rev-parse --abbrev-ref HEAD)  commit: $(git -C "$REPO" rev-parse --short HEAD)"
+    echo "study folder changes:"; git -C "$REPO" status --short -- "$HERE" | sed 's/^/  /'
+    echo "binary: $real  sha256: $( (sha256sum "$real" 2>/dev/null || shasum -a 256 "$real") | cut -d' ' -f1)"
+    echo "base flags: ${BASE_FLAGS[*]}"
+  } >> "$OUT/provenance.txt"
+}
+
+make_wrapper() {
+  local real=$1
+  {
+    echo '#!/usr/bin/env bash'
+    echo "# generated by run_dynhelper.sh: the study binary + the SB-SPS flags"
+    printf 'exec %q "$@"' "$real"
+    printf ' %q' "${BASE_FLAGS[@]}"
+    echo
+  } > "$WRAP"
+  chmod +x "$WRAP"
+}
+
+step_build() {
+  log "build: setup.sh --force + ns3 build ($(git -C "$REPO" rev-parse --short HEAD))"
+  (cd "$REPO" && ./setup.sh --force) || return 1
+  (cd "$REPO/ns-3-dev" && ./ns3 build platoon_harq_robustness_eval) || return 1
+}
+
+# identical outputs apart from the run CSV's selection columns
+same_outputs() {
+  python3 - "$1" "$2" <<'PY'
+import csv, filecmp, glob, os, sys
+a, b = sys.argv[1], sys.argv[2]
+skip = {"helper_select", "helper_shadow", "hsel_cam_age_ms_mean", "hsel_cam_age_ms_p95",
+        "helper_share_m4", "wall_s"}
+bad = []
+for f in sorted(glob.glob(a + "_*.csv")):
+    suf = f[len(a):]
+    g = b + suf
+    if suf in ("_hsel.csv",):
+        continue
+    if not os.path.exists(g):
+        bad.append(f"missing {suf}")
+    elif suf == "_run.csv":
+        ra = next(csv.DictReader(open(f))); rb = next(csv.DictReader(open(g)))
+        d = [k for k in ra if k not in skip and ra[k] != rb.get(k)]
+        if d:
+            bad.append(f"run: {d[:5]}")
+    elif not filecmp.cmp(f, g, shallow=False):
+        bad.append(f"differs {suf}")
+print("identical" if not bad else "DIFFERENT " + "; ".join(bad))
+sys.exit(1 if bad else 0)
+PY
+}
+
+step_check() {
+  local real
+  real=$(find_bin)
+  [ -n "$real" ] && [ -x "$real" ] || { log "check: no ns-3 binary found (build first or set BIN)"; return 1; }
+  local help missing=()
+  help=$("$real" --PrintHelp 2>&1) || true
+  for o in "${REQUIRED_OPTS[@]}"; do grep -q -- "--$o" <<<"$help" || missing+=("$o"); done
+  [ ${#missing[@]} -eq 0 ] || { log "check: the binary lacks --${missing[*]}"; return 1; }
+  python3 -c 'import pandas, numpy, scipy, matplotlib' 2>/dev/null \
+    || { log "check: python packages missing (pandas numpy scipy matplotlib)"; return 1; }
+  make_wrapper "$real"
+  provenance "$real"
+  log "check: binary $real, wrapper $WRAP"
+  local smoke="$OUT/smoke"; rm -rf "$smoke"; mkdir -p "$smoke"
+  local tr="$HERE/traces/rbt_ivd30_n0_s1.csv.gz" net="--sumoNet=$HERE/sumo/roundabout/roundabout.net.xml"
+  [ -f "$tr" ] || { log "check: trace $tr missing"; return 1; }
+  local common=(--scenario=roundabout --mobility="$tr" "$net" --traffic=periodic1 --seed=1 --run=1
+                --maxTime=20 --helperMode=leaderRes --helper=4 --collCond=true)
+  local pids=()
+  ( cd "$smoke" && "$WRAP" "${common[@]}" --out="$smoke/ref" > ref.log 2>&1 ) & pids+=($!)
+  ( cd "$smoke" && "$WRAP" "${common[@]}" --helperSelect=map --helperSelectShadow=true \
+      --out="$smoke/shadow" > shadow.log 2>&1 ) & pids+=($!)
+  ( cd "$smoke" && "$WRAP" "${common[@]}" --helperSelect=map --writeAtt=true \
+      --out="$smoke/map" > map.log 2>&1 ) & pids+=($!)
+  ( cd "$smoke" && "$WRAP" "${common[@]}" --helperSelect=kuo --helperBlind=true \
+      --out="$smoke/kuoblind" > kuoblind.log 2>&1 ) & pids+=($!)
+  local rc=0
+  for p in "${pids[@]}"; do wait "$p" || rc=1; done
+  [ $rc -eq 0 ] || { log "check: a smoke run failed -- see $smoke/*.log"; return 1; }
+  same_outputs "$smoke/ref" "$smoke/shadow" | tee -a "$LOG"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || { log "check: shadow selection changed the simulation"; return 1; }
+  python3 - "$smoke" <<'PY' | tee -a "$LOG"
+import csv, sys
+for t in ("map", "kuoblind"):
+    r = next(csv.DictReader(open(f"{sys.argv[1]}/{t}_run.csv")))
+    print(f"smoke {t}: helper_select {r['helper_select']} blind {r['helper_blind']} "
+          f"relay_by_unchosen {r['relay_by_unchosen']} helper changes/s {float(r['helper_changes_per_s']):.2f} "
+          f"cam age mean {float(r['hsel_cam_age_ms_mean']):.1f} ms")
+    if int(float(r["relay_by_unchosen"])) != 0:
+        sys.exit(1)
+PY
+  [ "${PIPESTATUS[0]}" -eq 0 ] || { log "check: relay by an unchosen member"; return 1; }
+  verify_dir "$smoke" | tail -1 | tee -a "$LOG"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || { log "check: smoke CSVs do not carry the expected flags"; return 1; }
+  log "check: OK"
+}
+
+ensure_wrapper() { [ -x "$WRAP" ] || { log "no wrapper yet -- running check first"; step_check || return 1; }; }
+
+step_campaign() {
+  ensure_wrapper || return 1
+  log "campaign: start ($(count_runs "$COOP")/$EXP_RUNS done)"
+  python3 run_coop.py --arms "${ARMS[@]}" --cells "${CELLS[@]}" --coll-cond --write-att \
+      --helper 4 --jobs "$JOBS" --results "$COOP" --bin "$WRAP" || return 1
+  verify_dir "$COOP" | tail -1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
+  log "campaign: done ($(count_runs "$COOP")/$EXP_RUNS, failed $(count_failed "$COOP"))"
+}
+
+step_analyze() {
+  local rc=0
+  log "analyze: run_coop (summary, verdict tables, figures)"
+  python3 run_coop.py --analyze-only --arms "${ARMS[@]}" --cells "${CELLS[@]}" --results "$COOP" \
+      > "$OUT/analyze_coop.txt" 2>&1 || { log "analyze: run_coop FAILED"; rc=1; }
+  log "analyze: per-TB selection (paired tables, pre-registered verdicts, geometry, delay)"
+  python3 analyze_dynhelper.py "$COOP" > "$OUT/analyze_dynhelper.txt" 2>&1 \
+      || { log "analyze: analyze_dynhelper FAILED"; rc=1; }
+  log "analyze: done (outputs in $COOP/analysis*, logs in $OUT/analyze_*.txt)"
+  return $rc
+}
+
+if [ "${1:-}" = status ]; then status; exit 0; fi
+STEPS=("$@")
+[ ${#STEPS[@]} -eq 0 ] && STEPS=(check campaign analyze)
+if command -v flock >/dev/null; then
+  exec 9>"$OUT/.lock"
+  flock -n 9 || { echo "another run_dynhelper.sh is active (lock $OUT/.lock)"; exit 1; }
+fi
+exec > >(tee -a "$OUT/stdout.log") 2>&1
+log "=== start: steps ${STEPS[*]}, jobs $JOBS, tag $TAG"
+T0=$(date +%s)
+for s in "${STEPS[@]}"; do
+  t=$(date +%s)
+  log "--- step $s"
+  case "$s" in
+    build) step_build ;;
+    check) step_check ;;
+    campaign) step_campaign ;;
+    analyze) step_analyze ;;
+    *) log "unknown step $s"; false ;;
+  esac
+  rc=$?
+  el=$(( $(date +%s) - t ))
+  if [ $rc -ne 0 ]; then
+    log "--- step $s FAILED after $((el / 3600))h$(((el % 3600) / 60))m -- fix and relaunch"
+    exit $rc
+  fi
+  log "--- step $s ok in $((el / 3600))h$(((el % 3600) / 60))m"
+done
+el=$(( $(date +%s) - T0 ))
+log "=== all done in $((el / 3600))h$(((el % 3600) / 60))m"

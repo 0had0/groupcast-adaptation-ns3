@@ -1203,6 +1203,114 @@ tmux new -d -s hn -c "$PWD" 'JOBS=24 ./run_hidden_node.sh check stageA analyzeA'
 ./run_hidden_node.sh status
 ```
 
+## Per-TB helper selection (Kuo et al. 2021) — design, checks, pilot (2026-10-13)
+
+**Why.** Laptop geometry analysis (`analyze_helper_geom.py`, roundabout IVD 30 N 0 periodic1,
+10 seeds, every arm): the helper helps only while a **building** blocks leader -> tail (46 % of
+the tail's TBs; there `none` delivers 0.06, `leaderRes` 0.23; vehicle-only blockage: 0.97
+with or without helper). Inside the platoon "LOS to both" never occurs (platoon cars block
+member 4 towards both ends); the right criterion is "no building on either hop". Fixed member
+4 has a building-free path on both hops in only 2 % of those TBs, while **some** member does
+in 52 % (members 2, 6, 1, 7 depending on the turn phase). Kuo et al. select the retransmission
+UE per TB (assigned with the reservation in the SCI), from CAM positions (100 ms) and a
+distance-only TR 37.885 LOS model, with blind retransmissions.
+
+**Arms** (`run_coop.py` `DYN_ARMS`; one helper per TB, the leader keeps its initial
+transmission and hands the reserved retransmission slots over, SB-SPS re-run flags):
+
+| arm | selection | relay trigger | flags |
+|---|---|---|---|
+| `none` | — | — | `--helperMode=none` |
+| `s4Nack` | static member 4 (Kuo's "middle Tx", baseline) | NACK (Option 1) | `--helperMode=leaderRes --helper=4` |
+| `s4Blind` | static member 4 | every handed slot | + `--helperBlind=true` |
+| `kuoNack` / `kuoBlind` | max-mean GPRR (Kuo eq. 17), distance-only P(LOS) | NACK / blind | + `--helperSelect=kuo` |
+| `mapNack` / `mapBlind` | the same with the building map + CAM positions | NACK / blind | + `--helperSelect=map` |
+
+**Selection** (`helper_select.{h,cc}`): GPRR(i) = mean_r [1 - Pf(L->r)(Pf(L->i) + (1 -
+Pf(L->i)) Pf(i->r))], Pf = 1 - P(success); P(success) as Kuo eq. 7 with the TR 37.885 urban
+models (LOS / NLOSv = LOS + blockage max{0, N(mu, 4.5 dB)}, mu = 9 + max(0, 15 log10 d - 41) /
+NLOS building), shadowing 3 / 4 dB, success if the path loss stays below the TB's link budget
+PL_max = 23 dBm - 10 log10(PRBs) - (noise of a PRB + 9 dB NF) - 8 dB (MCS 14; `--kuoSinrReqDb`,
+`--kuoPlMaxDb`; 114.4 dB for 1 subchannel, 111.4 dB for 2). `kuo`: P_LOS(d) = min(1, 1.05
+exp(-0.0114 d)) mixes LOS / NLOSv, no buildings. `map`: a building on the segment (CAM
+positions) -> NLOS, another platoon car within 0.9 m of the segment -> NLOSv, else the LOS /
+NLOSv mixture (the simulator's own condition model). Inputs: positions sampled every
+`--camPeriodMs` (100), usable `--helperDecisionMs` (0) after sampling, the map.
+
+**Implementation.** `NrSlCoopScheduler::SetHelperSelector`: called when the leader publishes a
+period's grant (after its resource selection), returns the helper RNTI written into that
+period's SCI-2A; unset = the static `HelperId`. No NR change (any member named in SCI-2A
+relays). Blind = `NrSlUeMac::HelperNackTriggered=false`. The program records copies from every
+member (`NackOnlyHarqController::AddObservedDevice`; per-transmission node / RNTI for PHY
+matching, NACK attribution, geometry). The sensing-observer role (footprint, divergence)
+stays on `--helper`.
+
+**No interference with resource allocation (SB-SPS and dynamic).** The selector only writes
+the helper id of a period already selected; no slot, subchannel, counter, keep / misfit or
+sensing input changes; no random draw, no channel-model query. Verified: **shadow mode**
+(`--helperSelect=map --helperSelectShadow=true`: compute and log, signal member 4) is
+byte-identical to `leaderRes` in every output file for periodic1 / periodic2 (SB-SPS) and
+aperiodic1 (dynamic), roundabout N 0 and N 45 (run CSV: only the selection columns differ);
+`--helperSelect=static` through the selector is byte-identical too; all new options off: 9
+short pilots byte-identical to the previous binary.
+
+**Delay log** (`<tag>_hsel.csv`, one row per TB: `t_decide`, `t_ndi`, `decide_to_ndi_ms`,
+`cam_age_ms`, `pl_max_db`, chosen / applied member, GPRR score of every candidate; run CSV:
+`helper_changes_per_s`, `helper_share_m1..m8`, `hsel_cam_age_ms_mean/p95`,
+`relay_after_initial_ms_mean/p95`, `relay_by_unchosen`, `helper_select`, `helper_blind`,
+`cam_period_ms`, `helper_decision_ms`, `helper_shadow`). The decision comes T1 = 1 ms before
+the TB's new transmission; positions are 28-31 ms old for periodic1 (SPS phase vs CAM phase),
+up to ~100 ms for periodic2 / aperiodic1; the first helper copy follows the leader's initial
+transmission by ~4 ms.
+
+**Pilot** (laptop, roundabout IVD 30 N 0 periodic1, seed 1, whole trace; every `run_coop.py`
+check passes, 0 relays by an unchosen member):
+
+| arm | tail `prr_pdb` | GPRR | tx/pkt | helper copies | chosen members |
+|---|---|---|---|---|---|
+| `none` | 0.530 | 0.820 | 1.97 | 0 | — |
+| `s4Nack` | 0.611 | 0.809 | 1.48 | 244 | 4 |
+| `s4Blind` | 0.607 | 0.806 | 2.38 | 700 | 4 |
+| `kuoNack` | 0.633 | 0.873 | 1.90 | 460 | 2 (93 %), 3 (6 %) |
+| `kuoBlind` | 0.593 | 0.855 | 2.85 | 939 | same |
+| `mapNack` | **0.680** | **0.884** | 1.74 | 375 | 2 (67 %), 3, 4, 5, 6; 0.26 changes/s |
+| `mapBlind` | 0.695 | 0.880 | 2.74 | 886 | same |
+
+When a building blocks leader -> tail and a member with a building-free path on both hops
+exists, `map` picks such a member in 100 % of the TBs (positions ~29 ms old), `kuo` in 38 %,
+static member 4 in 4 %. One seed: no verdict.
+
+**Pre-registered rules (fixed before the server run, `analyze_dynhelper.py`):**
+1. Dynamic selection pays if `mapNack` beats `s4Nack` on the tail `prr_pdb`, paired (95 % CI of
+   the per-seed difference > 0), roundabout N 0 periodic1; `kuoNack` reported the same way.
+2. Feedback pays over blind if, for the same selection, NACK >= blind on the tail `prr_pdb`
+   (paired n.s. or better) at lower tx/pkt; reported for N 0 / 45 / 60.
+3. Collisions / hidden nodes: the paired gains vs `none` at N 45 / 60 against N 0.
+
+**Run** (server; resumable; ~2-3 h at 24 jobs): `./run_dynhelper.sh build check`, then
+`tmux new -d -s dynhelper -c "$PWD" 'JOBS=24 ./run_dynhelper.sh'`; 7 arms x roundabout IVD 30
+N {0, 45, 60} x periodic1 / periodic2 x seeds 1-10 = 420 runs in `results/coop_dyn_sps/`
+(`--collCond --writeAtt`); `check` = 4 smoke runs incl. the shadow identity test. Outputs:
+`results/coop_dyn_sps/analysis/` (run_coop tables, figures) and `analysis_dyn/`
+(`dyn_paired.csv`, `dyn_geometry.csv`, `dyn_verdict.txt`); logs `results/rerun_dyn/`. The
+earlier campaigns need no re-run: the `none` and `s4Nack` runs must reproduce `coop_sps` for
+the same cells and seeds (the logs draw no random numbers).
+
+**Validation logs** used here (opt-in, outputs otherwise byte-identical): `--writeAtt`
+(`_att.csv`: every platoon transmission x member: status, SINR, channel condition,
+deterministic geometry leader->member, helper->member, leader->helper, member->tail),
+`--writeAllTx` (`_alltx.csv`: every PSSCH of every UE with position), `--writeGrants`
+(`_grants.csv`: every grant created / kept / misfit). Background check
+(`validate_alloc.py`, highway IVD 30 periodic1 N 60, seed 1, re-run configuration vs every
+option off): background periodic1 always SB-SPS 100 ms, counter mean 10.0, 0.30 / 0.70
+reselections / kept per vehicle-s (stock: 0.97 / 0), grants 225 or 335 B only (stock also 1328
+B backlog and 118 B segments), 96.5 % of new transmissions exactly one period later on the same
+subchannels; aperiodic1 dynamic, no retransmission; aperiodic-periodic collisions within
+300 m 128 (stock 2954), periodic-leader within 600 m 0 (stock 112); CBR recomputed = run CSV
+(0.433 / 0.425) once the parked seats are excluded. The remaining collisions are mostly two
+aperiodic vehicles choosing the same fresh resource (nothing to sense) and periodic pairs
+beyond 600 m.
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

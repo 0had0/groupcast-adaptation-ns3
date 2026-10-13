@@ -70,9 +70,10 @@ namespace
 class UserWrap : public NrSlUePhySapUser
 {
   public:
-    UserWrap(NrSlUePhySapUser* orig, NackOnlyHarqController* ctl)
+    UserWrap(NrSlUePhySapUser* orig, NackOnlyHarqController* ctl, size_t dev)
         : m_orig(orig),
-          m_ctl(ctl)
+          m_ctl(ctl),
+          m_dev(dev)
     {
     }
 
@@ -103,21 +104,23 @@ class UserWrap : public NrSlUePhySapUser
 
     void ReceivePsfch(uint32_t sendingNodeId, SlHarqInfo harqInfo) override
     {
-        m_ctl->OnPsfch(sendingNodeId, harqInfo);
+        m_ctl->OnPsfch(m_dev, sendingNodeId, harqInfo);
         m_orig->ReceivePsfch(sendingNodeId, harqInfo);
     }
 
   private:
     NrSlUePhySapUser* m_orig;
     NackOnlyHarqController* m_ctl;
+    size_t m_dev;
 };
 
 class ProvWrap : public NrSlUePhySapProvider
 {
   public:
-    ProvWrap(NrSlUePhySapProvider* orig, NackOnlyHarqController* ctl)
+    ProvWrap(NrSlUePhySapProvider* orig, NackOnlyHarqController* ctl, size_t dev)
         : m_orig(orig),
-          m_ctl(ctl)
+          m_ctl(ctl),
+          m_dev(dev)
     {
     }
 
@@ -138,7 +141,7 @@ class ProvWrap : public NrSlUePhySapProvider
 
     void SendPsschMacPdu(Ptr<Packet> p, uint32_t dstL2Id) override
     {
-        m_ctl->OnPsschPdu(p, dstL2Id);
+        m_ctl->OnPsschPdu(m_dev, p, dstL2Id);
         m_orig->SendPsschMacPdu(p, dstL2Id);
     }
 
@@ -150,6 +153,7 @@ class ProvWrap : public NrSlUePhySapProvider
   private:
     NrSlUePhySapProvider* m_orig;
     NackOnlyHarqController* m_ctl;
+    size_t m_dev;
 };
 
 } // namespace
@@ -177,17 +181,34 @@ NackOnlyHarqController::Install(Ptr<NrUeNetDevice> leader,
     m_slot = phy->GetSlotPeriod();
     m_sym = phy->GetSymbolPeriod();
     m_mu = static_cast<uint8_t>(std::lround(std::log2(1e-3 / m_slot.GetSeconds())));
-
     m_origUser = m_mac->GetNrSlUePhySapUser();
-    m_origProv = phy->GetNrSlUePhySapProvider();
-    m_userWrap = std::make_unique<UserWrap>(m_origUser, this);
-    m_provWrap = std::make_unique<ProvWrap>(m_origProv, this);
-    phy->SetNrSlUePhySapUser(m_userWrap.get());
-    m_mac->SetNrSlUePhySapProvider(m_provWrap.get());
+    Attach(leader, leader->GetNode()->GetId());
+}
 
-    m_mac->TraceConnectWithoutContext(
+void
+NackOnlyHarqController::AddObservedDevice(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex)
+{
+    NS_ABORT_MSG_IF(m_option1, "only observe-only controllers record several devices");
+    Attach(dev, nodeIndex);
+}
+
+void
+NackOnlyHarqController::Attach(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex)
+{
+    const size_t k = m_macs.size();
+    Ptr<NrSlUeMac> mac = dev->GetMac(0)->GetObject<NrSlUeMac>();
+    NS_ABORT_MSG_IF(!mac, "device has no NrSlUeMac");
+    Ptr<NrUePhy> phy = dev->GetPhy(0);
+    m_macs.push_back(mac);
+    m_devNode.push_back(nodeIndex);
+    m_pendingSeqs.emplace_back();
+    m_userWraps.push_back(std::make_unique<UserWrap>(mac->GetNrSlUePhySapUser(), this, k));
+    m_provWraps.push_back(std::make_unique<ProvWrap>(phy->GetNrSlUePhySapProvider(), this, k));
+    phy->SetNrSlUePhySapUser(m_userWraps.back().get());
+    mac->SetNrSlUePhySapProvider(m_provWraps.back().get());
+    mac->TraceConnectWithoutContext(
         "SlPsschScheduling",
-        MakeCallback(&NackOnlyHarqController::OnPsschScheduling, this));
+        MakeCallback(&NackOnlyHarqController::OnPsschScheduling, this).Bind(k));
 }
 
 void
@@ -199,7 +220,7 @@ NackOnlyHarqController::TagAppPacket(Ptr<Packet> p)
 }
 
 void
-NackOnlyHarqController::OnPsschPdu(Ptr<Packet> p, uint32_t dstL2Id)
+NackOnlyHarqController::OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id)
 {
     if (dstL2Id != m_dst)
     {
@@ -213,17 +234,17 @@ NackOnlyHarqController::OnPsschPdu(Ptr<Packet> p, uint32_t dstL2Id)
         {
             PlatoonSeqTag tag;
             item.GetTag(tag);
-            m_pendingSeqs.insert(tag.GetSeq());
+            m_pendingSeqs[dev].insert(tag.GetSeq());
         }
     }
 }
 
 void
-NackOnlyHarqController::OnPsschScheduling(SlPsschUeMacStatParameters p)
+NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters p)
 {
     if (p.dstL2Id != m_dst)
     {
-        m_pendingSeqs.clear();
+        m_pendingSeqs[dev].clear();
         return;
     }
     const double now = Simulator::Now().GetSeconds();
@@ -245,8 +266,10 @@ NackOnlyHarqController::OnPsschScheduling(SlPsschUeMacStatParameters p)
     tx.harqId = p.harqId;
     tx.ndi = p.ndi;
     tx.rv = p.rv;
-    tx.seqs.assign(m_pendingSeqs.begin(), m_pendingSeqs.end());
-    m_pendingSeqs.clear();
+    tx.seqs.assign(m_pendingSeqs[dev].begin(), m_pendingSeqs[dev].end());
+    m_pendingSeqs[dev].clear();
+    tx.node = m_devNode[dev];
+    tx.rnti = p.rnti;
 
     const size_t idx = m_txs.size();
     // a helper's relayed copies all have ndi = 0: a copy carrying other packets
@@ -292,9 +315,9 @@ NackOnlyHarqController::OnPsschScheduling(SlPsschUeMacStatParameters p)
 }
 
 void
-NackOnlyHarqController::OnPsfch(uint32_t nodeId, const SlHarqInfo& info)
+NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& info)
 {
-    if (info.m_dstL2Id != m_dst || info.m_txRnti != m_mac->GetRnti())
+    if (info.m_dstL2Id != m_dst || info.m_txRnti != m_macs[dev]->GetRnti())
     {
         return;
     }
@@ -317,7 +340,7 @@ NackOnlyHarqController::OnPsfch(uint32_t nodeId, const SlHarqInfo& info)
     {
         LeaderTx& tx = m_txs[i];
         if (tx.harqId == info.m_harqProcessId && tx.decision < 0 && tx.tS < now &&
-            (!best || tx.decideAtS < best->decideAtS))
+            tx.node == m_devNode[dev] && (!best || tx.decideAtS < best->decideAtS))
         {
             best = &tx;
         }

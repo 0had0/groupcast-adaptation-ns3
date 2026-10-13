@@ -7,6 +7,7 @@ build_exec(
     platoon_harq_robustness_eval.cc
     nack_only_harq.cc
     sumo_buildings.cc
+    helper_select.cc
   LIBRARIES_TO_LINK
     scratch_common
     "${ns3-libs}"

@@ -26,6 +26,18 @@ skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs
 re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Server campaign
 done 2026-10-12; verdicts in §7.8.**
 
+**Update (2026-10-13, evening). Per-TB helper selection (Kuo et al. 2021) ready for the
+server** (README "Per-TB helper selection"): arms `s4Nack` / `s4Blind` (static member 4,
+baseline), `kuoNack` / `kuoBlind` (max-mean GPRR, distance-only), `mapNack` / `mapBlind`
+(the same with the building map), NACK-triggered vs blind; `run_dynhelper.sh` (420 runs,
+roundabout N 0 / 45 / 60, periodic1 / 2, 10 seeds), `analyze_dynhelper.py` with pre-registered
+rules. The selector only sets the SCI-2A helper of an already-selected period: shadow mode is
+byte-identical for SB-SPS and dynamic leader traffic. Seed-1 pilot (roundabout N 0
+periodic1): tail `prr_pdb` none 0.53, s4Nack 0.61, kuoNack 0.63, mapNack 0.68. Also new:
+validation logs `--writeAtt/--writeAllTx/--writeGrants`, `validate_alloc.py` (background
+allocations validated), `analyze_helper_geom.py` (the helper helps only while a building
+blocks leader -> tail; member 4 is rarely building-free on both hops).
+
 **Update (2026-10-13). SB-SPS re-run done on the server — the new reference results**
 (§7.10, README "SB-SPS re-run: results"): periodic traffic on SB-SPS (misfit reselection,
 keep 0.8, 14-entry RRI list), D1 + D2 sensing for every UE; campaign 270 + variants 276 +
@@ -727,6 +739,9 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
       leader's residual collided attempts that the leader missed (§7.10, footprint): a
       helper-assisted selection (helper reports or vetoes resources) is the natural next
       arm.
+11. Per-TB helper selection: run `run_dynhelper.sh` on the server, apply the pre-registered
+    rules (README); then optionally the highway N 45 / 60, Kuo-faithful blind without PSFCH,
+    two helpers per TB (Kuo "twice"), and a `--helperDecisionMs` sweep (0 / 10 / 50).
 10. SB-SPS follow-ups: isolate the N = 0 grant-size effect (e.g. a grant that also shrinks
     to the new SDU, or per-SDU-size statistics), and, if per-option effects matter,
     a factorial run (grant type x D1/D2) on a few cells.
