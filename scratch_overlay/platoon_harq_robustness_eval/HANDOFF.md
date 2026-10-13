@@ -26,6 +26,15 @@ skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs
 re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Server campaign
 done 2026-10-12; verdicts in §7.8.**
 
+**Update (2026-10-13). SB-SPS re-run done on the server — the new reference results**
+(§7.10, README "SB-SPS re-run: results"): periodic traffic on SB-SPS (misfit reselection,
+keep 0.8, 14-entry RRI list), D1 + D2 sensing for every UE; campaign 270 + variants 276 +
+coop 500 runs, 0 failed, every flag and coop check 0. Headline: periodic1 no longer
+loses PRR to background traffic (0 -> 60: <= 1 pp, was 3-7 pp), periodic2 unchanged net
+(fewer collisions, fewer retransmission slots), aperiodic1 +0.02-0.05; the coop verdicts
+hold in direction (blockage + periodic1: helpers help), handing over no longer loses
+under collisions with periodic1. §7.1-7.8 stay as the record of the dynamic-grant runs.
+
 **Update (2026-10-12, later).** Standard Mode-2 grant types and the sensing fixes,
 implemented on `coop-arms` (README "Standard Mode-2 grant types and sensing fixes"),
 all opt-in: `--spsReselectOnMisfit` (TS 38.321 5.22.1.1 reselection when an SDU does not
@@ -464,6 +473,53 @@ periodic2 arm loses retransmissions (PRR -0.03 with D1 + D2). Flags off: byte-id
 periodic2 retransmission-slot loss is SPS-specific (step 6 over C_resel periods; a
 dynamic leader with D1 + D2 keeps 2.11 slots).
 
+### 7.10 SB-SPS re-run (server, 2026-10-13; new reference)
+
+Configuration, checks, full tables: README "SB-SPS re-run: results". Same traces and seeds
+as the `*_rlc0` runs; the comparison mixes the leader's grant type, D1 + D2 for every UE
+and the background's SPS rules, so read it as a new baseline. Dynamic `*_rlc0` in
+brackets.
+
+Loss increase N = 0 -> 60 (pp of 1 - PRR), highway / roundabout:
+
+| IVD | periodic1 | periodic2 | aperiodic1 |
+|---|---|---|---|
+| 5 m | 0.1 (3.0) / 0.2 (3.4) | 4.1 (6.8) / 2.8 (6.4) | 10.0 (14.1) / 12.0 (16.9) |
+| 15 m | 0.0 (5.7) / -0.1 (5.3) | 6.6 (10.4) / 2.5 (5.3) | 14.8 (18.8) / 10.4 (13.0) |
+| 30 m | -1.8 (7.4) / 1.0 (5.9) | 10.1 (13.9) / 3.1 (5.7) | 15.6 (19.2) / 9.5 (12.0) |
+
+1. **periodic1**: background no longer costs PRR; leader collision rate at N = 60 0.16
+   (0.36), collision loss 0.020 (0.077); highway N 60 PRR 0.973-0.995 (0.893-0.967), 8/15
+   highway cells better with disjoint CIs. Highway tail `prr_pdb` (IVD 30, 10 seeds)
+   0.929 / 0.919 at N 45 / 60 (0.835 / 0.819).
+2. **periodic2**: net unchanged (mean dPRR ~0): collision rate 0.34 (0.58) at N = 60, but
+   1.4-1.5 reserved slots per grant under load, tx/pkt 1.25 (1.54) — the accepted SB-SPS
+   property (§8). Tail `prr_pdb` within the CIs everywhere.
+3. **aperiodic1** (leader still dynamic): +0.02 to +0.05 at N >= 30 from D1 + D2.
+4. **N = 0, long IVD: SB-SPS slightly worse** (roundabout IVD 30: periodic1 0.830 (0.856),
+   periodic2 0.715 (0.751), disjoint CIs; tail `prr_pdb` periodic1 0.573 (0.608)). Likely
+   (not isolated): an SPS grant keeps the size of its largest SDU (1.62 subchannels for
+   periodic1 vs 1.20 per-packet dynamic; 4.56 vs 4.20), so smaller SDUs get less power
+   per PRB.
+5. Unchanged: urban NLOS limits the long platoon; HARQ cannot fix blockage; ranking
+   aperiodic1 < periodic2 < periodic1; dedicated carrier best for periodic2 (highway N 60
+   tail 0.719 vs 0.490).
+6. Blind with SB-SPS: periodic2 gets 2.1-2.2 tx/pkt under load (3 only at N = 0).
+
+Coop (tail `prr_pdb`, 10 seeds, paired vs `none`):
+1. **Blockage + periodic1: every helper arm still helps**, a little less: roundabout N 0
+   +0.04 to +0.07 (`leaderRes`, `ownRes`, `additive` with disjoint CIs), N 45 / 60 +0.03 to
+   +0.05 paired (8-10/10). `none` itself is lower (0.556 vs 0.597 at N 0; finding 4).
+2. **Highway: handing over no longer loses** for periodic1 (all n.s.), `leaderRes` no
+   longer loses with periodic2 (-0.01 / -0.02 n.s.; was -0.09); `ownRes` still loses with
+   periodic2 (-0.06 / -0.07).
+3. `additive`: +0.02 / +0.03 paired (7/10) in two highway cells only, for 10-30 % more
+   transmissions. `split` is inert with periodic2 (no third slot to hand over).
+4. **Footprint: supported, still not a turn effect** (turn 46.8 %, outside 43.9 %; was
+   22.7 % / 18.9 %). With sensing working, the leader's residual collided attempts are
+   mostly with interferers only the helper sensed (40 % vs 12 % before; both: 17 % vs
+   63 %) — the helper's sensing would now carry information the leader lacks.
+
 ## 8. Limitations / caveats
 
 - Single MCS (14). High MCS + power spread over wide allocations (6 dBm/PRB at 5 subchannels)
@@ -503,7 +559,7 @@ dynamic leader with D1 + D2 keeps 2.11 slots).
   `why`, run columns `cc_*`) shows the consequence: reservations sensed well above the
   threshold and still selected (`not_excluded`). *Opt-in fixes since 2026-10-12*:
   `--slDynExclusion` (D1) and `--slProjectAnnounced` (D2), README "Standard Mode-2 grant
-  types"; no campaign result uses them yet.
+  types"; used by the SB-SPS re-run (§7.10), not by §7.1-7.8.
 - **periodic2 on SB-SPS loses retransmission slots under load (accepted, 2026-10-12)**:
   an SPS candidate must be free of sensed reservations at y + j P' for every j < C_resel =
   10 x counter (TS 38.214 sec. 8.1.4 step 6); with 10 ms periods, a loaded 45 % TDD pool and
@@ -512,6 +568,15 @@ dynamic leader with D1 + D2 keeps 2.11 slots).
   periodic2 TBs get at most one retransmission (highway N 45, seed 1). Standard behaviour,
   kept as a property of the configuration in the SB-SPS re-run; periodic1 is not affected
   (2.9 slots).
+- **SB-SPS re-run comparisons mix several changes** (grant type, D1 + D2 for every UE,
+  background SPS rules): per-option effects are only indicated by the seed-1 pilots (§7.9).
+- **SB-SPS grant size**: a grant keeps the size of the SDU it was (re)selected for (the
+  misfit rule only grows it), so smaller SDUs use more subchannels than a per-packet
+  grant would; likely cause of the N = 0 deficit (§7.10.4), not isolated.
+- **Under SB-SPS the collision `why` breakdown** (`_coll.csv`, `cc_*`) is not comparable:
+  a period reusing a reservation has no selection to attribute (88 % `no_selection` for
+  the leader). Footprint divergence is per selection, and the SPS leader selects ~70x
+  less often: compare its shares, not its divergence, with the dynamic runs.
 - `--collCond` (link condition leader / helper -> interferer in `_coll.csv`) queries the
   channel-condition model for extra pairs, which can change its random draws: used only in
   fresh campaigns (step 2), never mixed seed by seed with runs made without it.
@@ -578,6 +643,10 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
   `coop_members.csv`, `coop_latency_cdf.csv`, figc1 PRR · figc1b tail PRR · figc2 tail PRR in
   PDB · figc3 sensing attribution · figc4 latency (mean, tail p95) · figc5 reliability vs
   latency. Server: same paths (running).
+- **SB-SPS re-run** (2026-10-13, branch `coop-arms` @ `1ef63a6`): server
+  `results/{campaign,variants,coop}_sps/`, `results/analysis_sps/`, driver
+  `results/rerun_sps/`. Laptop copy (per-run / per-member CSVs and analyses, no per-packet
+  files): `~/Documents/remote-results/{analysis_sps,campaign_sps,variants_sps,coop_sps,rerun_sps}`.
 - Figures: fig1 PRR vs density · fig2 loss decomposition · fig3/3b PRR along the platoon
   (N = 0 / 60) · fig4 link condition per member · fig5 CBR & leader collision rate · fig6 HARQ
   transmissions per packet · fig7 PRR timeline (IVD 30, periodic1, seed 1).
@@ -613,5 +682,12 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
    h. If the sensing question is pursued: an opt-in, TS-conformant fix of the
       dynamic-grant sensing gap (g) is the precondition — the measured leader-helper
       sensing difference (§7.8.2) can only matter once selections use sensing.
-   g. 5G-LENA: dynamic grants skip the sensing exclusion (§8); decide whether to add an
-      opt-in, TS-conformant fix and re-run (it would change every result so far).
+   g. ~~5G-LENA: dynamic grants skip the sensing exclusion~~ — fixed opt-in (D1, D2) and
+      re-run with SB-SPS (§7.10).
+   i. Now that sensing works, the helper senses 40 % of the interferers behind the
+      leader's residual collided attempts that the leader missed (§7.10, footprint): a
+      helper-assisted selection (helper reports or vetoes resources) is the natural next
+      arm.
+10. SB-SPS follow-ups: isolate the N = 0 grant-size effect (e.g. a grant that also shrinks
+    to the new SDU, or per-SDU-size statistics), and, if per-option effects matter,
+    a factorial run (grant type x D1/D2) on a few cells.

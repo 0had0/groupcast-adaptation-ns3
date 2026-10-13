@@ -11,6 +11,10 @@ Built from the two scenarios already in this repo:
 `highway_kuo_eval` (3-lane SUMO highway) and `roundabout_rsu_eval`
 (synthetic 4-arm roundabout with 98 buildings, `joint-coop-harq-mac/sumo-exports`).
 
+**Current reference results: "SB-SPS re-run: results" below** (periodic traffic on SB-SPS,
+D1 + D2 sensing, 2026-10-13). The earlier results sections are the record of the
+dynamic-grant runs (`*_rlc0`) and stay valid for that configuration.
+
 ## Scenario matrix
 
 | factor | values |
@@ -864,6 +868,171 @@ every experiment, with the periodic2 retransmission-slot loss as a stated proper
 configuration (finding 3: standard step-6 sensing over C_resel periods in a loaded 45 %
 TDD pool with 4-5-subchannel TBs; no pool change). Code and checks ready
 (`run_rerun_sps.sh check` passes locally).
+
+## SB-SPS re-run: results (server, 2026-10-12/13, `run_rerun_sps.sh`, commit `1ef63a6`)
+
+**Configuration** (every run): leader periodic1 / periodic2 on SB-SPS (RRI = period) with the
+misfit reselection, sl-ProbResourceKeep 0.8 and the 14-entry sl-ResourceReservePeriodList;
+D1 + D2 sensing for every UE; background periodic1 on SB-SPS with the same rules,
+aperiodic1 (leader and background) and helper relays on dynamic Mode-2 grants;
+t-Reordering 0. Same traces and seeds as the `*_rlc0` runs.
+
+**Runs and checks**: campaign 270, variants 276, coop 500 (15 h 41 min at 24 jobs),
+0 failed. Every run CSV carries the six flags and the effective `leader_grant` (`sps` for
+periodic, `dynamic` for aperiodic): 0 mismatches. Every coop run passes every
+`run_coop.py` design check. Leader NACKs missed: 37 of 3.47 M NACKed transmissions (path
+loss above `MaxLossDb`, §6 of HANDOFF; before the attribution fix SPS periodic2 lost
+540-715 per run). Data: `~/Documents/remote-results/{analysis_sps, campaign_sps,
+variants_sps, coop_sps}` (per-run and per-member CSVs, analyses; per-packet files stay on
+the server), driver log and provenance in `remote-results/rerun_sps/`.
+
+**Read this as a new baseline, not as a correction of the `*_rlc0` numbers**: the
+comparison below changes the leader's grant type, the sensing (D1 + D2) of every UE and
+the background's SPS rules at once; which option moved what is only indicated by the
+pilots (section above). In brackets: the dynamic-grant `*_rlc0` value, same cell.
+
+### Campaign (3 seeds, 90 cells; `analysis_sps/summary.csv`)
+
+Average PRR per member, highway / roundabout:
+
+| IVD | N | periodic1 | periodic2 | aperiodic1 |
+|---|---|---|---|---|
+| 5 m | 0 | 0.996 (0.997) / 0.999 (0.999) | 0.982 (0.982) / 0.994 (0.992) | 0.951 (0.951) / 0.974 (0.974) |
+| 15 m | 0 | 0.985 (0.989) / 0.947 (0.965) | 0.944 (0.950) / 0.873 (0.895) | 0.864 (0.864) / 0.824 (0.824) |
+| 30 m | 0 | 0.956 (0.967) / 0.830 (0.856) | 0.857 (0.879) / 0.715 (0.751) | 0.741 (0.741) / 0.672 (0.672) |
+| 5 m | 60 | 0.995 (0.967) / 0.997 (0.965) | 0.942 (0.914) / 0.966 (0.928) | 0.851 (0.810) / 0.855 (0.805) |
+| 15 m | 60 | 0.985 (0.932) / 0.948 (0.912) | 0.878 (0.847) / 0.848 (0.842) | 0.716 (0.677) / 0.721 (0.695) |
+| 30 m | 60 | 0.973 (0.893) / 0.820 (0.797) | 0.756 (0.740) / 0.684 (0.694) | 0.585 (0.549) / 0.577 (0.552) |
+
+Loss increase from N = 0 to 60 (percentage points of 1 - PRR), highway / roundabout:
+
+| IVD | periodic1 | periodic2 | aperiodic1 |
+|---|---|---|---|
+| 5 m | 0.1 (3.0) / 0.2 (3.4) | 4.1 (6.8) / 2.8 (6.4) | 10.0 (14.1) / 12.0 (16.9) |
+| 15 m | 0.0 (5.7) / -0.1 (5.3) | 6.6 (10.4) / 2.5 (5.3) | 14.8 (18.8) / 10.4 (13.0) |
+| 30 m | -1.8 (7.4) / 1.0 (5.9) | 10.1 (13.9) / 3.1 (5.7) | 15.6 (19.2) / 9.5 (12.0) |
+
+Mean over scenarios and IVDs, per N (SB-SPS vs dynamic): leader resource-collision rate,
+transmissions per packet, collision loss per member-packet:
+
+| traffic | N | collision rate | tx/pkt | collision loss |
+|---|---|---|---|---|
+| periodic1 | 30 | 0.08 (0.19) | 1.51 (1.46) | 0.013 (0.044) |
+| periodic1 | 60 | 0.16 (0.36) | 1.44 (1.46) | 0.020 (0.077) |
+| periodic2 | 30 | 0.16 (0.35) | 1.28 (1.48) | 0.039 (0.093) |
+| periodic2 | 60 | 0.34 (0.58) | 1.25 (1.54) | 0.085 (0.153) |
+| aperiodic1 | 30 | 0.21 (0.29) | 2.65 (2.68) | 0.141 (0.189) |
+| aperiodic1 | 60 | 0.39 (0.49) | 2.69 (2.75) | 0.244 (0.294) |
+
+1. **periodic1 no longer loses PRR to background traffic.** The 0 -> 60 loss is <= 1 pp
+   (was 3-7 pp): the leader's collision rate at N = 60 halves (0.16 vs 0.36) and the
+   collision loss falls to a quarter. Highway N 60: 0.973-0.995 (was 0.893-0.967); 8 of
+   the 15 highway cells are better with disjoint 95 % CIs, none worse.
+2. **periodic2: no net change** (mean dPRR -0.000 highway, -0.004 roundabout; 2 cells
+   better, 1 worse with disjoint CIs). Collisions fall (0.34 vs 0.58 at N = 60), but SPS
+   reserves fewer retransmission slots under load (1.41-1.46 per grant at N >= 30, 1.85 at
+   N = 0; tx/pkt 1.25 vs 1.54): the accepted SB-SPS property (HANDOFF §8).
+3. **aperiodic1 (leader still on dynamic grants): +0.02 to +0.05 at N >= 30** (2 roundabout
+   cells with disjoint CIs): D1 + D2 alone, collision rate 0.39 vs 0.49 at N = 60.
+4. **Without background SB-SPS is equal or slightly worse at long IVD**: roundabout IVD 30
+   periodic1 0.830 vs 0.856 and periodic2 0.715 vs 0.751 (disjoint CIs), highway IVD 30
+   -0.011 / -0.022 (inside the CIs), IVD 5 identical. Likely cause (not isolated): an SPS
+   grant keeps the size of the largest SDU it was (re)selected for, so smaller SDUs are
+   sent over more subchannels with the same 23 dBm (lower power per PRB): mean grant
+   1.62 subchannels for periodic1 (dynamic per packet: 1.20) and 4.56 for periodic2
+   (4.20).
+5. Unchanged: urban NLOS limits the long platoon (roundabout IVD 30 periodic1 0.82-0.83
+   whatever the load), HARQ cannot fix the blockage, aperiodic1 < periodic2 < periodic1.
+   Changed: the "highway degrades faster with N" finding now holds for periodic2 and
+   aperiodic1 only; for periodic1 neither scenario degrades.
+
+Grant statistics (leader, mean over runs): periodic1 0.29-0.42 (re)selections/s, 0.7-0.8
+kept resources/s, 1.62 subchannels / 293 B per grant, 2.85-2.91 slots per grant;
+periodic2 0.73-0.86 /s, 1.5 kept/s, 4.56 subchannels / 1058 B, 1.42-1.85 slots.
+Background periodic1: 3.3-12.7 SPS (re)selections/s and 7.5-28.4 kept/s for N = 15-60.
+
+### Variants (IVD 30 m; `variants_sps/analysis/variants_summary.csv`)
+
+Average PRR per member at N = 60, highway / roundabout (MCS 5 / 9 not re-run):
+
+| traffic | MCS 14 (base) | dedicated | blind |
+|---|---|---|---|
+| periodic1 | 0.97 (0.88) / 0.83 (0.80) | 0.97 (0.94) / 0.83 (0.84) | 0.98 (0.90) / 0.82 (0.81) |
+| periodic2 | 0.77 (0.74) / 0.68 (0.69) | 0.90 (0.86) / 0.76 (0.75) | 0.86 (0.80) / 0.74 (0.72) |
+| aperiodic1 | 0.59 (0.55) / 0.58 (0.55) | 0.69 (0.66) / 0.63 (0.61) | 0.58 (0.54) / 0.57 (0.54) |
+
+Tail member (member 8) PRR within the PDB, 10 seeds, +- 95 % CI (dynamic `*_rlc0`):
+
+| cell | N = 0 | N = 45 | N = 60 |
+|---|---|---|---|
+| hwy periodic1, MCS 14 | 0.895 +- 0.064 (0.925) | **0.929 +- 0.029** (0.835) | **0.919 +- 0.060** (0.819) |
+| hwy periodic1, dedicated | 0.900 +- 0.059 (0.930) | 0.904 +- 0.051 (0.879) | 0.938 +- 0.030 (0.897) |
+| hwy periodic2, MCS 14 | 0.627 +- 0.128 (0.683) | 0.487 +- 0.102 (0.519) | 0.490 +- 0.110 (0.488) |
+| hwy periodic2, dedicated | 0.744 +- 0.139 (0.751) | 0.705 +- 0.119 (0.691) | 0.719 +- 0.092 (0.687) |
+| rbt periodic1, MCS 14 | 0.573 +- 0.009 (0.608) | 0.602 +- 0.066 (0.607) | 0.585 +- 0.059 (0.585) |
+| rbt periodic1, dedicated | 0.554 +- 0.011 (0.621) | 0.594 +- 0.050 (0.622) | 0.589 +- 0.062 (0.620) |
+| rbt periodic2, MCS 14 | 0.393 +- 0.042 (0.418) | 0.408 +- 0.074 (0.449) | 0.365 +- 0.055 (0.416) |
+| rbt periodic2, dedicated | 0.474 +- 0.045 (0.457) | 0.510 +- 0.067 (0.478) | 0.509 +- 0.066 (0.470) |
+
+1. **Highway periodic1 tail under load: +0.09 to +0.10** (MCS 14, N 45 / 60; also the
+   mean PRR 0.96 vs 0.88-0.90 with disjoint CIs, and for blind). On the highway the
+   dedicated carrier no longer adds anything for periodic1 (0.97 both at N = 60).
+2. **periodic2 tail: unchanged within the CIs** on both scenarios (fewer collisions vs fewer
+   retransmissions); the dedicated carrier still helps it most (highway N 60: 0.719 vs
+   0.490).
+3. **Roundabout tail: unchanged, blockage-limited** (0.57-0.60 periodic1, 0.37-0.41
+   periodic2); at N = 0 periodic1 it is lower (0.573 vs 0.608; dedicated 0.554 vs 0.621,
+   disjoint CIs): finding 4 of the campaign.
+4. **Blind retransmission is no longer "3 transmissions" for periodic2**: an SPS grant
+   reserves 3 slots only without load (2.86 tx/pkt at N = 0, 2.11-2.16 at N 45 / 60).
+
+### Cooperative HARQ (10 seeds, helper 4, IVD 30; `coop_sps/analysis/`)
+
+Tail (member 8) PRR within the PDB, mean over seeds; paired = per-seed difference to `none`
+with its 95 % CI, wins = seeds better than `none`; CI = also disjoint 95 % CIs (same
+method as the dynamic-grant table above, which it reproduces exactly).
+
+| cell | none | leaderRes | ownRes | split | additive | tx/pkt none -> additive |
+|---|---|---|---|---|---|---|
+| rbt N 0 periodic1 | 0.556 | **0.630** (+0.074, 10/10, CI) | **0.612** (+0.056, 10/10, CI) | **0.600** (+0.044, 9/10) | **0.606** (+0.050, 10/10, CI) | 1.95 -> 2.37 |
+| rbt N 0 periodic2 | 0.407 | 0.430 (n.s.) | 0.321 (worse, -0.086) | 0.424 (n.s.) | 0.412 (n.s.) | 1.59 -> 1.75 |
+| rbt N 45 periodic1 | 0.602 | **0.646** (+0.044, 10/10) | **0.636** (+0.034, 9/10) | **0.630** (+0.028, 9/10) | **0.641** (+0.039, 9/10) | 1.87 -> 2.30 |
+| rbt N 45 periodic2 | 0.399 | 0.384 (n.s.) | 0.381 (n.s.) | 0.399 (n.s.) | 0.425 (n.s.) | 1.31 -> 1.48 |
+| rbt N 60 periodic1 | 0.571 | **0.622** (+0.050, 10/10) | **0.618** (+0.047, 10/10) | **0.606** (+0.035, 9/10) | **0.597** (+0.026, 8/10) | 1.91 -> 2.36 |
+| rbt N 60 periodic2 | 0.360 | 0.388 (n.s.) | 0.344 (n.s.) | 0.356 (n.s.) | 0.367 (n.s.) | 1.34 -> 1.36 |
+| hwy N 45 periodic1 | 0.888 | 0.888 (n.s.) | 0.903 (n.s.) | 0.887 (n.s.) | 0.908 (n.s.) | 1.68 -> 2.19 |
+| hwy N 45 periodic2 | 0.485 | 0.472 (n.s.) | 0.425 (worse, -0.060) | 0.490 (n.s.) | **0.514** (+0.029, 7/10) | 1.38 -> 1.52 |
+| hwy N 60 periodic1 | 0.888 | 0.892 (n.s.) | 0.896 (n.s.) | 0.901 (n.s.) | **0.910** (+0.022, 7/10) | 1.72 -> 2.24 |
+| hwy N 60 periodic2 | 0.505 | 0.483 (n.s.) | 0.435 (worse, -0.070) | 0.504 (n.s.) | 0.516 (n.s.) | 1.36 -> 1.48 |
+
+1. **The blockage verdict stands, somewhat smaller**: on the roundabout with periodic1 every
+   helper arm helps (N 0: +0.04 to +0.07, disjoint CIs for `leaderRes`, `ownRes`,
+   `additive`; N 45 / 60: +0.03 to +0.05 paired, 8-10/10 seeds). The `none` tail is lower
+   than with dynamic grants (0.556 vs 0.597 at N 0, campaign finding 4).
+2. **Handing retransmissions over no longer loses under collisions with periodic1, and
+   `leaderRes` no longer loses with periodic2** (highway -0.014 / -0.022, n.s.; was -0.09):
+   collisions are rarer. `ownRes` still loses with periodic2 (-0.06 to -0.09).
+3. **`additive`: gains only where it gained before, and smaller** (highway +0.02 / +0.03
+   paired, 7/10, two of four cells; the other two n.s.), for 10-30 % more transmissions.
+4. **`split` is inert with periodic2 under SB-SPS**: the leader's periodic2 grants rarely
+   reserve a third slot to hand over (0-25 helper copies per run).
+5. Latency: `ownRes` still doubles the periodic1 mean latency (10.6-11.2 vs 4.5-5.5 ms);
+   the other arms stay within 1 ms of `none`.
+
+**Footprint (pre-registered rule, roundabout N 45 / 60): supported, still not a turn
+effect** — turn phase: `leader_only` + `helper_only` = 46.8 % of the collided failed
+leader attempts (outside the turn 43.9 %; dynamic grants: 22.7 % / 18.9 %), median
+divergence of the leader's selections 0.85 (dynamic 0.40). What changed is the mix (all
+phases): with sensing working, an interferer sensed by both is now behind only 17 % of
+these attempts (was 63 %), and one sensed by the helper only behind 40 % (was 12 %) — the residual
+collisions are the ones the leader could not see, the helper often could. Divergence is
+computed per selection and the SPS leader selects ~70x less often (4.6 k vs 313 k
+selections in the turn phase), so 0.85 vs 0.40 is not a like-for-like comparison.
+
+The collision `why` breakdown (`coop_why_summary.csv`) classifies a collided transmission
+by the selection that picked its resource; an SPS period that reuses a reservation has
+none (88 % `no_selection` for the leader), so it is not comparable with the dynamic-grant
+runs.
 
 ## Running on another machine (e.g. a Linux server)
 
