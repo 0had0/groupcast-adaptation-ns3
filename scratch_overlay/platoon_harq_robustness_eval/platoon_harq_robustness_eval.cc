@@ -320,6 +320,116 @@ struct Global
 
 Global g;
 
+// ---------------------------------------------------------------------------
+// Hidden-node instrumentation (--hiddenNode, README "Hidden-node test"): the
+// leader's MAC evaluates the helper's sensing data at each of its selections
+// (NrSlUeMac::SetSensingPeer, trace SensingGap); each use of a leader-selected
+// resource (leader transmission, helper copy on a handed-over slot) is linked to
+// the selection that produced it and evaluated with both UEs' sensing data at
+// the time of use (NrSlUeMac::EvaluateSensedExclusion)
+// ---------------------------------------------------------------------------
+
+/// one resource selection of the leader
+struct HnSel
+{
+    double t{0.0};
+    int64_t nRaw{0}; // selection slot n (raw)
+    uint16_t t1{0};
+    uint16_t t2{0};
+    uint16_t cResel{0};
+    uint16_t rsvpMs{0};
+    uint16_t tProc0{0};
+    uint32_t mTotal{0};
+    uint32_t nCand{0}; // candidates entering step 6
+    uint32_t nFinal{0};
+    // L / H = candidates the leader's / helper's "ext" sensing data excludes
+    uint32_t nL{0}, nH{0}, nHnotL{0}, nLnotH{0};     // final threshold
+    uint32_t nLi{0}, nHi{0}, nHnotLi{0}, nLnotHi{0}; // initial threshold
+    uint32_t nLact{0};                               // the leader's real exclusion (final)
+    int thrInit{0};
+    int thrFinal{0};
+    int thrOwn{0}; // final threshold of the leader's own data alone (oracle IUC)
+    bool iuc{false};
+    bool step6{false};
+    bool thrMismatch{false};
+    uint32_t mismatch{0};
+    uint32_t recL{0};
+    uint32_t recH{0};
+    double div{-1.0}; // sensing-map divergence of the same selection (_div.csv)
+    bool granted{false};
+    uint8_t harqId{255};
+    uint8_t counter{0};
+    uint32_t keeps{0}; // SpsResourceKept so far
+    uint32_t pubs{0};  // periods published so far
+    int8_t legSeg{-1};
+    int8_t tailSeg{-1};
+    // the grant's first-period slots and their SensingGap flags (0xFF: not a candidate)
+    std::vector<int64_t> baseSlot;
+    std::vector<uint8_t> baseSb;
+    std::vector<uint8_t> baseFlags;
+    std::unordered_map<uint64_t, uint8_t> candFlags; // until the grant is created
+};
+
+/// a published slot of a leader grant
+struct HnPub
+{
+    int32_t sel;
+    uint32_t keep;
+    uint32_t period;
+    uint8_t base;
+};
+
+/// a use of a leader-selected resource
+struct HnUse
+{
+    double t{0.0};
+    int side{0}; // 0 leader, 1 helper
+    size_t idx{0};
+    int64_t slotRaw{0};
+    uint8_t sb{0};
+    uint8_t len{0};
+    int32_t sel{-1};
+    uint32_t keep{0};
+    uint32_t period{0};
+    uint8_t baseFlags{0xFF};
+    bool exHf{false}, exLf{false}, exHi{false}, exLi{false};
+    int64_t lEarliestF{-1};
+    int64_t lEarliestI{-1};
+    uint32_t recL{0};
+    uint32_t recH{0};
+    float dLH{0.0f};
+    int8_t condLH{-1};
+    uint16_t nArea{0};
+    int8_t legSeg{-1};
+    int8_t tailSeg{-1};
+};
+
+struct HnState
+{
+    bool on{false};
+    bool helperUses{false}; // helper copies are on handed-over slots
+    Ptr<NrSlUeMac> helperMac;
+    uint32_t numPlatoon{9};
+    uint8_t mu{1};
+    std::vector<HnSel> sels;
+    std::unordered_map<uint8_t, int32_t> selOfHarq;
+    std::unordered_map<uint64_t, HnPub> pub; // (raw slot, subchannel) -> published slot
+    int32_t lastPubSel{-1};
+    std::vector<HnUse> uses;
+    // grant without a selection at the same instant, selected slot that was not a
+    // step-6 candidate, first slot outside [n + T1, n + T2], published period with
+    // another slot count, kept resource without a published grant
+    uint64_t linkErr{0};
+};
+
+HnState hn;
+
+inline uint64_t
+HnKey(int64_t raw, uint32_t sb)
+{
+    return (static_cast<uint64_t>(raw) << 8) | (sb & 0xff);
+}
+
 inline uint64_t
 SlotKey(uint32_t frame, uint32_t sf, uint32_t slot)
 {
@@ -338,6 +448,7 @@ OnAnyPsschTx(uint32_t nodeIdx, SlPsschUeMacStatParameters p)
 int8_t Segment(const Vector& p);
 inline Vector PosOf(uint32_t node);
 void RecordCollCond(int64_t slotAbs);
+void HnRecordUse(uint32_t sideIdx, const SlPsschUeMacStatParameters& p, size_t idx);
 
 /// Runs after the side's controller's own SlPsschScheduling callback
 /// (connected later), so the LeaderTx record of this transmission exists.
@@ -379,6 +490,10 @@ OnPlatoonPsschTx(uint32_t sideIdx, SlPsschUeMacStatParameters p)
         // after every transmitter of this slot has been traced
         Simulator::Schedule(Seconds(g.tSlot * 0.5), &RecordCollCond,
                             std::llround(Simulator::Now().GetSeconds() / g.tSlot));
+    }
+    if (hn.on)
+    {
+        HnRecordUse(sideIdx, p, idx);
     }
 }
 
@@ -609,6 +724,12 @@ OnSensing(uint32_t obs,
                          static_cast<uint32_t>(a.size()), static_cast<uint32_t>(b.size()), both,
                          static_cast<uint32_t>(r.m_initialCandidateSlotsSize) * g.totalSubCh,
                          Segment(PosOf(0)), Segment(PosOf(g.numMembers))});
+        if (hn.on && obs == 0 && !hn.sels.empty() &&
+            hn.sels.back().t == Simulator::Now().GetSeconds() && hn.sels.back().div < 0.0)
+        {
+            const double uni = static_cast<double>(a.size() + b.size() - both);
+            hn.sels.back().div = uni > 0 ? (a.size() + b.size() - 2.0 * both) / uni : 0.0;
+        }
     }
 }
 
@@ -710,6 +831,198 @@ OnMemberAppRx(uint32_t member,
     }
 }
 
+/// SensingGap of the leader's MAC: one selection
+void
+OnSensingGap(const NrSlUeMac::SensingGapReport& r,
+             const std::list<SlResourceInfo>& step5,
+             const std::vector<uint8_t>& flags)
+{
+    HnSel s;
+    s.t = Simulator::Now().GetSeconds();
+    s.nRaw = static_cast<int64_t>(r.m_sfn.Normalize());
+    s.t1 = r.m_t1;
+    s.t2 = r.m_t2;
+    s.cResel = r.m_cResel;
+    s.rsvpMs = r.m_pRsvpTxMs;
+    s.tProc0 = r.m_tProc0;
+    s.mTotal = r.m_mTotal;
+    s.nCand = r.m_nStep5;
+    s.nFinal = r.m_nFinal;
+    s.thrInit = r.m_thrInit;
+    s.thrFinal = r.m_thrFinal;
+    s.thrOwn = r.m_thrFinalOwn;
+    s.iuc = r.m_union;
+    s.step6 = r.m_stepSix;
+    s.mismatch = r.m_mismatch;
+    s.thrMismatch = r.m_thrMismatch;
+    s.recL = r.m_ownRecords;
+    s.recH = r.m_peerRecords;
+    s.legSeg = Segment(PosOf(0));
+    s.tailSeg = Segment(PosOf(g.numMembers));
+    size_t i = 0;
+    for (const auto& c : step5)
+    {
+        const uint8_t f = flags[i++];
+        const bool lf = f & NrSlUeMac::GAP_L_FIN;
+        const bool hf = f & NrSlUeMac::GAP_H_FIN;
+        const bool li = f & NrSlUeMac::GAP_L_INIT;
+        const bool hi = f & NrSlUeMac::GAP_H_INIT;
+        s.nL += lf;
+        s.nH += hf;
+        s.nHnotL += hf && !lf;
+        s.nLnotH += lf && !hf;
+        s.nLi += li;
+        s.nHi += hi;
+        s.nHnotLi += hi && !li;
+        s.nLnotHi += li && !hi;
+        s.nLact += (f & NrSlUeMac::GAP_LACT_FIN) ? 1 : 0;
+        s.candFlags[HnKey(static_cast<int64_t>(c.sfn.Normalize()), c.slSubchannelStart)] = f;
+    }
+    hn.sels.push_back(std::move(s));
+}
+
+/// a grant of the leader's scheduler: link it to the selection made at the same instant
+void
+HnGrantCreated(const NrSlUeMacScheduler::GrantInfo& gi)
+{
+    if (hn.sels.empty() || hn.sels.back().t != Simulator::Now().GetSeconds() ||
+        hn.sels.back().granted)
+    {
+        ++hn.linkErr;
+        return;
+    }
+    HnSel& s = hn.sels.back();
+    s.granted = true;
+    s.harqId = gi.harqId;
+    s.counter = gi.slResoReselCounter;
+    uint32_t k = 0;
+    for (const auto& a : gi.slotAllocations) // time order: the first nSelected = period 0
+    {
+        if (k++ >= gi.nSelected)
+        {
+            break;
+        }
+        const int64_t raw = static_cast<int64_t>(a.sfn.Normalize());
+        s.baseSlot.push_back(raw);
+        s.baseSb.push_back(static_cast<uint8_t>(a.slPsschSubChStart));
+        auto it = s.candFlags.find(HnKey(raw, a.slPsschSubChStart));
+        s.baseFlags.push_back(it == s.candFlags.end() ? 0xFF : it->second);
+        hn.linkErr += it == s.candFlags.end() ? 1 : 0;
+    }
+    if (s.baseSlot.empty() || s.baseSlot.front() < s.nRaw + s.t1 ||
+        s.baseSlot.front() > s.nRaw + s.t2)
+    {
+        ++hn.linkErr;
+    }
+    s.candFlags.clear();
+    hn.selOfHarq[gi.harqId] = static_cast<int32_t>(hn.sels.size() - 1);
+}
+
+/// a period of a leader grant handed to the MAC (the slots of this period)
+void
+OnGrantPublished(const NrSlUeMac::NrSlGrant& gr, uint16_t /*psfchPeriod*/)
+{
+    auto it = hn.selOfHarq.find(gr.harqId);
+    if (it == hn.selOfHarq.end())
+    {
+        ++hn.linkErr;
+        hn.lastPubSel = -1;
+        return;
+    }
+    HnSel& s = hn.sels[it->second];
+    hn.lastPubSel = it->second;
+    if (gr.slotAllocations.size() != s.baseSlot.size())
+    {
+        ++hn.linkErr;
+    }
+    uint8_t i = 0;
+    for (const auto& a : gr.slotAllocations)
+    {
+        hn.pub[HnKey(static_cast<int64_t>(a.sfn.Normalize()), a.slPsschSubChStart)] = {
+            it->second, s.keeps, s.pubs, i++};
+    }
+    ++s.pubs;
+}
+
+/// SpsResourceKept of the leader: follows the publication of the kept grant's last period
+void
+HnKept()
+{
+    if (hn.lastPubSel < 0)
+    {
+        ++hn.linkErr;
+        return;
+    }
+    ++hn.sels[hn.lastPubSel].keeps;
+}
+
+/// a transmission of the leader (side 0) or the helper (side 1), record idx of
+/// its side's controller: evaluate the used resource with both UEs' sensing data
+void
+HnRecordUse(uint32_t sideIdx, const SlPsschUeMacStatParameters& p, size_t idx)
+{
+    if (sideIdx == 1 && !hn.helperUses)
+    {
+        return; // the helper's copies are on its own resources
+    }
+    HnUse u;
+    u.t = Simulator::Now().GetSeconds();
+    u.side = static_cast<int>(sideIdx);
+    u.idx = idx;
+    u.slotRaw = RawSlot(p.frameNum, p.subframeNum, p.slotNum);
+    const uint32_t scs = p.subChannelSize ? p.subChannelSize : 10;
+    u.sb = static_cast<uint8_t>(p.rbStart / scs);
+    u.len = static_cast<uint8_t>((p.rbLength + scs - 1) / scs);
+    auto it = hn.pub.find(HnKey(u.slotRaw, u.sb));
+    if (it != hn.pub.end())
+    {
+        const HnSel& s = hn.sels[it->second.sel];
+        u.sel = it->second.sel;
+        u.keep = it->second.keep;
+        u.period = it->second.period;
+        u.baseFlags = it->second.base < s.baseFlags.size() ? s.baseFlags[it->second.base] : 0xFF;
+        const SfnSf n(p.frameNum,
+                      static_cast<uint8_t>(p.subframeNum),
+                      static_cast<uint8_t>(p.slotNum),
+                      hn.mu);
+        // platoon-internal SCIs (the leader's own reservations, the helper's copies)
+        // are not conflicts of this resource
+        const std::set<uint16_t> ign{g.leaderMac->GetRnti(), hn.helperMac->GetRnti()};
+        const auto lf = g.leaderMac->EvaluateSensedExclusion(n, n, u.sb, u.len, s.thrFinal, s.t2, ign);
+        const auto hf = hn.helperMac->EvaluateSensedExclusion(n, n, u.sb, u.len, s.thrFinal, s.t2, ign);
+        const auto li = g.leaderMac->EvaluateSensedExclusion(n, n, u.sb, u.len, s.thrInit, s.t2, ign);
+        const auto hi = hn.helperMac->EvaluateSensedExclusion(n, n, u.sb, u.len, s.thrInit, s.t2, ign);
+        u.exLf = lf.excluded;
+        u.exHf = hf.excluded;
+        u.exLi = li.excluded;
+        u.exHi = hi.excluded;
+        u.lEarliestF = lf.earliestSlot;
+        u.lEarliestI = li.earliestSlot;
+        u.recL = lf.records;
+        u.recH = hf.records;
+    }
+    const Vector pl = PosOf(0);
+    const Vector ph = PosOf(g.helperNode);
+    u.dLH = static_cast<float>(std::hypot(pl.x - ph.x, pl.y - ph.y));
+    // link condition leader -> helper at the leader's (latest) transmission: no
+    // extra channel-condition query (it would change the random draws)
+    const TxSide& L = g.side[0];
+    if (!L.cond.empty() && g.helperNode >= 1)
+    {
+        const size_t li = (sideIdx == 0 && idx < L.cond.size()) ? idx : L.cond.size() - 1;
+        u.condLH = L.cond[li][g.helperNode - 1];
+    }
+    for (uint32_t i = hn.numPlatoon; i < g.numNodes; ++i)
+    {
+        const Vector q = PosOf(i);
+        u.nArea += std::hypot(q.x, q.y) < 5.0e4 ? 1 : 0; // parked seats are > 50 km away
+    }
+    const TxSide& S = g.side[sideIdx];
+    u.legSeg = idx < S.legSeg.size() ? S.legSeg[idx] : -1;
+    u.tailSeg = idx < S.tailSeg.size() ? S.tailSeg[idx] : -1;
+    hn.uses.push_back(u);
+}
+
 // Grants created by the schedulers (each SPS grant = one resource (re)selection)
 // and SPS grants that did not fit an RLC SDU (NrSlUeMac::SpsReselectOnMisfit).
 // role 0 = leader, 1 = background.
@@ -751,12 +1064,20 @@ OnGrantCreated(uint32_t role, const NrSlUeMacScheduler::GrantInfo& gi, uint16_t 
         }
     }
     g_grants.push_back(e);
+    if (hn.on && role == 0)
+    {
+        HnGrantCreated(gi);
+    }
 }
 
 void
 OnSpsKept(uint32_t role, uint32_t /*dstL2Id*/, uint8_t /*counter*/)
 {
     g_kept.emplace_back(Simulator::Now().GetSeconds(), static_cast<uint8_t>(role));
+    if (hn.on && role == 0)
+    {
+        HnKept();
+    }
 }
 
 void
@@ -842,6 +1163,9 @@ main(int argc, char* argv[])
     //   additive  the leader runs unchanged Option-1 HARQ; after a NACK on the
     //             leader's initial transmission the helper adds up to relayBudget
     //             copies on its own (Mode 2) resources
+    //   leaderResIuc  leaderRes + oracle inter-UE coordination (upper bound): at
+    //             every leader selection the resources the helper's sensing data
+    //             excludes are excluded too (zero delay, lossless, no signalling)
     bool silenceClog = true;        // false: keep NS_LOG output (debugging)
     std::string helperMode = "off";
     uint32_t helper = 0;            // member (1..numPlatoon-1) acting as helper
@@ -861,6 +1185,10 @@ main(int argc, char* argv[])
     // (empty = the stack default: 0, 10-100, 150-1000 ms without 250, 27 values)
     double slProbResourceKeep = 0.0;
     std::string rriListStr;
+    // sensing RSRP threshold (SlThresPsschRsrp, every UE) and the hidden-node
+    // instrumentation (_use.csv, _sel.csv; leaderResIuc turns it on)
+    int slThresRsrp = -128;
+    bool hiddenNode = false;
                                     // (extra channel-condition queries: may perturb the run)
 
     // NR RLC UM (TS 38.322) has no t-Reordering: complete SDUs go up as soon
@@ -899,7 +1227,8 @@ main(int argc, char* argv[])
     cmd.AddValue("writePkt", "write the per-packet and per-transmission CSVs", writePkt);
     cmd.AddValue("silenceClog", "silence std::clog (NS_LOG) during the run", silenceClog);
     cmd.AddValue("helperMode",
-                 "cooperative HARQ: off | none | leaderRes | ownRes | split | additive",
+                 "cooperative HARQ: off | none | leaderRes | ownRes | split | additive | "
+                 "leaderResIuc (leaderRes + oracle IUC upper bound)",
                  helperMode);
     cmd.AddValue("helper", "member acting as helper (also the sensing observer)", helper);
     cmd.AddValue("relayBudget", "additive arm: helper copies per TB", relayBudget);
@@ -926,6 +1255,15 @@ main(int argc, char* argv[])
                  "sl-ResourceReservePeriodList in ms, comma separated (at most 16, RRC); "
                  "empty = stack default (27 values)",
                  rriListStr);
+    cmd.AddValue("slThresRsrp",
+                 "RSRP threshold (dBm) of the sensing-based selection, every UE "
+                 "(SlThresPsschRsrp; +3 dB relaxation steps from there)",
+                 slThresRsrp);
+    cmd.AddValue("hiddenNode",
+                 "hidden-node instrumentation: sensing gap leader / helper at each leader "
+                 "selection and at each use of a leader-selected resource (_use.csv, "
+                 "_sel.csv); needs --helper",
+                 hiddenNode);
     cmd.Parse(argc, argv);
     // ':'-separated copy for the run CSV
     std::string rriListCsv = rriListStr;
@@ -962,10 +1300,14 @@ main(int argc, char* argv[])
 
     NS_ABORT_MSG_IF(helperMode != "off" && helperMode != "none" && helperMode != "leaderRes" &&
                         helperMode != "ownRes" && helperMode != "split" &&
-                        helperMode != "additive",
+                        helperMode != "additive" && helperMode != "leaderResIuc",
                     "bad --helperMode " << helperMode);
+    const bool iucOracle = (helperMode == "leaderResIuc");
     const bool coop = (helperMode == "leaderRes" || helperMode == "ownRes" ||
-                       helperMode == "split" || helperMode == "additive");
+                       helperMode == "split" || helperMode == "additive" || iucOracle);
+    hiddenNode = hiddenNode || iucOracle;
+    NS_ABORT_MSG_IF(hiddenNode && helper == 0, "--hiddenNode / leaderResIuc need --helper");
+    NS_ABORT_MSG_IF(slThresRsrp > 0 || slThresRsrp < -128, "--slThresRsrp in [-128, 0] dBm");
     // the helper selects the resources of its copies itself (else the leader's
     // selection gave them)
     const bool helperSelects = (helperMode == "ownRes" || helperMode == "additive");
@@ -1075,6 +1417,7 @@ main(int argc, char* argv[])
     sp.mcrMeters = 0.0; // the Option-1 RX gate is installed below
     sp.adaptiveMcs = false;
     sp.probResourceKeep = slProbResourceKeep;
+    sp.thresRsrp = slThresRsrp;
     sp.rriList = rriList;
     sp.shadowingEnabled = true;
     sp.scenario = (scenario == "highway") ? BandwidthPartInfo::V2V_Highway
@@ -1147,6 +1490,10 @@ main(int argc, char* argv[])
             sch->TraceConnectWithoutContext("GrantCreated", MakeBoundCallback(&OnGrantCreated, role));
             sch->TraceConnectWithoutContext("SpsMisfit", MakeBoundCallback(&OnSpsMisfit, role));
             sch->TraceConnectWithoutContext("SpsResourceKept", MakeBoundCallback(&OnSpsKept, role));
+            if (hiddenNode && i == 0)
+            {
+                sch->TraceConnectWithoutContext("GrantPublished", MakeCallback(&OnGrantPublished));
+            }
         }
     }
 
@@ -1240,6 +1587,18 @@ main(int argc, char* argv[])
             hmac->TraceConnectWithoutContext("SlPsschScheduling",
                                              MakeBoundCallback(&OnPlatoonPsschTx, 1u));
             hmac->TraceConnectWithoutContext("CoopRelay", MakeCallback(&OnCoopRelay));
+        }
+        if (hiddenNode)
+        {
+            hn.on = true;
+            hn.helperUses = coop && !helperSelects; // copies on handed-over slots
+            hn.helperMac = helperDev->GetMac(0)->GetObject<NrSlUeMac>();
+            hn.numPlatoon = numPlatoon;
+            hn.mu = static_cast<uint8_t>(mu);
+            // the leader evaluates the helper's sensing data at each selection; with
+            // the oracle IUC it also excludes what that data excludes
+            g.leaderMac->SetSensingPeer(hn.helperMac, iucOracle);
+            g.leaderMac->TraceConnectWithoutContext("SensingGap", MakeCallback(&OnSensingGap));
         }
     }
 
@@ -2080,6 +2439,195 @@ main(int argc, char* argv[])
             }
         }
     }
+    // -- hidden-node instrumentation: outcome of every use, aggregates and checks
+    //    (README "Hidden-node test"); uses and selections counted in the KPI window
+    struct HnAgg
+    {
+        uint64_t n{0}, linked{0}, cat[4]{0, 0, 0, 0}, veto{0}, need{0}, dec{0};
+        uint64_t needHid[2]{0, 0}, decHid[2]{0, 0}, nHid[2]{0, 0}; // [0] other, [1] hidden
+        uint64_t needVeto[2]{0, 0}, decVeto[2]{0, 0}, nVeto[2]{0, 0};
+        uint64_t collRear{0}, collTail{0};
+    } hnA[2];
+    uint64_t hnUnlinked = 0, hnAge0Unexplained = 0, hnSelInL = 0, hnGapMismatch = 0;
+    uint64_t hnIucSelInH = 0, hnIucSelInHRelaxed = 0, hnRelaxExtra = 0, hnSelGranted = 0;
+    double hnGhSum = 0.0, hnGlSum = 0.0, hnRelaxSum = 0.0;
+    std::vector<double> hnGh;
+    // per use: outcome at the members that still needed the TB
+    struct HnOut
+    {
+        bool overlap{false}, collRear{false}, collTail{false};
+        uint16_t need{0}, dec{0};
+        int8_t tailDec{-1};
+        uint64_t seq{0};
+        uint16_t nIntf{0}, intfL{0}, intfH{0};
+        std::string intfIds;
+    };
+    std::vector<HnOut> hnOut(hn.uses.size());
+    auto hnCat = [](bool h, bool l) { return h ? (l ? 1 : 0) : (l ? 3 : 2); };
+    static const char* hnCatName[4] = {"hidden", "stale", "unannounced", "leader_only"};
+    auto hnInKpi = [&](double t) { return t >= kpiStart && t < kpiEnd; };
+    if (hn.on)
+    {
+        std::unordered_map<int64_t, std::vector<size_t>> uOfTb; // time order
+        for (size_t u = 0; u < utx.size(); ++u)
+        {
+            uOfTb[utx[u].tb].push_back(u);
+        }
+        const uint32_t tail = numMembers;
+        const uint32_t rear0 = numMembers > 3 ? numMembers - 3 : 1; // members 5-8
+        for (size_t k = 0; k < hn.uses.size(); ++k)
+        {
+            const HnUse& h = hn.uses[k];
+            HnOut& o = hnOut[k];
+            const size_t u = h.idx < uOf[h.side].size() ? uOf[h.side][h.idx] : SIZE_MAX;
+            if (u == SIZE_MAX)
+            {
+                continue;
+            }
+            const int64_t tb = utx[u].tb;
+            const uint32_t node = utx[u].node;
+            o.overlap = nColl[u] > 0;
+            o.seq = utx[u].x->seqs.empty() ? 0 : utx[u].x->seqs.front();
+            for (uint32_t m = 1; m <= numMembers; ++m)
+            {
+                if (m == node)
+                {
+                    continue;
+                }
+                bool had = false; // decoded this TB from an earlier transmission
+                for (size_t v : uOfTb[tb])
+                {
+                    if (v >= u)
+                    {
+                        break;
+                    }
+                    const MemberRx* rv = phyOf(v, m);
+                    had = had || (utx[v].node != m && rv && rv->status == 1);
+                }
+                if (had)
+                {
+                    continue;
+                }
+                const MemberRx* r = phyOf(u, m);
+                const bool ok = r && r->status == 1;
+                ++o.need;
+                o.dec += ok ? 1 : 0;
+                if (!ok && o.overlap && m >= rear0)
+                {
+                    o.collRear = true;
+                }
+                if (m == tail)
+                {
+                    o.tailDec = ok ? 1 : 0;
+                    o.collTail = !ok && o.overlap;
+                }
+            }
+            const double tA = utx[u].x->tS;
+            for (const auto& [j, dj] : interferers[u])
+            {
+                ++o.nIntf;
+                o.intfL += Sensed(0, j, tA, senseWin) ? 1 : 0;
+                o.intfH += Sensed(1, j, tA, senseWin) ? 1 : 0;
+                o.intfIds += (o.intfIds.empty() ? "" : ";") + std::to_string(j);
+            }
+            // checks on the first period of a selection (age ~0): the leader's own
+            // sensing data can exclude the resource only through an SCI received
+            // after the selection's window (or at the initial threshold through the
+            // relaxation)
+            if (h.sel >= 0 && h.period == 0)
+            {
+                const HnSel& sl = hn.sels[h.sel];
+                const int64_t edge = sl.nRaw - sl.tProc0;
+                if (h.exLf && h.lEarliestF >= 0 && h.lEarliestF < edge)
+                {
+                    ++hnAge0Unexplained;
+                }
+                if (h.exLi && sl.thrFinal == sl.thrInit && h.lEarliestI >= 0 &&
+                    h.lEarliestI < edge)
+                {
+                    ++hnAge0Unexplained;
+                }
+            }
+            if (!hnInKpi(h.t))
+            {
+                continue;
+            }
+            HnAgg& A = hnA[h.side];
+            ++A.n;
+            if (h.sel < 0)
+            {
+                ++hnUnlinked;
+                continue;
+            }
+            ++A.linked;
+            const int c = hnCat(h.exHf, h.exLf);
+            ++A.cat[c];
+            const bool veto = h.baseFlags != 0xFF && (h.baseFlags & NrSlUeMac::GAP_H_FIN) &&
+                              !(h.baseFlags & NrSlUeMac::GAP_L_FIN);
+            A.veto += veto ? 1 : 0;
+            A.need += o.need;
+            A.dec += o.dec;
+            const int hid = (c == 0) ? 1 : 0;
+            A.needHid[hid] += o.need;
+            A.decHid[hid] += o.dec;
+            ++A.nHid[hid];
+            A.needVeto[veto] += o.need;
+            A.decVeto[veto] += o.dec;
+            ++A.nVeto[veto];
+            A.collRear += o.collRear ? 1 : 0;
+            A.collTail += o.collTail ? 1 : 0;
+        }
+        for (const HnSel& sl : hn.sels)
+        {
+            hnGapMismatch += sl.mismatch + (sl.thrMismatch ? 1 : 0);
+            if (!sl.granted)
+            {
+                continue;
+            }
+            bool inL = false, inH = false, inHRel = false;
+            for (uint8_t f : sl.baseFlags)
+            {
+                if (f == 0xFF)
+                {
+                    continue; // counted as a link error
+                }
+                inL = inL || (f & NrSlUeMac::GAP_LACT_FIN) || !(f & NrSlUeMac::GAP_FINAL);
+                inH = inH || (f & NrSlUeMac::GAP_H_FIN);
+                inHRel = inHRel || (f & NrSlUeMac::GAP_H_OWNFIN);
+            }
+            hnSelInL += inL ? 1 : 0;
+            if (sl.iuc)
+            {
+                hnIucSelInH += inH ? 1 : 0;
+            }
+            if (!hnInKpi(sl.t))
+            {
+                continue;
+            }
+            ++hnSelGranted;
+            const double gh = sl.nCand ? static_cast<double>(sl.nHnotL) / sl.nCand : 0.0;
+            hnGh.push_back(gh);
+            hnGhSum += gh;
+            hnGlSum += sl.nCand ? static_cast<double>(sl.nLnotH) / sl.nCand : 0.0;
+            hnRelaxSum += (sl.thrFinal - sl.thrInit) / 3.0;
+            if (sl.iuc)
+            {
+                hnRelaxExtra += sl.thrFinal > sl.thrOwn ? 1 : 0;
+                hnIucSelInHRelaxed += inHRel ? 1 : 0;
+            }
+        }
+    }
+    auto hnMedian = [](std::vector<double> v) {
+        if (v.empty())
+        {
+            return 0.0;
+        }
+        std::sort(v.begin(), v.end());
+        const size_t k = v.size() / 2;
+        return v.size() % 2 ? v[k] : 0.5 * (v[k - 1] + v[k]);
+    };
+    auto hnRatio = [](double a, double b) { return b > 0 ? a / b : 0.0; };
+
     auto writeTx = [&](const std::string& fname, int sideIdx) {
         const auto& txs = g.side[sideIdx].ctl->Txs();
         std::ofstream lt(fname);
@@ -2124,6 +2672,89 @@ main(int argc, char* argv[])
         if (g.numSides > 1)
         {
             writeTx(out + "_htx.csv", 1);
+        }
+        if (hn.on)
+        {
+            std::ofstream us(out + "_use.csv");
+            us << "t,role,slot_abs,sb_start,sb_len,sel_id,age_ms,keep_count,period,"
+                  "excl_helper_now,excl_leader_now,excl_helper_now_init,excl_leader_now_init,"
+                  "category,category_init,veto,veto_init,gh,gl,thr_init,thr_final,overlap,"
+                  "coll_rear,coll_tail,n_needing,n_decoded_needing,tail_decoded,"
+                  "d_leader_helper_m,cond_leader_helper,n_area,leader_seg,tail_seg,turn,n_intf,"
+                  "intf_ids,n_intf_sensed_l,n_intf_sensed_h,seq,recs_l,recs_h\n";
+            for (size_t k = 0; k < hn.uses.size(); ++k)
+            {
+                const HnUse& h = hn.uses[k];
+                if (!hnInKpi(h.t))
+                {
+                    continue;
+                }
+                const HnOut& o = hnOut[k];
+                us << std::fixed << std::setprecision(5) << h.t << ',' << h.side << ','
+                   << h.slotRaw + g.sfnOffset << ',' << +h.sb << ',' << +h.len << ',' << h.sel
+                   << ',';
+                if (h.sel >= 0)
+                {
+                    const HnSel& sl = hn.sels[h.sel];
+                    const bool vf = h.baseFlags != 0xFF && (h.baseFlags & NrSlUeMac::GAP_H_FIN) &&
+                                    !(h.baseFlags & NrSlUeMac::GAP_L_FIN);
+                    const bool vi = h.baseFlags != 0xFF &&
+                                    (h.baseFlags & NrSlUeMac::GAP_H_INIT) &&
+                                    !(h.baseFlags & NrSlUeMac::GAP_L_INIT);
+                    us << std::setprecision(1) << (h.t - sl.t) * 1e3 << ',' << h.keep << ','
+                       << h.period << ',' << h.exHf << ',' << h.exLf << ',' << h.exHi << ','
+                       << h.exLi << ',' << hnCatName[hnCat(h.exHf, h.exLf)] << ','
+                       << hnCatName[hnCat(h.exHi, h.exLi)] << ',' << vf << ',' << vi << ','
+                       << std::setprecision(4) << hnRatio(sl.nHnotL, sl.nCand) << ','
+                       << hnRatio(sl.nLnotH, sl.nCand) << ',' << sl.thrInit << ','
+                       << sl.thrFinal << ',';
+                }
+                else
+                {
+                    us << ",,,,,,,,,,,,,,,";
+                }
+                us << o.overlap << ',' << o.collRear << ',' << o.collTail << ',' << o.need << ','
+                   << o.dec << ',' << +o.tailDec << ',' << std::setprecision(1) << h.dLH << ','
+                   << +h.condLH << ',' << h.nArea << ',' << +h.legSeg << ',' << +h.tailSeg << ','
+                   << ((h.legSeg >= 0 && h.tailSeg >= 0 && h.legSeg != h.tailSeg) ? 1 : 0) << ','
+                   << o.nIntf << ',' << o.intfIds << ',' << o.intfL << ',' << o.intfH << ','
+                   << o.seq << ',' << h.recL << ',' << h.recH << '\n';
+            }
+            std::ofstream se(out + "_sel.csv");
+            se << "sel_id,t,in_kpi,grant,granted,harq_id,counter,keeps,periods,window_slots,t1,t2,"
+                  "c_resel,rsvp_ms,m_total,n_cand,n_final,n_l,n_h,n_h_not_l,n_l_not_h,n_l_init,"
+                  "n_h_init,n_h_not_l_init,n_l_not_h_init,n_lact,gh,gl,gh_init,gl_init,"
+                  "divergence,thr_init,thr_final,thr_final_own,relax_steps,relax_steps_own,iuc,"
+                  "step6,mismatch,thr_mismatch,recs_l,recs_h,base_flags,leader_seg,tail_seg\n";
+            for (size_t k = 0; k < hn.sels.size(); ++k)
+            {
+                const HnSel& sl = hn.sels[k];
+                std::string bf;
+                for (uint8_t f : sl.baseFlags)
+                {
+                    bf += (bf.empty() ? "" : ";") + std::to_string(f);
+                }
+                se << k << ',' << std::fixed << std::setprecision(5) << sl.t << ','
+                   << hnInKpi(sl.t) << ',' << (sl.cResel > 0 ? "sps" : "dynamic") << ','
+                   << sl.granted << ',' << +sl.harqId << ',' << +sl.counter << ',' << sl.keeps
+                   << ',' << sl.pubs << ',' << sl.t2 - sl.t1 + 1 << ',' << sl.t1 << ',' << sl.t2
+                   << ',' << sl.cResel << ',' << sl.rsvpMs << ',' << sl.mTotal << ',' << sl.nCand
+                   << ',' << sl.nFinal << ',' << sl.nL << ',' << sl.nH << ',' << sl.nHnotL << ','
+                   << sl.nLnotH << ',' << sl.nLi << ',' << sl.nHi << ',' << sl.nHnotLi << ','
+                   << sl.nLnotHi << ',' << sl.nLact << ',' << std::setprecision(4)
+                   << hnRatio(sl.nHnotL, sl.nCand) << ',' << hnRatio(sl.nLnotH, sl.nCand) << ','
+                   << hnRatio(sl.nHnotLi, sl.nCand) << ',' << hnRatio(sl.nLnotHi, sl.nCand)
+                   << ',';
+                if (sl.div >= 0.0)
+                {
+                    se << sl.div;
+                }
+                se << ',' << sl.thrInit << ',' << sl.thrFinal << ',' << sl.thrOwn << ','
+                   << (sl.thrFinal - sl.thrInit) / 3 << ',' << (sl.thrOwn - sl.thrInit) / 3
+                   << ',' << sl.iuc << ',' << sl.step6 << ',' << sl.mismatch << ','
+                   << sl.thrMismatch << ',' << sl.recL << ',' << sl.recH << ',' << bf << ','
+                   << +sl.legSeg << ',' << +sl.tailSeg << '\n';
+            }
         }
     }
 
@@ -2370,7 +3001,14 @@ main(int argc, char* argv[])
               "leader_grant_bytes_mean,bg_sps_grants_per_s,bg_dyn_grants_per_s,"
               "bg_misfit_resel_per_s,bg_misfit_enlarged_per_s,ack_no_retx_left,"
               "leader_grant_slots_mean,sl_prob_resource_keep,rri_list,leader_kept_per_s,"
-              "bg_kept_per_s\n";
+              "bg_kept_per_s,sl_thres_rsrp,hidden_node,hn_sel,hn_gh_mean,hn_gh_med,hn_gl_mean,"
+              "hn_relax_steps_mean,relax_extra_iuc,relax_extra_iuc_share,iuc_sel_in_h_relaxed,"
+              "hn_uses_l,hn_uses_h,hn_l_hidden,hn_l_stale,hn_l_unannounced,hn_l_leader_only,"
+              "hn_h_hidden,hn_h_stale,hn_h_unannounced,hn_h_leader_only,hn_veto_l,hn_veto_h,"
+              "hn_succ_l,hn_succ_h,hn_succ_h_hidden,hn_succ_h_other,hn_succ_h_veto,"
+              "hn_succ_h_noveto,hn_n_h_hidden,hn_n_h_veto,hn_n_h_noveto,hn_coll_rear_h,"
+              "hn_coll_tail_h,hn_coll_rear_l,hn_chk_sel_in_l,hn_chk_age0_unexplained,"
+              "hn_chk_gap_mismatch,hn_chk_link,hn_chk_unlinked_uses,hn_chk_iuc_sel_in_h\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -2451,7 +3089,31 @@ main(int argc, char* argv[])
            << ctl.nAckNoRetxLeft << ','
            << (gAgg[0].sps + gAgg[0].dyn ? gAgg[0].slotsSum / (gAgg[0].sps + gAgg[0].dyn) : 0.0)
            << ',' << slProbResourceKeep << ',' << (rriListStr.empty() ? "default" : rriListCsv)
-           << ',' << gAgg[0].kept / winS << ',' << gAgg[1].kept / winS << '\n';
+           << ',' << gAgg[0].kept / winS << ',' << gAgg[1].kept / winS;
+        // hidden-node instrumentation (0 without --hiddenNode)
+        const HnAgg& HL = hnA[0];
+        const HnAgg& HH = hnA[1];
+        rc << ',' << slThresRsrp << ',' << hiddenNode << ',' << hnSelGranted << ','
+           << hnRatio(hnGhSum, hnSelGranted) << ',' << hnMedian(hnGh) << ','
+           << hnRatio(hnGlSum, hnSelGranted) << ',' << hnRatio(hnRelaxSum, hnSelGranted) << ','
+           << hnRelaxExtra << ',' << hnRatio(hnRelaxExtra, hnSelGranted) << ','
+           << hnIucSelInHRelaxed << ',' << HL.n << ',' << HH.n;
+        for (const HnAgg* A : {&HL, &HH})
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                rc << ',' << hnRatio(A->cat[c], A->linked);
+            }
+        }
+        rc << ',' << hnRatio(HL.veto, HL.linked) << ',' << hnRatio(HH.veto, HH.linked) << ','
+           << hnRatio(HL.dec, HL.need) << ',' << hnRatio(HH.dec, HH.need) << ','
+           << hnRatio(HH.decHid[1], HH.needHid[1]) << ',' << hnRatio(HH.decHid[0], HH.needHid[0])
+           << ',' << hnRatio(HH.decVeto[1], HH.needVeto[1]) << ','
+           << hnRatio(HH.decVeto[0], HH.needVeto[0]) << ',' << HH.nHid[1] << ',' << HH.nVeto[1]
+           << ',' << HH.nVeto[0] << ',' << hnRatio(HH.collRear, HH.linked) << ','
+           << hnRatio(HH.collTail, HH.linked) << ',' << hnRatio(HL.collRear, HL.linked) << ','
+           << hnSelInL << ',' << hnAge0Unexplained << ',' << hnGapMismatch << ',' << hn.linkErr
+           << ',' << hnUnlinked << ',' << hnIucSelInH << '\n';
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx
@@ -2463,6 +3125,17 @@ main(int argc, char* argv[])
               << " unmatched=" << g.phyUnmatched << " wall=" << std::setprecision(1) << wall
               << "s\n";
     std::cerr << "  RNTIs ready at " << rntiReadyAt << " s\n";
+    if (hn.on)
+    {
+        std::cerr << "  hidden-node: selections " << hn.sels.size() << " (granted in KPI window "
+                  << hnSelGranted << ", mean G_H " << hnRatio(hnGhSum, hnSelGranted)
+                  << "), uses leader " << hnA[0].n << " helper " << hnA[1].n
+                  << " | checks: selected in L " << hnSelInL << ", age-0 unexplained "
+                  << hnAge0Unexplained << ", gap mismatch " << hnGapMismatch << ", link "
+                  << hn.linkErr << ", unlinked uses " << hnUnlinked << ", IUC selected in H "
+                  << hnIucSelInH << " (relaxed " << hnIucSelInHRelaxed << ", extra relaxation "
+                  << hnRelaxExtra << ")\n";
+    }
     std::cerr << "  grants: leader " << leaderGrant << " (sps " << gAgg[0].sps << ", dynamic "
               << gAgg[0].dyn << ", misfit reselections " << gAgg[0].misfitResel << ", enlarged "
               << gAgg[0].misfitEnlarged << ", implicit ACKs with no retx left "

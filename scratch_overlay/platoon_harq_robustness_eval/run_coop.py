@@ -76,10 +76,15 @@ ARMS = {
     "ownRes": ("Helper, own resources", "ownRes", []),
     "split": ("Split: leader 2 tx + helper", "split", []),
     "additive": ("Additive: leader + helper copy", "additive", ["--relayBudget=1"]),
+    # oracle inter-UE coordination on top of leaderRes: an UPPER BOUND, not IUC (the
+    # helper's sensing exclusions reach the leader's selection with zero delay, no loss
+    # and no signalling); README "Hidden-node test"
+    "leaderResIuc": ("Helper, leader's resources + oracle IUC (upper bound)", "leaderResIuc",
+                     []),
 }
 DEFAULT_ARMS = ["none", "leaderRes", "ownRes"]  # the 2026-10-11 comparison
 SHORT_ARM = {"none": "LO", "none4": "LO4", "leaderRes": "LR", "ownRes": "OR", "split": "SP",
-             "additive": "AD"}
+             "additive": "AD", "leaderResIuc": "LRI"}
 CELLS = [("roundabout", 30, 0), ("highway", 30, 45), ("highway", 30, 60)]  # default design
 # further cells selectable with --cells (roundabout with background: is the helper's
 # sensing different when buildings, not distance, separate it from the leader?)
@@ -128,7 +133,7 @@ def check(run_csv, arm, helper=None):
     for k in must0:
         if k in r and int(float(r[k])) != 0:
             bad.append(f"{k}={r[k]}")
-    max_leader = {"split": 2, "leaderRes": 1, "ownRes": 1}.get(arm, want_tx)
+    max_leader = {"split": 2, "leaderRes": 1, "ownRes": 1, "leaderResIuc": 1}.get(arm, want_tx)
     if "leader_tx_per_tb_max" in r and int(float(r["leader_tx_per_tb_max"])) > max_leader:
         bad.append(f"leader_tx_per_tb_max={r['leader_tx_per_tb_max']}")
     return bad
@@ -161,7 +166,8 @@ def run_job(job):
         dt = time.time() - t0
         if r.returncode != 0:
             return arm, tag, f"FAILED rc={r.returncode}", dt
-        for suffix in ("_pkt.csv", "_ltx.csv", "_htx.csv", "_coll.csv", "_div.csv", "_nack.csv"):
+        for suffix in ("_pkt.csv", "_ltx.csv", "_htx.csv", "_coll.csv", "_div.csv", "_nack.csv",
+                       "_use.csv", "_sel.csv"):
             f = adir / f"{tag}{suffix}"
             if f.exists():
                 with open(f, "rb") as fi, gzip.open(str(f) + ".gz", "wb") as fo:

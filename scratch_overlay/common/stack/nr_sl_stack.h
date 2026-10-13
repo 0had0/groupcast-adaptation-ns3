@@ -50,6 +50,9 @@ struct SlStackParams
     // sl-ProbResourceKeep (TS 38.321 sec. 5.22.1.1, 0..0.8): probability of keeping
     // an SPS resource when its reselection counter expires. 0 = always reselect.
     double probResourceKeep{0.0};
+    // RSRP threshold (dBm) of the sensing-based selection (NrSlUeMac SlThresPsschRsrp,
+    // TS 38.214 sec. 8.1.4 initial threshold; +3 dB steps from there), every UE.
+    int thresRsrp{-128};
     // Per-destination fixed-MCS overrides {dstL2Id → mcs}. When non-empty, TX
     // node 0 gets a NrSlAdaptiveMcsScheduler whose SetDstMcsOverride() pins each
     // listed destination to a fixed MCS (dual-MCS redundant groupcast). The

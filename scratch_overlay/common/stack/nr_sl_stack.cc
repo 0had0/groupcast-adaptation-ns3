@@ -172,7 +172,7 @@ BuildSlStack(const SlStackParams& p,
     ctx.nr->SetUeMacAttribute("T1",                  UintegerValue(2));
     ctx.nr->SetUeMacAttribute("T2",                  UintegerValue(33));
     ctx.nr->SetUeMacAttribute("ActivePoolId",         UintegerValue(0));
-    ctx.nr->SetUeMacAttribute("SlThresPsschRsrp",     IntegerValue(-128));
+    ctx.nr->SetUeMacAttribute("SlThresPsschRsrp",     IntegerValue(p.thresRsrp));
 
     const uint8_t bwpIdSl = 0;
     ctx.nr->SetBwpManagerTypeId(TypeId::LookupByName("ns3::NrSlBwpManagerUe"));

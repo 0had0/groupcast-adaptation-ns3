@@ -35,6 +35,14 @@ loses PRR to background traffic (0 -> 60: <= 1 pp, was 3-7 pp), periodic2 unchan
 hold in direction (blockage + periodic1: helpers help), handing over no longer loses
 under collisions with periodic1. §7.1-7.8 stay as the record of the dynamic-grant runs.
 
+**Update (2026-10-13, later). Hidden-node test** (branch `hidden-node`, §7.11, README
+"Hidden-node test"): instrumentation of the leader–helper sensing gap at every leader
+selection and at every use of a leader-selected resource (`--hiddenNode`: `_use.csv`,
+`_sel.csv`, `hn_*` columns), a sensing-threshold flag (`--slThresRsrp`, every UE) and an
+oracle IUC arm `leaderResIuc` (upper bound of Rel-17 Scheme 1). All opt-in; all off:
+byte-identical outputs. Definitions, checks and the pre-registered go / decision rules are
+in the README; stage A (3 seeds) runs on the server, stage B only after a go.
+
 **Update (2026-10-12, later).** Standard Mode-2 grant types and the sensing fixes,
 implemented on `coop-arms` (README "Standard Mode-2 grant types and sensing fixes"),
 all opt-in: `--spsReselectOnMisfit` (TS 38.321 5.22.1.1 reselection when an SDU does not
@@ -520,6 +528,29 @@ Coop (tail `prr_pdb`, 10 seeds, paired vs `none`):
    mostly with interferers only the helper sensed (40 % vs 12 % before; both: 17 % vs
    63 %) — the helper's sensing would now carry information the leader lacks.
 
+### 7.11 Hidden-node test (branch `hidden-node`, 2026-10-13; stage A pending)
+
+Design, definitions, checks and rules: README "Hidden-node test" (written before any
+result). Code:
+- NR patch: `SensingData::txRnti` (set by the PHY from the PSCCH's MAC PDU tag);
+  `NrSlUeMac::SetSensingPeer(peer, exclude)` — at each selection the peer's sensing data
+  (same window, platoon-internal SCIs ignored) is evaluated with the same projections and
+  reported in the trace `SensingGap` (per step-5 candidate: in final list, excluded by the
+  real step 6, by own / peer data at the final / initial threshold, peer at the own-only
+  final threshold); with `exclude` it is also removed from the candidates (union, same
+  +3 dB / 20 % loop) = the oracle IUC; `EvaluateSensedExclusion` (step 6 for one resource,
+  C_resel = 1, const). Without a peer the selection code path is unchanged.
+- `SlStackParams::thresRsrp` (default -128) replaces the hard-coded `SlThresPsschRsrp`.
+- Program: `--slThresRsrp`, `--hiddenNode`, `--helperMode=leaderResIuc`; uses linked to
+  selections through `GrantCreated` (same instant as the selection's `SensingGap`) and
+  `GrantPublished` (slot -> selection, keep count, period); outcomes from the existing
+  `UTx` / collision / reception bookkeeping; no new channel-condition query.
+- Runner `run_hidden_node.py`, driver `run_hidden_node.sh`, analysis
+  `analyze_hidden_node.py` (stageA / full); `run_coop.py` knows `leaderResIuc`.
+
+Rel-17 IUC clauses checked in ETSI TS 138 214 V17.5.0 (sec. 8.1.4A, 8.1.4C) and TS 138 321
+V17.5.0 (sec. 5.22.1.10.1-2, 6.1.3.53); quoted in the README.
+
 ## 8. Limitations / caveats
 
 - Single MCS (14). High MCS + power spread over wide allocations (6 dBm/PRB at 5 subchannels)
@@ -584,6 +615,14 @@ Coop (tail `prr_pdb`, 10 seeds, paired vs `none`):
   run the `coop-harq-nr` NR patch, but the laptop build also has uncommitted edits in
   `scratch_overlay/common/` (not part of this study) and is a debug build: never pool seeds
   across the two machines (same ns-3 seeds, different SUMO traces).
+
+- **Hidden-node test (§7.11)**: the oracle IUC arm is an upper bound (zero delay, no loss,
+  no signalling, no PC5-RRC link needed; Rel-17 reporting is per PC5-RRC connection) and
+  models only the RSRP condition of the non-preferred set. L, H and the use evaluations
+  ignore platoon-internal SCIs (leader, helper). The use evaluation looks at the used
+  resource alone (C_resel = 1) with the sensing data at the time of use; 5G-LENA has no
+  re-evaluation / pre-emption, so an obsolete resource is still used. `cond_leader_helper`
+  of a helper copy is the value at the leader's latest transmission.
 
 ## 9. Reproduce
 
@@ -691,3 +730,5 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
 10. SB-SPS follow-ups: isolate the N = 0 grant-size effect (e.g. a grant that also shrinks
     to the new SDU, or per-SDU-size statistics), and, if per-option effects matter,
     a factorial run (grant type x D1/D2) on a few cells.
+11. Hidden-node test (§7.11): stage A on the server, report, stop; stage B only after a
+    go and the user's OK (README "Hidden-node test").

@@ -164,6 +164,7 @@ Pilot (same trace, 20 s), t-Reordering 100 ms -> 0 ms:
 | `analyze.py` | aggregation + figures |
 | `run_variants.py` | MCS / dedicated carrier / blind sweep + its analysis (`results/variants_rlc<ms>/`) |
 | `run_coop.py` | cooperative HARQ comparison + its analysis, branch `coop-harq-nr` (`results/coop_rlc0/`) |
+| `run_hidden_node.{py,sh}`, `analyze_hidden_node.py` | hidden-node test: runner, server driver, analysis (branch `hidden-node`, README "Hidden-node test") |
 
 ```bash
 cd ns-3-dev/cmake-cache && ninja scratch_platoon_harq_robustness_eval_platoon_harq_robustness_eval
@@ -1033,6 +1034,174 @@ The collision `why` breakdown (`coop_why_summary.csv`) classifies a collided tra
 by the selection that picked its resource; an SPS period that reuses a reservation has
 none (88 % `no_selection` for the leader), so it is not comparable with the dynamic-grant
 runs.
+
+## Hidden-node test (branch `hidden-node`, from 2026-10-13)
+
+Definitions, checks and decision rules written **before any result**; results follow in
+the subsections below once they exist. Configuration of every run: the SB-SPS reference
+(`run_rerun_sps.sh` NEW_FLAGS), periodic1, `--collCond`, `--hiddenNode`, one sensing
+threshold `--slThresRsrp` of {-128, -110} dBm (every UE).
+
+**Question.** When does a resource the leader selected become obsolete for the helper that
+transmits on it (`leaderRes`)? How does the PRR of helper copies degrade with the
+leader–helper sensing gap? How much could inter-UE coordination recover?
+
+### Definitions
+
+- **Use**: a transmission on a leader-selected resource — the helper's copy on a slot
+  handed over by the leader (`leaderRes`, `leaderResIuc`), and, as the control, every
+  transmission of the leader (all arms). `ownRes` helper copies are on the helper's own
+  resources and are not uses.
+- **Candidate** (the "unit" of L and H): a candidate single-slot resource R_x,y of 5G-LENA's
+  list (one slot x L_subCH contiguous subchannels); |cand| = candidates entering step 6
+  (after step 5 / 5a).
+- **Step-6 evaluation**: the MAC's own TS 38.214 sec. 8.1.4 step 6 (projections with D1 + D2,
+  candidate periods j < C_resel, RSRP above the threshold, frequency overlap), run on one
+  UE's sensing data in a window [n - T0, n - Tproc0). Implemented in the NR patch
+  (`NrSlUeMac::SetSensingPeer`, trace `SensingGap`, `EvaluateSensedExclusion`), the same
+  projection routine as the selection; at every selection the recomputed remaining set and
+  final threshold are compared with the selection's own (check `hn_chk_gap_mismatch`).
+- **Platoon-internal SCIs are ignored** in L, H and the use evaluations (SCIs whose
+  transmitter is the leader or the helper; `SensingData::txRnti`): otherwise the helper's
+  data would "exclude" the leader's own reservation of the very slot it hands over.
+- **At each leader selection** (SPS and dynamic; kept periods are not selections), with the
+  window, candidates and **final (relaxed) threshold** of that selection (initial threshold
+  also logged): L = candidates the leader's data excludes, H = candidates the helper's data
+  excludes, G_H = |H \ L| / |cand| (the gap the helper could close), G_L = |L \ H| / |cand|,
+  and the existing `_div` divergence of the same selection.
+- **Veto** of a use: its base candidate (the same position in the grant's first period) was
+  in H \ L at the selection's final threshold.
+- **At each use**: `excl_helper_now` / `excl_leader_now` = step 6 for the used resource
+  alone (C_resel = 1: this use), with that UE's sensing data in [use - T0, use - Tproc0),
+  at the producing selection's final threshold (and its initial one, `_init` columns).
+  Category (final threshold): **hidden** (helper yes, leader no), **stale** (both),
+  **unannounced** (neither), **leader_only** (helper no, leader yes).
+- **Reservation age**: use time - time of the leader selection that produced the resource;
+  sl-ProbResourceKeep cycles belong to the same selection; `keep_count` = keeps before the
+  use's period was published, `period` = periods published before it.
+- **Outcome**: `overlap` = the use overlapped another PSSCH (existing method); `coll_rear` /
+  `coll_tail` = overlap and >= 1 of members 5-8 (excluding the transmitter) / member 8 that
+  still needed the TB failed it; needing = had not decoded the TB from an earlier
+  transmission; **success** = members that needed it and decoded it / members that needed
+  it (member level, pooled over uses); interferer ids and how many the leader / helper had
+  sensed (`Sensed()`, as `_coll.csv`).
+- Also per use: leader–helper distance, link condition leader -> helper at the leader's
+  latest transmission (recorded value, no new channel-condition query), background vehicles
+  in the area, roundabout turn flag.
+
+### Oracle IUC arm `leaderResIuc` (an upper bound, not IUC)
+
+Like `leaderRes`, but at every leader selection the candidates the helper's sensing data
+excludes (H, same window, platoon-internal SCIs ignored) are excluded too, with zero delay,
+no loss and no signalling cost; the 20 % rule and the +3 dB relaxation apply to the union.
+Logged: `relax_extra_iuc` (selections where the union needed more relaxation steps than the
+leader's own data), `iuc_sel_in_h_relaxed` (selected resources in H at the threshold the
+leader alone would have used). Only the RSRP condition of the non-preferred set is
+modelled (no half-duplex condition).
+
+Rel-17 inter-UE coordination, Scheme 1 (checked in ETSI TS 138 214 V17.5.0 and
+TS 138 321 V17.5.0):
+- TS 38.214 sec. 8.1.4A (UE-A determines a non-preferred set): resources "indicated by a
+  received [SCI format 1-A]" whose RSRP is higher than Th(prio_RX)
+  (`sl-ThresholdRSRP-Condition1-B-1-Option1List`), or slots of the UE's own half-duplex
+  transmissions when it is a destination of the TB.
+- TS 38.214 sec. 8.1.4C (UE-B uses a received non-preferred set): "the UE excludes in Step
+  6b) of clause 8.1.4 resource(s) overlapping with the non-preferred resource set"; if fewer
+  than X·M_total candidates would remain, "it is up to UE implementation" whether the set is
+  taken into account. The union relaxation above is such an implementation choice.
+- TS 38.321 sec. 5.22.1.10.2: on an SL-IUC Information MAC CE with a non-preferred set, the
+  MAC shall "indicate the received non-preferred resource set to physical layer"; sec.
+  5.22.1.10.1: the reporting is per PC5-RRC (unicast) connection; MAC CE in sec. 6.1.3.53.
+  A real helper would need a PC5-RRC link to the leader (or SCI format 2-C) and its report
+  would be older than the leader's selection by the processing and signalling delay.
+
+### Outputs and checks
+
+Per run (only with `--hiddenNode`): `<tag>_use.csv` (one row per use in the KPI window:
+slot, subchannels, selection id, age, keep count, the four exclusions, category, veto,
+G_H / G_L of the selection, thresholds, outcome, distance, link condition, N in area, turn,
+interferers) and `<tag>_sel.csv` (one row per leader selection: grant type, window, |cand|,
+|L|, |H|, |H \ L|, |L \ H| at the final and initial threshold, G_H, G_L, divergence,
+thresholds, relaxation steps with and without the union, base-slot flags). Run CSV
+(appended, 0 without the flag): `sl_thres_rsrp`, `hidden_node`, `hn_*` aggregates
+(category shares and veto rates of leader / helper uses, mean / median G_H, mean G_L,
+helper-copy success hidden / other / vetoed / not vetoed, `relax_extra_iuc`,
+`iuc_sel_in_h_relaxed`). Checks, all must be 0 (`run_hidden_node.py`, `verify_dir`):
+- `hn_chk_sel_in_l`: a selected resource excluded by the leader's real step 6 at its final
+  threshold, or not in the final candidate list;
+- `hn_chk_age0_unexplained`: a use in the first period of its selection excluded by the
+  leader's own data through an SCI that was already in the selection's window (at the
+  initial threshold: only without relaxation) — i.e. `excl_leader_now` at age 0 must be 0,
+  or explained by SCIs received after the selection, or by relaxation;
+- `hn_chk_gap_mismatch`: recomputed step 6 differs from the selection's (members or final
+  threshold);
+- `hn_chk_link`: a grant without its selection, a selected slot that was not a candidate,
+  a first slot outside [n + T1, n + T2], a published period with another slot count;
+- `hn_chk_unlinked_uses`: a use not linked to a selection;
+- `hn_chk_iuc_sel_in_h` (`leaderResIuc`): a selected resource in H at the final threshold;
+- every `run_coop.py` design check (`leaderResIuc` as `leaderRes`).
+
+**Pilots (laptop, seed 1, 2026-10-13).**
+- Identity, new options off vs the `coop-arms` code: 16 runs (stock `off` periodic1/2; SPS
+  reference flags x `none` / `leaderRes` / `ownRes` / `split` / `additive` on roundabout N 0
+  and highway N 45 with `--collCond`; `leaderRes` periodic2; 2 full runs): 121 output files,
+  0 differences (run CSV: original columns).
+- Passivity, the same 14 helper runs with `--hiddenNode`: every pre-existing file identical
+  (the instrumentation does not perturb the run).
+- Function (25 s, highway N 45 helper 4 / roundabout N 45 helper 7, `none` / `leaderRes` /
+  `leaderResIuc`, -128 / -110 dBm): every check 0 in all 12 runs; `run_hidden_node.sh
+  check` passes (4 smoke runs, `verify_dir`, analysis). One seed and 22 s: no conclusion.
+- `rbt_ivd60_n45_s1` generates (88.5 s, background mean 44.96; 93 background–platoon
+  overlap samples vs 38 at IVD 30).
+
+### Stage A (pilot and go / no-go) — rule fixed before the results
+
+Server, seeds 1-3, cells roundabout IVD 30 N 45, highway IVD 30 N 45, highway IVD 60 N 45;
+helpers 4 and 7; thresholds -128 / -110 dBm; arms `none` (once per cell x threshold, helper
+4 as observer), `leaderRes`, `ownRes`, `leaderResIuc` (126 runs). Report per cell: category
+shares, veto rate, G_H distribution, helper-copy success hidden vs other and vetoed vs not,
+tail `prr_pdb` per arm (paired).
+
+**Go** if, for some (cell, helper, threshold), the `leaderRes` helper copies pooled over
+seeds 1-3 have `hidden` >= 10 % of the copies **and** a member-level success of the vetoed
+copies at least 10 points below that of the non-vetoed ones, with >= 30 vetoed and >= 30
+non-vetoed copies. Otherwise: "hidden-node effect not reproduced in this setting", with the
+numbers, and stop.
+
+### Stage B (only after a go) — decision rules fixed before the results
+
+Server, 10 seeds, `--collCond`; sweep 1: N in {0, 15, 30, 45, 60} x {highway, roundabout} x
+IVD 30 x helper 4 x arms {none, leaderRes, ownRes, leaderResIuc}; sweep 2: N 45 x {highway,
+roundabout} x helpers {2, 4, 7} x IVD {30, 60} x arms {leaderRes, ownRes, leaderResIuc}
+(+ `none` per scenario x IVD x threshold); the thresholds that produced the go; cells stage
+A showed to be flat dropped (stated with the run counts before the launch).
+
+Analysis (`analyze_hidden_node.py full`, fixed bins): obsolescence curves (hidden / stale
+shares and the use's resource-collision rate against N, leader–helper distance 0-50 /
+50-100 / 100-150 / 150-250 / 250-400 / > 400 m, threshold, scenario and reservation age
+0-0.5 / 0.5-1 / 1-2 / 2-5 / > 5 s; the leader's own uses as the reference); helper-copy
+success and tail `prr_pdb` (per packet, by the selection behind the leader's transmission)
+by G_H bin 0 / 0-5 / 5-10 / 10-20 / > 20 % and by veto; run-level OLS of the paired
+(`leaderRes` - `ownRes`) and (`leaderResIuc` - `leaderRes`) tail `prr_pdb` on the
+`leaderRes` run's mean G_H (slope, 95 % CI). CIs: 95 % cluster bootstrap over runs (2000
+draws, seed 1) for pooled use / packet ratios; paired t-intervals over seeds for tail
+`prr_pdb` differences.
+
+- **Hidden-node effect reproduced** if, in some cell (scenario x IVD x N x helper x
+  threshold), `hidden` >= 10 % of the `leaderRes` helper copies and the vetoed copies lose
+  >= 10 points of success, with the 95 % CI of that loss above 0.
+- **IUC worth pursuing** if `leaderResIuc` - `leaderRes` >= +0.03 tail `prr_pdb` with a
+  paired 95 % CI excluding 0 in at least one realistic cell (background N > 0); reported
+  with its cost (extra relaxation, latency, transmissions per packet, CBR).
+- Otherwise: "IUC upper bound below threshold in this setting", with the numbers.
+- Many cells are tested: a single cell passing a rule is reported as such, with the number
+  of cells tested, not as a general effect.
+
+```bash
+python3 run_hidden_node.py --stage stageA --dry-run          # counts and time estimate
+tmux new -d -s hn -c "$PWD" 'JOBS=24 ./run_hidden_node.sh check stageA analyzeA'   # server
+./run_hidden_node.sh status
+```
 
 ## Running on another machine (e.g. a Linux server)
 
