@@ -93,7 +93,9 @@ struct LeaderTx
     uint8_t txInTb{1};            //!< 1 = initial, 2 = first retx, ...
     std::vector<uint32_t> seqs;   //!< application packets carried
     uint8_t nNack{0};             //!< NACKs received for this transmission
-    int8_t decision{-1};          //!< -1 pending, 0 NACK (retx kept), 1 implicit ACK, 2 stale
+    std::set<uint32_t> ackedMembers;  //!< member nodeIds that sent ACK for this transmission
+    std::set<uint32_t> nackedMembers; //!< member nodeIds that sent NACK for this transmission
+    int8_t decision{-1};          //!< -1 pending, 0 NACK (retx kept), 1 implicit/all ACK, 2 stale
     double decideAtS{0.0};        //!< time of the decision (its PSFCH occasion + 1 slot + 13.5 sym)
     uint32_t node{0};             //!< transmitting node (index in the node container)
     uint16_t rnti{0};             //!< transmitting UE's RNTI
@@ -102,14 +104,26 @@ struct LeaderTx
 class NackOnlyHarqController
 {
   public:
+    enum class HarqMode : uint8_t
+    {
+        BLIND = 0,
+        OPT1 = 1,
+        OPT2 = 2
+    };
+
     /**
      * @param leader      leader device (node 0)
      * @param members     group members (receivers)
      * @param dstL2Id     groupcast destination of the platoon flow
-     * @param option1Tx   apply the "no NACK => success" decision (true) or only
-     *                    observe (false: retransmissions behave as stock CTTC)
+     * @param mode        HARQ mode: blind, opt1 (NACK-only), or opt2 (all-ACK)
      * @param minTimeGapPsfch sl-MinTimeGapPSFCH configured in the pool (slots)
      */
+    void Install(Ptr<NrUeNetDevice> leader,
+                 const std::vector<Ptr<NrUeNetDevice>>& members,
+                 uint32_t dstL2Id,
+                 HarqMode mode,
+                 uint8_t minTimeGapPsfch);
+
     void Install(Ptr<NrUeNetDevice> leader,
                  const std::vector<Ptr<NrUeNetDevice>>& members,
                  uint32_t dstL2Id,
@@ -135,10 +149,15 @@ class NackOnlyHarqController
     uint64_t nNackRx{0};          //!< NACK PSFCH received by the leader
     uint64_t nAckRx{0};           //!< explicit ACKs received (0 with Option 1)
     uint64_t nImplicitAck{0};     //!< decisions "no NACK -> success"
+    uint64_t nAllAckDecision{0};  //!< Option 2 decisions "all members ACKed -> success"
     uint64_t nNackDecision{0};    //!< decisions "NACK -> keep retransmission"
     uint64_t nStale{0};           //!< decisions skipped (HARQ id already reused)
     uint64_t nSlotMisaligned{0};  //!< MAC trace not at a slot boundary (sanity)
     uint64_t nAckNoRetxLeft{0};   //!< SPS: implicit ACK not delivered, no reserved retx left
+
+    HarqMode GetMode() const { return m_mode; }
+    typedef Callback<void, double, uint32_t, uint32_t, uint8_t> FeedbackCallback;
+    void SetFeedbackCallback(FeedbackCallback cb) { m_fbCallback = cb; }
 
     /**
      * SPS leader: deliver an implicit ACK only while the TB's reserved
@@ -157,12 +176,14 @@ class NackOnlyHarqController
     void Attach(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex);
     void OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters p);
     void Decide(size_t idx);
+    void DeliverSuccess(const LeaderTx& tx);
 
     Ptr<NrUeNetDevice> m_leader;
     Ptr<NrSlUeMac> m_mac;
     std::vector<Ptr<NrUeNetDevice>> m_members;
     uint32_t m_dst{254};
-    bool m_option1{true};
+    HarqMode m_mode{HarqMode::OPT1};
+    FeedbackCallback m_fbCallback;
     bool m_spsSafeAck{false};
     uint8_t m_gap{3};
     uint8_t m_mu{1};

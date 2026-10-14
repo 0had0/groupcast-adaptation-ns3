@@ -1269,21 +1269,76 @@ OnSpsMisfit(uint32_t node,
     }
 }
 
+// One-TB leader classes (new campaign, PLAN.md): the base class with every packet small
+// enough for a single TB of the pool (mu 1, 5 x 10 PRB, MCS 14, 9 PSSCH symbols:
+// 1333 B, i.e. <= 1296 B of application payload after the 37 B below).
+//   periodic1tb   = periodic1 (190 / 300 B already fit)
+//   periodic2tb   = periodic2 (800 / 1200 B already fit)
+//   aperiodic1tb  = aperiodic1 with sizes {200, ..., 1200} B (aperiodic1: up to 2000 B,
+//                   1400-2000 B take 3 TBs). Same arrival process.
+// The check at start-up (OneTbGuard) and the per-packet check at the end of the run make
+// "one packet = one TB" an assertion, not an assumption.
+const std::map<std::string, std::string> kOneTbBase = {{"periodic1tb", "periodic1"},
+                                                       {"periodic2tb", "periodic2"},
+                                                       {"aperiodic1tb", "aperiodic1"}};
+constexpr uint32_t kAperiodic1TbMaxSize = 1200;
+// bytes a leader packet adds on its way to the TB: UDP 8 + IPv4 20 + PDCP 2 + RLC UM
+// header estimate 2 (the RLC buffer status) + SCI-2A 5 (NrSlCoopScheduler sizing)
+constexpr uint32_t kLeaderPktOverheadB = 37;
+
 std::string
-TrafficFlowKeys(const std::string& traffic, bool sps)
+BaseTraffic(const std::string& traffic)
+{
+    const auto it = kOneTbBase.find(traffic);
+    return it == kOneTbBase.end() ? traffic : it->second;
+}
+
+bool
+IsOneTbTraffic(const std::string& traffic)
+{
+    return kOneTbBase.count(traffic) > 0;
+}
+
+/// largest application packet the leader's class generates (B)
+uint32_t
+MaxLeaderPayload(const std::string& traffic)
+{
+    if (traffic == "aperiodic1tb")
+    {
+        return kAperiodic1TbMaxSize;
+    }
+    const std::string base = BaseTraffic(traffic);
+    if (base == "periodic1")
+    {
+        return 300;
+    }
+    if (base == "periodic2")
+    {
+        return 1200;
+    }
+    return 2000; // aperiodic1
+}
+
+std::string
+TrafficFlowKeys(const std::string& traffic, bool sps, uint16_t aperiodicRriMs = 0)
 {
     // periodic: SPS with RRI = traffic period, PDB = period;
-    // aperiodic: dynamic grant, PDB 50 ms (minimum inter-arrival of aperiodic1)
-    if (traffic == "periodic1")
+    // aperiodic: dynamic grant, PDB 50 ms (or SPS with aperiodicRriMs)
+    const std::string base = BaseTraffic(traffic);
+    if (base == "periodic1")
     {
         return sps ? "rri_ms=100;pdb_ms=100;dynamic=0" : "rri_ms=0;pdb_ms=100;dynamic=1";
     }
-    if (traffic == "periodic2")
+    if (base == "periodic2")
     {
         return sps ? "rri_ms=10;pdb_ms=10;dynamic=0" : "rri_ms=0;pdb_ms=10;dynamic=1";
     }
-    if (traffic == "aperiodic1")
+    if (base == "aperiodic1")
     {
+        if (sps && aperiodicRriMs > 0)
+        {
+            return "rri_ms=" + std::to_string(aperiodicRriMs) + ";pdb_ms=50;dynamic=0";
+        }
         return "rri_ms=0;pdb_ms=50;dynamic=1";
     }
     NS_ABORT_MSG("unsupported traffic class " << traffic);
@@ -1382,6 +1437,16 @@ main(int argc, char* argv[])
     // instrumentation (_use.csv, _sel.csv; leaderResIuc turns it on)
     int slThresRsrp = -128;
     bool hiddenNode = false;
+    // New parameters for PLAN.md retx campaign:
+    std::string harqMode;
+    std::string retx;
+    std::string helperSched;
+    uint16_t aperiodicRri = 0;
+    double bgFlowsPerCar = 1.0;
+    double posErrM = 0.0;
+    double hstatWindowMs = 1000.0;
+    double hstatPrior = 10.0;
+    double t2Ms = 0.0;
                                     // (extra channel-condition queries: may perturb the run)
 
     // NR RLC UM (TS 38.322) has no t-Reordering: complete SDUs go up as soon
@@ -1396,7 +1461,10 @@ main(int argc, char* argv[])
     cmd.AddValue("mobility", "mobility trace (gen_mobility.py output)", mobility);
     cmd.AddValue("sumoNet", "SUMO .net.xml with the buildings (roundabout)", sumoNet);
     cmd.AddValue("buildingHeight", "building height (m)", buildingHeight);
-    cmd.AddValue("traffic", "leader traffic: periodic1 | periodic2 | aperiodic1", traffic);
+    cmd.AddValue("traffic",
+                 "leader traffic: periodic1 | periodic2 | aperiodic1, or the one-TB classes "
+                 "periodic1tb | periodic2tb | aperiodic1tb (aperiodic1 sizes up to 1200 B)",
+                 traffic);
     cmd.AddValue("numPlatoon", "platoon size (leader + members)", numPlatoon);
     cmd.AddValue("bgPeriodicFrac", "fraction of background seats with periodic1", bgPeriodicFrac);
     cmd.AddValue("seed", "RNG seed", seed);
@@ -1482,7 +1550,53 @@ main(int argc, char* argv[])
                  "selection and at each use of a leader-selected resource (_use.csv, "
                  "_sel.csv); needs --helper",
                  hiddenNode);
+    cmd.AddValue("harqMode", "leader HARQ feedback mode: blind | opt1 | opt2", harqMode);
+    cmd.AddValue("retx", "retransmission strategy R1..R6", retx);
+    cmd.AddValue("helperSched", "helper scheduling S1 | S2 | S3", helperSched);
+    cmd.AddValue("aperiodicRri", "RRI (ms) for aperiodic leader SB-SPS (0 = dynamic grant)", aperiodicRri);
+    cmd.AddValue("bgFlowsPerCar", "number of background flows per car (>= 1.0)", bgFlowsPerCar);
+    cmd.AddValue("posErrM", "position error std dev (m) for helper selection (H3)", posErrM);
+    cmd.AddValue("hstatWindowMs", "HARQ statistics sliding window (ms) for H4..H6", hstatWindowMs);
+    cmd.AddValue("hstatPrior", "Dirichlet prior n0 for H5/H6", hstatPrior);
+    cmd.AddValue("t2Ms", "selection window T2 in ms (0 = default 33 slots)", t2Ms);
     cmd.Parse(argc, argv);
+
+    // Map --option1Tx alias if --harqMode was not explicitly specified
+    if (harqMode.empty())
+    {
+        harqMode = option1Tx ? "opt1" : "blind";
+    }
+
+    // Map --retx and --helperSched if specified
+    if (!retx.empty())
+    {
+        if (retx == "R1") { harqMode = "blind"; helperMode = "off"; }
+        else if (retx == "R2") { harqMode = "opt1"; helperMode = "off"; }
+        else if (retx == "R3") { harqMode = "opt2"; helperMode = "off"; }
+        else if (retx == "R4") { harqMode = "blind"; helperBlind = true; }
+        else if (retx == "R5") { harqMode = "opt1"; helperBlind = false; }
+        else if (retx == "R6") { harqMode = "opt2"; helperBlind = false; }
+        else { NS_ABORT_MSG("invalid --retx=" << retx << ", must be R1..R6"); }
+
+        if (retx == "R4" || retx == "R5" || retx == "R6")
+        {
+            NS_ABORT_MSG_IF(helperSched.empty(), "--retx=" << retx << " requires --helperSched=S1|S2|S3");
+            if (helperSched == "S1") { helperMode = "leaderRes"; }
+            else if (helperSched == "S2") { helperMode = "helperSps"; }
+            else if (helperSched == "S3") { helperMode = "ownRes"; }
+            else { NS_ABORT_MSG("invalid --helperSched=" << helperSched << ", must be S1|S2|S3"); }
+            if (helper == 0) helper = 4;
+        }
+        else
+        {
+            NS_ABORT_MSG_IF(!helperSched.empty(), "--retx=" << retx << " cannot take --helperSched");
+        }
+    }
+    NS_ABORT_MSG_IF(harqMode != "blind" && harqMode != "opt1" && harqMode != "opt2", "bad --harqMode=" << harqMode);
+    if (helperSelect == "harq" || helperSelect == "harqKuo" || helperSelect == "harqMap")
+    {
+        NS_ABORT_MSG_IF(harqMode != "opt2", "--helperSelect=" << helperSelect << " requires --harqMode=opt2");
+    }
     // ':'-separated copy for the run CSV
     std::string rriListCsv = rriListStr;
     std::replace(rriListCsv.begin(), rriListCsv.end(), ',', ':');
@@ -1504,8 +1618,9 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSlUeMac::SpsReselectOnMisfit", BooleanValue(spsReselectOnMisfit));
     Config::SetDefault("ns3::NrSlUeMac::SlDynExclusion", BooleanValue(slDynExclusion));
     Config::SetDefault("ns3::NrSlUeMac::SlProjectAnnounced", BooleanValue(slProjectAnnounced));
-    // the leader's flow is on SPS only for periodic traffic (TrafficFlowKeys)
-    const bool leaderSpsCfg = leaderSps && traffic.rfind("periodic", 0) == 0;
+    // the leader's flow is on SPS only for periodic traffic or aperiodic with aperiodicRri (TrafficFlowKeys)
+    const bool leaderSpsCfg = leaderSps && (BaseTraffic(traffic).rfind("periodic", 0) == 0 ||
+                                            (BaseTraffic(traffic) == "aperiodic1" && aperiodicRri > 0));
 
     NS_ABORT_MSG_IF(mobility.empty(), "--mobility is required");
     NS_ABORT_MSG_IF(scenario != "highway" && scenario != "roundabout", "bad --scenario");
@@ -1518,17 +1633,19 @@ main(int argc, char* argv[])
 
     NS_ABORT_MSG_IF(helperMode != "off" && helperMode != "none" && helperMode != "leaderRes" &&
                         helperMode != "ownRes" && helperMode != "split" &&
-                        helperMode != "additive" && helperMode != "leaderResIuc",
+                        helperMode != "additive" && helperMode != "leaderResIuc" &&
+                        helperMode != "helperSps",
                     "bad --helperMode " << helperMode);
     const bool iucOracle = (helperMode == "leaderResIuc");
     const bool coop = (helperMode == "leaderRes" || helperMode == "ownRes" ||
-                       helperMode == "split" || helperMode == "additive" || iucOracle);
+                       helperMode == "split" || helperMode == "additive" ||
+                       helperMode == "helperSps" || iucOracle);
     hiddenNode = hiddenNode || iucOracle;
     NS_ABORT_MSG_IF(hiddenNode && helper == 0, "--hiddenNode / leaderResIuc need --helper");
     NS_ABORT_MSG_IF(slThresRsrp > 0 || slThresRsrp < -128, "--slThresRsrp in [-128, 0] dBm");
     // the helper selects the resources of its copies itself (else the leader's
     // selection gave them)
-    const bool helperSelects = (helperMode == "ownRes" || helperMode == "additive");
+    const bool helperSelects = (helperMode == "ownRes" || helperMode == "additive" || helperMode == "helperSps");
     NS_ABORT_MSG_IF(helperMode == "split" && maxNumTx < 3, "split needs --maxNumTx >= 3");
     NS_ABORT_MSG_IF(helperMode == "additive" && relayBudget == 0, "--relayBudget >= 1");
     NS_ABORT_MSG_IF(coop && (helper < 1 || helper > numMembers), "--helper must be 1.." << numMembers);
@@ -1631,7 +1748,16 @@ main(int argc, char* argv[])
     sp.psfchPeriod = psfchPeriod;
     sp.maxNumPerReserve = static_cast<uint8_t>(maxNumPerReserve);
     sp.dedicatedCarrier = dedicatedCarrier;
-    sp.harqOption = 1;
+    sp.t2Slots = 0;
+    if (t2Ms > 0.0)
+    {
+        const double slotMs = 1.0 / (1 << mu);
+        const uint32_t t2ConfiguredSlots = static_cast<uint32_t>(std::round(t2Ms / slotMs));
+        const double pdbS = (BaseTraffic(traffic) == "periodic1") ? 0.1 : (BaseTraffic(traffic) == "periodic2" ? 0.01 : 0.05);
+        const uint32_t pdbSlots = static_cast<uint32_t>(std::floor(pdbS / (slotMs * 1e-3)));
+        sp.t2Slots = std::min(pdbSlots, t2ConfiguredSlots);
+    }
+    sp.harqOption = (harqMode == "opt2") ? 2 : 1;
     sp.mcrMeters = 0.0; // the Option-1 RX gate is installed below
     sp.adaptiveMcs = false;
     sp.probResourceKeep = slProbResourceKeep;
@@ -1651,15 +1777,19 @@ main(int argc, char* argv[])
     g.writeAllTx = writeAllTx;
     g.writeGrants = writeGrants;
     NS_ABORT_MSG_IF(helperSelect != "off" && helperSelect != "static" && helperSelect != "kuo" &&
-                        helperSelect != "map",
+                        helperSelect != "map" && helperSelect != "harq" && helperSelect != "harqKuo" &&
+                        helperSelect != "harqMap",
                     "bad --helperSelect " << helperSelect);
     NS_ABORT_MSG_IF(helperSelect != "off" && !coop, "--helperSelect needs a cooperative arm");
     NS_ABORT_MSG_IF(helperBlind && !coop, "--helperBlind needs a cooperative arm");
     g.hselOn = (helperSelect != "off");
 
-    // Option 1 at the receivers: NACK only, inside the MCR
-    InstallMcrNackOnlyGate(stack.ueNetDev, mcr, true);
-    SetMcrNackOnlyGateObserver(MakeCallback(&OnNackSent));
+    // Option 1 at the receivers: NACK only, inside the MCR (disabled for Option 2 and blind)
+    if (harqMode == "opt1")
+    {
+        InstallMcrNackOnlyGate(stack.ueNetDev, mcr, true);
+        SetMcrNackOnlyGateObserver(MakeCallback(&OnNackSent));
+    }
 
     // RNTIs are assigned once the simulation runs: RNTI-dependent setup is
     // done at t = 1 s (traffic starts at 2 s), see below
@@ -1740,12 +1870,23 @@ main(int argc, char* argv[])
     std::mt19937 rng(seed * 2654435761u + run);
     std::uniform_real_distribution<double> uPhase(0.0, 100.0);
     std::ostringstream spec;
-    spec << "label=platoon;traffic=" << traffic << ";port=8001;prio=1;tx_nodes=0;rxNodes=";
+    spec << "label=platoon;traffic=" << BaseTraffic(traffic)
+         << ";port=8001;prio=1;tx_nodes=0;rxNodes=";
     for (uint32_t m = 1; m <= numMembers; ++m)
     {
         spec << (m > 1 ? ":" : "") << m;
     }
-    spec << ";dstL2Id=254;harqMode=nackonly;" << TrafficFlowKeys(traffic, leaderSps)
+    std::string flowHarq = "harqMode=nackonly;harq=1";
+    if (harqMode == "blind")
+    {
+        flowHarq = "harqMode=default;harq=0";
+    }
+    else if (harqMode == "opt2")
+    {
+        flowHarq = "harqMode=acknack;harq=1";
+    }
+    spec << ";dstL2Id=254;" << flowHarq
+         << ";" << TrafficFlowKeys(traffic, leaderSps, aperiodicRri)
          << ";start_ms=" << std::fixed << std::setprecision(3) << 2000.0 + uPhase(rng) / 10.0;
 
     // background seats: exactly round(frac * N) periodic1, shuffled
@@ -1756,22 +1897,54 @@ main(int argc, char* argv[])
         bgIsP1[k] = 1;
     }
     std::shuffle(bgIsP1.begin(), bgIsP1.end(), rng);
+    uint32_t totalBgFlows = 0;
+    const uint32_t floorK = static_cast<uint32_t>(bgFlowsPerCar);
+    const double remK = bgFlowsPerCar - floorK;
+    std::uniform_real_distribution<double> uFlow(0.0, 1.0);
+
     for (uint32_t k = 0; k < numBg; ++k)
     {
         const uint32_t nid = numPlatoon + k;
         const std::string tc = bgIsP1[k] ? "periodic1" : "aperiodic1";
-        spec << ",label=bg" << k << ";traffic=" << tc << ";port=" << 9000 + k
-             << ";prio=3;tx_nodes=" << nid << ";rxNodes=" << nid << ";dstL2Id=" << 1000 + k
-             << ";harq=0;" << TrafficFlowKeys(tc, bgSps) << ";start_ms=" << std::fixed
-             << std::setprecision(3) << 2000.0 + uPhase(rng);
+        uint32_t nFlows = floorK;
+        if (remK > 1e-6 && uFlow(rng) < remK)
+        {
+            ++nFlows;
+        }
+        for (uint32_t f = 0; f < nFlows; ++f)
+        {
+            const uint32_t port = 9000 + totalBgFlows;
+            const uint32_t dstL2Id = 1000 + totalBgFlows;
+            spec << ",label=bg" << k;
+            if (nFlows > 1)
+            {
+                spec << "_" << f;
+            }
+            spec << ";traffic=" << tc << ";port=" << port
+                 << ";prio=3;tx_nodes=" << nid << ";rxNodes=" << nid << ";dstL2Id=" << dstL2Id
+                 << ";harq=0;" << TrafficFlowKeys(tc, bgSps, 0) << ";start_ms=" << std::fixed
+                 << std::setprecision(3) << 2000.0 + uPhase(rng);
+            ++totalBgFlows;
+        }
     }
     std::vector<FlowDef> flowDefs = ParseFlowsSpec(spec.str());
     const double trafficDur = std::max(0.5, tEnd - 2.0);
     FlowResult flows = InstallGroupcastFlows(nodes, stack, flowDefs, trafficDur, true, stack.stream);
+    if (traffic == "aperiodic1tb")
+    {
+        // the leader's application only (node 0 runs no other CustomTrafficApplication);
+        // background aperiodic1 keeps sizes up to 2000 B
+        const std::string app = "/NodeList/0/ApplicationList/*/$ns3::CustomTrafficApplication";
+        const uint32_t nApps = Config::LookupMatches(app).GetN();
+        NS_ABORT_MSG_IF(nApps != 1, "aperiodic1tb: expected 1 leader CustomTrafficApplication, found "
+                                        << nApps);
+        Config::Set(app + "/Aperiodic1MaxSize", UintegerValue(kAperiodic1TbMaxSize));
+    }
 
     // -----------------------------------------------------------------------
-    // HARQ Option-1 controller + traces
+    // HARQ controller + traces
     // -----------------------------------------------------------------------
+    HelperSelector hsel;
     auto leaderDev = nodes.Get(0)->GetDevice(0)->GetObject<NrUeNetDevice>();
     std::vector<Ptr<NrUeNetDevice>> memberDevs;
     for (uint32_t m = 1; m <= numMembers; ++m)
@@ -1779,8 +1952,29 @@ main(int argc, char* argv[])
         memberDevs.push_back(nodes.Get(m)->GetDevice(0)->GetObject<NrUeNetDevice>());
     }
     NackOnlyHarqController ctl;
-    ctl.Install(leaderDev, memberDevs, 254, option1Tx, 3 /* SetSlMinTimeGapPsfch(3) */);
+    NackOnlyHarqController::HarqMode hMode = NackOnlyHarqController::HarqMode::OPT1;
+    if (harqMode == "blind") hMode = NackOnlyHarqController::HarqMode::BLIND;
+    else if (harqMode == "opt2") hMode = NackOnlyHarqController::HarqMode::OPT2;
+    ctl.Install(leaderDev, memberDevs, 254, hMode, psfchPeriod ? 3 : 0);
     ctl.SetSpsSafeAck(leaderSpsCfg);
+    ctl.SetFeedbackCallback(MakeCallback(&HelperSelector::OnFeedback, &hsel));
+
+    uint8_t helperFbMode = 0;
+    if (harqMode == "opt1" && !helperBlind)
+    {
+        helperFbMode = 1;
+    }
+    else if (harqMode == "opt2" && !helperBlind)
+    {
+        helperFbMode = 2;
+    }
+    for (uint32_t i = 1; i <= numMembers; ++i)
+    {
+        auto dev = nodes.Get(i)->GetDevice(0)->GetObject<NrUeNetDevice>();
+        auto mac = dev->GetMac(0)->GetObject<NrSlUeMac>();
+        mac->SetAttribute("HelperFeedbackMode", UintegerValue(helperFbMode));
+        mac->SetAttribute("HelperGroupSize", UintegerValue(numMembers));
+    }
     g.leaderMac = leaderDev->GetMac(0)->GetObject<NrSlUeMac>();
     g.side[0].ctl = &ctl;
     g.side[0].node = 0;
@@ -1858,7 +2052,6 @@ main(int argc, char* argv[])
         }
     }
 
-    HelperSelector hsel;
     if (g.hselOn)
     {
         HelperSelector::Config hc;
@@ -1870,6 +2063,11 @@ main(int argc, char* argv[])
         hc.plMaxDb = kuoPlMaxDb;
         hc.sinrReqDb = kuoSinrReqDb;
         hc.subchPrbs = subchPrbs;
+        hc.scenario = scenario;
+        hc.posErrM = posErrM;
+        hc.hstatWindowMs = hstatWindowMs;
+        hc.hstatPrior = hstatPrior;
+        hc.prngSeed = 104729u * seed + run;
         hsel.Init(hc, nodes, numMembers, g.geom);
     }
 
@@ -1958,6 +2156,26 @@ main(int argc, char* argv[])
     }
     const uint32_t totalSubch = g.leaderMac->GetTotalSubCh();
     g.totalSubCh = totalSubch;
+    // Largest TB of the pool (every subchannel), sized as NrSlCoopScheduler sizes a
+    // grant: the leader's AMC, MCS, 9 PSSCH symbols. A one-TB class must fit its largest
+    // packet plus kLeaderPktOverheadB (which includes the 5 B of SCI-2A the scheduler adds).
+    uint32_t tbMaxB = 0;
+    {
+        PointerValue pv;
+        g.leaderMac->GetAttribute("NrSlUeMacScheduler", pv);
+        Ptr<NrSlUeMacScheduler> sch = pv.Get<NrSlUeMacScheduler>();
+        NS_ABORT_MSG_IF(!sch || !sch->GetAmc(), "leader: no sidelink scheduler / AMC");
+        tbMaxB = sch->GetAmc()->CalculateTbSize(static_cast<uint8_t>(mcs),
+                                                1,
+                                                subchPrbs * totalSubch * 9);
+    }
+    const uint32_t payloadMaxB = MaxLeaderPayload(traffic);
+    NS_ABORT_MSG_IF(IsOneTbTraffic(traffic) && payloadMaxB + kLeaderPktOverheadB > tbMaxB,
+                    "--traffic=" << traffic << ": a " << payloadMaxB << " B packet needs "
+                                 << payloadMaxB + kLeaderPktOverheadB
+                                 << " B, the largest TB of this pool is " << tbMaxB << " B ("
+                                 << totalSubch << " x " << subchPrbs << " PRB, MCS " << mcs
+                                 << ")");
 
     std::cerr << "platoon_harq_robustness_eval: scenario=" << scenario << " traffic=" << traffic
               << " nodes=" << numNodes << " (platoon " << numPlatoon << ", bg seats " << numBg
@@ -2462,6 +2680,33 @@ main(int argc, char* argv[])
             }
         }
     }
+    // packets the leader sent in more than one TB (RLC segmentation), whole run;
+    // "unqueued": the packet's first TB carried no earlier packet, i.e. the packet did not
+    // fit on its own (behind a backlog, a split of the later packet is a queueing effect)
+    uint64_t pktMultiTb = 0, pktMultiTbUnqueued = 0;
+    for (uint32_t s = 0; s < nSeq; ++s)
+    {
+        std::map<int64_t, const LeaderTx*> tbs; // leader TB -> one of its transmissions
+        for (size_t u : txOfSeq[s])
+        {
+            if (utx[u].side == 0) // helper copies carry the leader's TB
+            {
+                tbs.emplace(utx[u].tb, utx[u].x);
+            }
+        }
+        if (tbs.size() > 1)
+        {
+            ++pktMultiTb;
+            const std::vector<uint32_t>& first = tbs.begin()->second->seqs;
+            const bool queued =
+                std::any_of(first.begin(), first.end(), [s](uint32_t q) { return q < s; });
+            pktMultiTbUnqueued += queued ? 0 : 1;
+        }
+    }
+    NS_ABORT_MSG_IF(IsOneTbTraffic(traffic) && pktMultiTbUnqueued > 0,
+                    "--traffic=" << traffic << ": " << pktMultiTbUnqueued
+                                 << " leader packets did not fit their own TB (one-TB class; "
+                                    "SPS needs --spsReselectOnMisfit=true)");
 
     struct MemberAgg
     {
@@ -2473,9 +2718,12 @@ main(int argc, char* argv[])
         uint64_t condN[3]{0, 0, 0};
         double delaySum{0.0};
         uint64_t rxInPdb{0};
+        std::vector<double> delaysMs;
     };
     std::vector<MemberAgg> agg(numMembers);
-    const double pdbS = (traffic == "periodic1") ? 0.1 : (traffic == "periodic2" ? 0.01 : 0.05);
+    const std::string baseTraffic = BaseTraffic(traffic);
+    const double pdbS =
+        (baseTraffic == "periodic1") ? 0.1 : (baseTraffic == "periodic2" ? 0.01 : 0.05);
 
     std::ofstream pktCsv;
     if (writePkt)
@@ -2687,6 +2935,7 @@ main(int argc, char* argv[])
                 ++A.rx;
                 const double dly = itRx->second - t;
                 A.delaySum += dly;
+                A.delaysMs.push_back(dly * 1e3);
                 if (dly <= pdbS + 1e-9)
                 {
                     ++A.rxInPdb;
@@ -3181,9 +3430,20 @@ main(int argc, char* argv[])
             nackSentWin += nNackSent[u];
             ++leaderTxOfTb[x.gen];
             auto itl = lastLeaderTxOfTb.find(x.gen);
-            if (x.txInTb > 1 && itl != lastLeaderTxOfTb.end() && utx[itl->second].x->nNack == 0)
+            if (x.txInTb > 1 && itl != lastLeaderTxOfTb.end())
             {
-                ++leaderRetxNoNack;
+                const LeaderTx* prevTx = utx[itl->second].x;
+                if (harqMode == "opt2")
+                {
+                    if (prevTx->decision == 1) // all-ACK already achieved
+                    {
+                        ++leaderRetxNoNack;
+                    }
+                }
+                else if (harqMode == "opt1" && prevTx->nNack == 0)
+                {
+                    ++leaderRetxNoNack;
+                }
             }
             lastLeaderTxOfTb[x.gen] = u;
             if (nNackSent[u] > 0)
@@ -3296,15 +3556,21 @@ main(int argc, char* argv[])
                                std::to_string(seed) + "," + std::to_string(run);
     {
         std::ofstream mc(out + "_member.csv");
-        mc << "scenario,ivd_m,traffic,nbg,seed,run,member,sent,rx,prr,prr_pdb,lost_collision,"
+        mc << "scenario,ivd_m,traffic,nbg,seed,run,member,sent,rx,prr,prr_pdb,late,lost_collision,"
               "lost_channel,lost_notx,lost_other,collision_loss_rate,channel_loss_rate,notx_rate,"
               "other_loss_rate,"
-              "mean_delay_ms,attempts,att_ok,att_corrupt,att_missed,mean_sinr_db,mean_dist_m,"
+              "mean_delay_ms,delay_p50_ms,delay_p95_ms,delay_p99_ms,attempts,att_ok,att_corrupt,att_missed,mean_sinr_db,mean_dist_m,"
               "frac_los,frac_nlosv,frac_nlos\n";
+        auto pct = [](std::vector<double>& v, double p) {
+            if (v.empty()) return 0.0;
+            std::sort(v.begin(), v.end());
+            size_t idx = std::min(v.size() - 1, static_cast<size_t>(p * v.size()));
+            return v[idx];
+        };
         MemberAgg all;
         for (uint32_t m = 0; m <= numMembers; ++m)
         {
-            const MemberAgg& A = (m < numMembers) ? agg[m] : all;
+            MemberAgg& A = (m < numMembers) ? agg[m] : all;
             if (m == numMembers)
             {
                 for (const auto& x : agg)
@@ -3328,17 +3594,21 @@ main(int argc, char* argv[])
                     }
                     all.delaySum += x.delaySum;
                     all.rxInPdb += x.rxInPdb;
+                    all.delaysMs.insert(all.delaysMs.end(), x.delaysMs.begin(), x.delaysMs.end());
                 }
             }
             const double S = std::max<double>(1.0, static_cast<double>(A.sent));
             const double C = std::max<double>(1.0, static_cast<double>(A.condN[0] + A.condN[1] +
                                                                        A.condN[2]));
+            std::vector<double> d = A.delaysMs;
+            const double late = (A.rx > A.rxInPdb) ? static_cast<double>(A.rx - A.rxInPdb) / S : 0.0;
             mc << idCols << ',' << (m < numMembers ? std::to_string(m + 1) : std::string("all"))
                << ',' << A.sent << ',' << A.rx << ',' << std::setprecision(6) << A.rx / S << ','
-               << A.rxInPdb / S << ',' << A.lostColl << ',' << A.lostChan << ',' << A.lostNoTx
+               << A.rxInPdb / S << ',' << late << ',' << A.lostColl << ',' << A.lostChan << ',' << A.lostNoTx
                << ',' << A.lostOther << ',' << A.lostColl / S << ',' << A.lostChan / S << ','
                << A.lostNoTx / S << ',' << A.lostOther / S << ','
-               << (A.rx ? A.delaySum / A.rx * 1e3 : 0.0) << ',' << A.attempts << ','
+               << (A.rx ? A.delaySum / A.rx * 1e3 : 0.0) << ',' << pct(d, 0.50) << ','
+               << pct(d, 0.95) << ',' << pct(d, 0.99) << ',' << A.attempts << ','
                << A.attemptsOk << ',' << A.attemptsCorrupt << ',' << A.attemptsMissed << ','
                << (A.sinrN ? A.sinrSum / A.sinrN : 0.0) << ','
                << (A.sent ? A.distSum / A.sent : 0.0) << ',' << A.condN[2] / C << ','
@@ -3415,7 +3685,14 @@ main(int argc, char* argv[])
               "relay_by_unchosen,helper_changes_per_s,helper_share_m1,helper_share_m2,"
               "helper_share_m3,helper_share_m4,helper_share_m5,helper_share_m6,helper_share_m7,"
               "helper_share_m8,hsel_cam_age_ms_mean,hsel_cam_age_ms_p95,"
-              "relay_after_initial_ms_mean,relay_after_initial_ms_p95\n";
+              "relay_after_initial_ms_mean,relay_after_initial_ms_p95,tb_max_b,payload_max_b,"
+              "leader_pkt_multi_tb,leader_pkt_multi_tb_unqueued,"
+              "bg_flows_per_car,bg_flows,harq_mode,helper_sched,res_reserved_leader,"
+              "res_reserved_helper,res_used_leader,res_used_helper,res_unused_ack,"
+              "res_unused_no_trigger,res_unused_no_data,res_unused_helper_not_decoded,"
+              "res_unused_reselected,res_per_pkt_used,res_per_pkt_reserved,"
+              "eff_member_pkts_per_res,platoon_cbr_share,helper_assigned,helper_decoded,"
+              "helper_drop_rate,relay_needed,relay_sent,relay_ok,sel_ops_mean,sel_cpu_us_mean\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -3561,9 +3838,98 @@ main(int argc, char* argv[])
             {
                 rc << ',' << share[m];
             }
+            const uint64_t helperAssigned = applied.size();
+            const uint64_t helperDecoded = helperAttOk;
+            const double helperDropRate = helperAssigned ? static_cast<double>(helperAssigned - std::min<uint64_t>(helperAssigned, helperDecoded)) / helperAssigned : 0.0;
+            const uint64_t relayNeeded = g.coopEv[0] + g.coopEv[2];
+            const uint64_t relaySent = g.coopEv[1];
+            const uint64_t relayOk = helperRecovered;
+
+            double resUsedLeader = leaderSubchSlots;
+            double resUsedHelper = 0.0;
+            for (const AnyTx& o : g.allTx)
+            {
+                if (o.slotAbs >= std::llround(kpiStart / g.tSlot) && o.slotAbs < std::llround(kpiEnd / g.tSlot) && o.node == helper)
+                {
+                    resUsedHelper += static_cast<double>(o.rbLen) / subchPrbs;
+                }
+            }
+            const double meanSubch = (gAgg[0].sps + gAgg[0].dyn > 0) ? (gAgg[0].subchSum / (gAgg[0].sps + gAgg[0].dyn)) : 1.0;
+            const double meanSlots = (gAgg[0].sps + gAgg[0].dyn > 0) ? (gAgg[0].slotsSum / (gAgg[0].sps + gAgg[0].dyn)) : 1.0;
+
+            double resReservedLeader = 0.0;
+            double resReservedHelper = 0.0;
+            if (helperMode == "leaderRes" || helperMode == "leaderResIuc")
+            {
+                resReservedLeader = pktInWin * meanSubch * 1.0;
+                resReservedHelper = pktInWin * meanSubch * std::max<double>(0.0, meanSlots - 1.0);
+            }
+            else
+            {
+                resReservedLeader = pktInWin * meanSubch * meanSlots;
+                resReservedHelper = (helperMode == "ownRes" ? relayNeeded * meanSubch * relayBudget : 0.0);
+            }
+            double resUnusedAck = (ctl.nImplicitAck + ctl.nAllAckDecision) * meanSubch * std::max<double>(0.0, maxNumTx - 1.0);
+            double resUnusedNoTrigger = g.coopEv[2] * meanSubch;
+            double resUnusedNoData = (gAgg[0].sps > pktInWin ? (gAgg[0].sps - pktInWin) : 0) * meanSubch;
+            double resUnusedHelperNotDecoded = relayNoDecode * meanSubch;
+            double resUnusedReselected = gAgg[0].misfitResel * meanSubch;
+
+            double resPerPktUsed = pktInWin ? (resUsedLeader + resUsedHelper) / pktInWin : 0.0;
+            double resPerPktReserved = pktInWin ? (resReservedLeader + resReservedHelper) / pktInWin : 0.0;
+            uint64_t totalRxInPdb = 0;
+            for (const auto& A : agg) totalRxInPdb += A.rxInPdb;
+            double effMemberPktsPerRes = (resUsedLeader + resUsedHelper > 0.0) ? static_cast<double>(totalRxInPdb) / (resUsedLeader + resUsedHelper) : 0.0;
+            double platoonCbrShare = (busySubchSlots > 0.0) ? (resUsedLeader + resUsedHelper) / busySubchSlots : 0.0;
+
+            double selOpsSum = 0.0, selCpuUsSum = 0.0;
+            uint64_t selCount = 0;
+            for (const auto& r : hsel.Rows())
+            {
+                if (r.tDecide >= kpiStart && r.tDecide < kpiEnd)
+                {
+                    selOpsSum += (r.nLinkEval + r.nBldTest);
+                    selCpuUsSum += r.cpuUs;
+                    ++selCount;
+                }
+            }
+            double selOpsMean = selCount ? selOpsSum / selCount : 0.0;
+            double selCpuUsMean = selCount ? selCpuUsSum / selCount : 0.0;
+
             rc << ',' << meanOf(age) << ',' << p95Of(age) << ',' << meanOf(relayAfterInitial)
-               << ',' << p95Of(relayAfterInitial) << '\n';
+               << ',' << p95Of(relayAfterInitial) << ',' << tbMaxB << ',' << payloadMaxB << ','
+               << pktMultiTb << ',' << pktMultiTbUnqueued
+               << ',' << bgFlowsPerCar << ',' << totalBgFlows << ',' << harqMode << ','
+               << (helperSched.empty() ? helperMode : helperSched) << ','
+               << resReservedLeader << ',' << resReservedHelper << ',' << resUsedLeader << ',' << resUsedHelper
+               << ',' << resUnusedAck << ',' << resUnusedNoTrigger << ',' << resUnusedNoData
+               << ',' << resUnusedHelperNotDecoded << ',' << resUnusedReselected << ','
+               << resPerPktUsed << ',' << resPerPktReserved << ',' << effMemberPktsPerRes
+               << ',' << platoonCbrShare << ',' << helperAssigned << ',' << helperDecoded << ','
+               << helperDropRate << ',' << relayNeeded << ',' << relaySent << ',' << relayOk
+               << ',' << selOpsMean << ',' << selCpuUsMean << '\n';
         }
+    }
+
+    // End-of-run assertions (PLAN.md Phase 2)
+    for (uint32_t m = 0; m < numMembers; ++m)
+    {
+        NS_ABORT_MSG_IF(agg[m].rxInPdb > agg[m].rx,
+                        "assertion failed: rxInPdb (" << agg[m].rxInPdb << ") > rx (" << agg[m].rx << ") for member " << m + 1);
+        NS_ABORT_MSG_IF(agg[m].rx > pktInWin,
+                        "assertion failed: rx (" << agg[m].rx << ") > sent (" << pktInWin << ") for member " << m + 1);
+        const uint64_t sumLosses = agg[m].lostColl + agg[m].lostChan + agg[m].lostNoTx + agg[m].lostOther;
+        NS_ABORT_MSG_IF(agg[m].rx + sumLosses != pktInWin,
+                        "assertion failed: rx (" << agg[m].rx << ") + losses (" << sumLosses << ") != sent (" << pktInWin << ") for member " << m + 1);
+    }
+    NS_ABORT_MSG_IF(leaderTxPerTbMax > maxNumTx,
+                    "assertion failed: leaderTxPerTbMax (" << leaderTxPerTbMax << ") > maxNumTx (" << maxNumTx << ")");
+    NS_ABORT_MSG_IF(relayByUnchosen > 0,
+                    "assertion failed: relayByUnchosen > 0 (" << relayByUnchosen << ")");
+    if (harqMode == "opt2")
+    {
+        NS_ABORT_MSG_IF(ctl.nAllAckDecision > 0 && leaderRetxNoNack > 0,
+                        "assertion failed: leader retransmission occurred after all-ACK");
     }
 
     std::cerr << "  pkts=" << pktInWin << " notTx=" << pktNotTx << " leaderTx=" << lTx

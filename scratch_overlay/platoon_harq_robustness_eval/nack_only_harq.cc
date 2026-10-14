@@ -105,7 +105,10 @@ class UserWrap : public NrSlUePhySapUser
     void ReceivePsfch(uint32_t sendingNodeId, SlHarqInfo harqInfo) override
     {
         m_ctl->OnPsfch(m_dev, sendingNodeId, harqInfo);
-        m_orig->ReceivePsfch(sendingNodeId, harqInfo);
+        if (m_ctl->GetMode() != NackOnlyHarqController::HarqMode::OPT2)
+        {
+            m_orig->ReceivePsfch(sendingNodeId, harqInfo);
+        }
     }
 
   private:
@@ -166,13 +169,13 @@ void
 NackOnlyHarqController::Install(Ptr<NrUeNetDevice> leader,
                                 const std::vector<Ptr<NrUeNetDevice>>& members,
                                 uint32_t dstL2Id,
-                                bool option1Tx,
+                                HarqMode mode,
                                 uint8_t minTimeGapPsfch)
 {
     m_leader = leader;
     m_members = members;
     m_dst = dstL2Id;
-    m_option1 = option1Tx;
+    m_mode = mode;
     m_gap = minTimeGapPsfch;
 
     m_mac = leader->GetMac(0)->GetObject<NrSlUeMac>();
@@ -186,9 +189,19 @@ NackOnlyHarqController::Install(Ptr<NrUeNetDevice> leader,
 }
 
 void
+NackOnlyHarqController::Install(Ptr<NrUeNetDevice> leader,
+                                const std::vector<Ptr<NrUeNetDevice>>& members,
+                                uint32_t dstL2Id,
+                                bool option1Tx,
+                                uint8_t minTimeGapPsfch)
+{
+    Install(leader, members, dstL2Id, option1Tx ? HarqMode::OPT1 : HarqMode::BLIND, minTimeGapPsfch);
+}
+
+void
 NackOnlyHarqController::AddObservedDevice(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex)
 {
-    NS_ABORT_MSG_IF(m_option1, "only observe-only controllers record several devices");
+    NS_ABORT_MSG_IF(m_mode != HarqMode::BLIND, "only observe-only controllers record several devices");
     Attach(dev, nodeIndex);
 }
 
@@ -321,19 +334,17 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
     {
         return;
     }
-    if (info.IsReceivedOk())
+    const bool isAck = info.IsReceivedOk();
+    if (isAck)
     {
         ++nAckRx;
-        return;
     }
-    ++nNackRx;
-    // attribute the NACK to the pending transmission of this HARQ id whose
-    // PSFCH occasion this is: the one decided next. A PSFCH carries no HARQ id
-    // (TS 38.213 sec. 16.3: the occasion and PRB identify the PSSCH); with SPS
-    // the HARQ id is the same in every period, so the latest pending
-    // transmission can be the next period's TB while this NACK is for the last
-    // retransmission of the previous one. With one pending transmission per
-    // HARQ id (dynamic grants) both rules pick the same one.
+    else
+    {
+        ++nNackRx;
+    }
+    // attribute feedback to the pending transmission of this HARQ id whose
+    // PSFCH occasion this is: the one decided next.
     const double now = Simulator::Now().GetSeconds();
     LeaderTx* best = nullptr;
     for (size_t i = m_txs.size(); i-- > 0;)
@@ -349,9 +360,38 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
             break; // older than any pending decision
         }
     }
-    if (best && best->nNack < 255)
+    if (best)
     {
-        ++best->nNack;
+        if (isAck)
+        {
+            best->ackedMembers.insert(nodeId);
+        }
+        else
+        {
+            if (best->nNack < 255)
+            {
+                ++best->nNack;
+            }
+            best->nackedMembers.insert(nodeId);
+        }
+    }
+}
+
+void
+NackOnlyHarqController::DeliverSuccess(const LeaderTx& tx)
+{
+    const uint16_t txRnti = m_mac->GetRnti();
+    for (const auto& m : m_members)
+    {
+        Ptr<NrSlUeMac> mmac = m->GetMac(0)->GetObject<NrSlUeMac>();
+        SlHarqInfo ack;
+        ack.m_rnti = mmac->GetRnti();
+        ack.m_txRnti = txRnti;
+        ack.m_dstL2Id = static_cast<uint16_t>(m_dst);
+        ack.m_harqProcessId = tx.harqId;
+        ack.m_bwpIndex = 0;
+        ack.m_harqStatus = SlHarqInfo::ACK;
+        m_origUser->ReceivePsfch(m->GetNode()->GetId(), ack);
     }
 }
 
@@ -366,39 +406,69 @@ NackOnlyHarqController::Decide(size_t idx)
         ++nStale;
         return;
     }
-    if (tx.nNack > 0)
+    if (m_mode == HarqMode::BLIND)
     {
         tx.decision = 0;
-        ++nNackDecision;
         return;
     }
-    tx.decision = 1;
-    ++nImplicitAck;
-    if (!m_option1)
+    if (m_mode == HarqMode::OPT1)
     {
+        if (tx.nNack > 0)
+        {
+            tx.decision = 0;
+            ++nNackDecision;
+            return;
+        }
+        tx.decision = 1;
+        ++nImplicitAck;
+        if (m_spsSafeAck && !m_mac->IsSlRetxPending(m_dst, tx.harqId))
+        {
+            ++nAckNoRetxLeft;
+            return;
+        }
+        DeliverSuccess(tx);
         return;
     }
-    if (m_spsSafeAck && !m_mac->IsSlRetxPending(m_dst, tx.harqId))
+    if (m_mode == HarqMode::OPT2)
     {
-        ++nAckNoRetxLeft;
+        if (!m_fbCallback.IsNull())
+        {
+            const double nowS = Simulator::Now().GetSeconds();
+            for (size_t k = 0; k < m_members.size(); ++k)
+            {
+                uint32_t nid = m_members[k]->GetNode()->GetId();
+                uint8_t kind = 2; // DTX default (silent failure)
+                if (tx.ackedMembers.count(nid) > 0)
+                {
+                    kind = 0; // ACK
+                }
+                else if (tx.nackedMembers.count(nid) > 0)
+                {
+                    kind = 1; // NACK
+                }
+                uint32_t memberIndex = static_cast<uint32_t>(k + 1);
+                m_fbCallback(nowS, memberIndex, tx.gen, kind);
+            }
+        }
+        // Option 2: success only if ALL members ACKed; DTX or any NACK counts as NACK
+        const bool allAck = (tx.ackedMembers.size() >= m_members.size() && tx.nNack == 0);
+        if (allAck)
+        {
+            tx.decision = 1;
+            ++nAllAckDecision;
+            if (m_spsSafeAck && !m_mac->IsSlRetxPending(m_dst, tx.harqId))
+            {
+                ++nAckNoRetxLeft;
+                return;
+            }
+            DeliverSuccess(tx);
+        }
+        else
+        {
+            tx.decision = 0;
+            ++nNackDecision;
+        }
         return;
-    }
-    // Option 1: no NACK => positive acknowledgement. Deliver it through the
-    // original SAP so NrSlUeMac::DoReceivePsfch cancels the remaining
-    // reserved retransmissions of this TB (one ACK per member, so it also
-    // works with an "all members must ACK" variant of RecvHarqFeedback).
-    const uint16_t txRnti = m_mac->GetRnti();
-    for (const auto& m : m_members)
-    {
-        Ptr<NrSlUeMac> mmac = m->GetMac(0)->GetObject<NrSlUeMac>();
-        SlHarqInfo ack;
-        ack.m_rnti = mmac->GetRnti();
-        ack.m_txRnti = txRnti;
-        ack.m_dstL2Id = static_cast<uint16_t>(m_dst);
-        ack.m_harqProcessId = tx.harqId;
-        ack.m_bwpIndex = 0;
-        ack.m_harqStatus = SlHarqInfo::ACK;
-        m_origUser->ReceivePsfch(m->GetNode()->GetId(), ack);
     }
 }
 

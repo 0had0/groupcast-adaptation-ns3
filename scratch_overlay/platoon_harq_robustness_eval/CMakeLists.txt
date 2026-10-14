@@ -14,3 +14,16 @@ build_exec(
     "${ns3-contrib-libs}"
   EXECUTABLE_DIRECTORY_PATH ${CMAKE_OUTPUT_DIRECTORY}/scratch/platoon_harq_robustness_eval/
 )
+
+build_exec(
+  EXECNAME test_helper_select
+  EXECNAME_PREFIX scratch_platoon_harq_robustness_eval_
+  SOURCE_FILES
+    test_helper_select.cc
+    helper_select.cc
+  LIBRARIES_TO_LINK
+    scratch_common
+    "${ns3-libs}"
+    "${ns3-contrib-libs}"
+  EXECUTABLE_DIRECTORY_PATH ${CMAKE_OUTPUT_DIRECTORY}/scratch/platoon_harq_robustness_eval/
+)

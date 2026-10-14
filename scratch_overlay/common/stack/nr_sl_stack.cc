@@ -79,20 +79,10 @@ BuildSlStack(const SlStackParams& p,
         // Derived from availPRBs / numSubchannels, rounded up to next valid.
         const uint32_t raw = (availPRBsInt > 0 && p.numSubchannels > 0)
                              ? availPRBsInt / p.numSubchannels : 10;
-        static const uint32_t valid[] = {10, 15, 20, 25, 50, 75, 100};
-        subchSize = valid[sizeof(valid)/sizeof(valid[0]) - 1]; // default max
-        for (uint32_t v : valid)
+        subchSize = raw;
+        if (subchSize * p.numSubchannels > availPRBsInt)
         {
-            if (v >= raw) { subchSize = v; break; }
-        }
-        // Guard: if subchSize * numSubchannels > availPRBs, fall back to bwPRBs.
-        if (subchSize * p.numSubchannels > availPRBsInt + 20 /* 20 PRB guard */)
-        {
-            NS_LOG_WARN("NrSlStack: computed subchSize=" << subchSize
-                        << " × numSubchannels=" << p.numSubchannels
-                        << " > availPRBs=" << availPRBsInt
-                        << "; falling back to bwPRBs=" << p.bwPRBs);
-            subchSize = p.bwPRBs;
+            subchSize = availPRBsInt / p.numSubchannels;
         }
         NS_LOG_INFO("NrSlStack: " << p.numSubchannels << " subchannels"
                     << " × " << subchSize << " PRBs/subch"
@@ -170,7 +160,7 @@ BuildSlStack(const SlStackParams& p,
     ctx.nr->SetUeMacTypeId(NrSlUeMac::GetTypeId());
     ctx.nr->SetUeMacAttribute("EnableSensing",       BooleanValue(true));
     ctx.nr->SetUeMacAttribute("T1",                  UintegerValue(2));
-    ctx.nr->SetUeMacAttribute("T2",                  UintegerValue(33));
+    ctx.nr->SetUeMacAttribute("T2",                  UintegerValue(p.t2Slots > 0 ? p.t2Slots : 33));
     ctx.nr->SetUeMacAttribute("ActivePoolId",         UintegerValue(0));
     ctx.nr->SetUeMacAttribute("SlThresPsschRsrp",     IntegerValue(p.thresRsrp));
 
@@ -300,8 +290,12 @@ BuildSlStack(const SlStackParams& p,
             //   UE2 → slot 2, 5, 8, …  (slot % 3 == 2)
             // Each UE picks the first matching slot → exactly 1 reservation
             // per RRI cycle, in distinct slots → 0 collisions.
-            const uint32_t numUes = ctx.ueNetDev.GetN();
-            det->SetSlotPartition(numUes, i);
+            if (tdm)
+            {
+                const uint32_t numUes = ctx.ueNetDev.GetN();
+                uint32_t phaseLength = 1;
+                det->SetSlotPartition(numUes * phaseLength, i * phaseLength, phaseLength);
+            }
             // Carry per-destination fixed-MCS overrides (split-MCS groupcast).
             for (const auto& kv : p.dstMcsOverride)
                 det->SetDstMcsOverride(kv.first, kv.second);

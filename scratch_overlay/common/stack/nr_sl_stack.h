@@ -131,6 +131,9 @@ struct SlStackParams
     //   every physical slot is a sidelink slot.
     bool dedicatedCarrier{false};
 
+    // Selection window T2 in slots (0 = keep default 33 slots)
+    uint16_t t2Slots{0};
+
     // -- MCR feedback gate (HARQ Option-1 only) --
     // When harqOption == 1 AND mcrMeters > 0, BuildSlStack calls
     // InstallMcrFeedbackGate() on all UE devices, suppressing PSFCH from

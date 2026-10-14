@@ -26,6 +26,13 @@ skip the sensing exclusion (§8); the leader NACKed helper copies of its own TBs
 re-run of `leaderRes` / `ownRes`); `none4` is infeasible in this pool. **Server campaign
 done 2026-10-12; verdicts in §7.8.**
 
+**Update (2026-10-14). Per-TB helper selection: server campaign done** (§7.11; 420/420
+runs, 0 failed, every check 0; `none` / `s4Nack` reproduce `coop_sps` exactly). Verdicts:
+**map-aware per-TB selection pays** (tail `prr_pdb` +0.058 ± 0.026 vs static member 4,
+10/10 seeds, roundabout N 0 periodic1; +0.057 at N 60); **Kuo's distance-only rule does not
+help the tail** (it raises the group PRR); **NACK-triggered relaying matches blind** at 35-45 %
+fewer transmissions; gains hold under load; periodic2: mostly n.s.
+
 **Update (2026-10-13, evening). Per-TB helper selection (Kuo et al. 2021) ready for the
 server** (README "Per-TB helper selection"): arms `s4Nack` / `s4Blind` (static member 4,
 baseline), `kuoNack` / `kuoBlind` (max-mean GPRR, distance-only), `mapNack` / `mapBlind`
@@ -563,6 +570,49 @@ result). Code:
 Rel-17 IUC clauses checked in ETSI TS 138 214 V17.5.0 (sec. 8.1.4A, 8.1.4C) and TS 138 321
 V17.5.0 (sec. 5.22.1.10.1-2, 6.1.3.53); quoted in the README.
 
+### 7.11 Per-TB helper selection (server, 2026-10-13/14, `run_dynhelper.sh`, commit `2721fcd`)
+
+Roundabout IVD 30, N 0 / 45 / 60, periodic1 / periodic2, 10 seeds, SB-SPS re-run flags; arms
+and rules: README "Per-TB helper selection". Data:
+`~/Documents/remote-results/coop_dyn_sps/{analysis,analysis_dyn}` (`dyn_paired.csv`,
+`dyn_verdict.txt`), logs `remote-results/rerun_dyn/`. 420/420 runs, 0 failed, flags verified,
+0 relays by an unchosen member; shadow identity check passed on the server binary; `none` and
+`s4Nack` = `coop_sps` `none` / `leaderRes` (120 member files identical).
+
+Tail (member 8) PRR within the PDB, periodic1, mean of 10 seeds (paired difference to `s4Nack`,
+95 % CI, wins; **bold** = CI > 0):
+
+| arm | N 0 | N 45 | N 60 | tx/pkt (N 0) | GPRR (N 0) |
+|---|---|---|---|---|---|
+| `none` | 0.556 | 0.602 | 0.571 | 1.95 | 0.822 |
+| `s4Nack` (static 4, NACK) | 0.630 | 0.646 | 0.622 | 1.50 | 0.823 |
+| `s4Blind` | 0.624 (-0.006) | 0.644 (-0.003) | 0.614 (-0.008) | 2.47 | 0.822 |
+| `kuoNack` | 0.617 (-0.013) | 0.632 (**worse** -0.015) | 0.612 (-0.010) | 1.81 | 0.867 |
+| `kuoBlind` | 0.614 (-0.016) | 0.627 (**worse** -0.019) | 0.621 (-0.001) | 2.85 | 0.865 |
+| `mapNack` | **0.688 (+0.058 ± 0.026, 10/10)** | 0.670 (+0.023, n.s.) | **0.679 (+0.057 ± 0.028, 9/10)** | 1.71 | 0.889 |
+| `mapBlind` | **0.690 (+0.060, 9/10)** | **0.688 (+0.042 ± 0.018, 10/10)** | **0.674 (+0.053, 9/10)** | 2.81 | 0.884 |
+
+Pre-registered verdicts:
+1. **Dynamic selection pays: YES for `map`** (+0.058 ± 0.026, 10/10, N 0 periodic1), **NO for
+   `kuo`** (-0.013, n.s.). Kuo's distance-only model picks member 2 (93 %: the shortest leader
+   hop) and ignores buildings; `map` switches member 0.23-0.28 times/s (2: 67-70 %, 3, 5, 6, 4).
+2. **Feedback pays over blind: YES** in all 9 periodic1 comparisons: NACK equals blind on the
+   tail (all n.s.) at 1.5-1.8 vs 2.3-2.85 tx/pkt (-35 to -45 %); cbr_occupied 0.007 vs 0.011-0.012
+   at N 0.
+3. **Gains vs `none` under load** (periodic1, tail): `map` +0.132 / +0.067 / +0.107, static 4
+   +0.074 / +0.044 / +0.050, `kuo` +0.061 / +0.029 / +0.041 (N 0 / 45 / 60): background traffic
+   (collisions, hidden nodes) does not erase them; N 45 is the weakest for every arm.
+
+Further results:
+- **Group PRR** (mean member, Kuo's metric): static 4 never changes it (+0.001), dynamic
+  selection raises it in every periodic1 cell: `map` +0.039 to +0.066, `kuo` +0.028 to +0.046
+  (10/10 seeds) — the static helper only moves losses from the tail to the members in front.
+- **periodic2**: tail differences n.s. almost everywhere (SB-SPS reserves ~1.4 slots, little to
+  hand over); GPRR still `map` +0.054 vs static 4 at N 0 (10/10); `kuoNack` +0.038 at N 45.
+- **Delay**: the helper's first copy comes 4.9-6.4 ms after the leader's initial transmission
+  (p95 8-9 ms periodic1, ~6 ms periodic2); positions used are 30-35 ms old (periodic1) and ~50 ms
+  (periodic2) with 100 ms CAMs; decision 1 ms (T1) before the TB's new transmission.
+
 ## 8. Limitations / caveats
 
 - Single MCS (14). High MCS + power spread over wide allocations (6 dBm/PRB at 5 subchannels)
@@ -611,6 +661,12 @@ V17.5.0 (sec. 5.22.1.10.1-2, 6.1.3.53); quoted in the README.
   periodic2 TBs get at most one retransmission (highway N 45, seed 1). Standard behaviour,
   kept as a property of the configuration in the SB-SPS re-run; periodic1 is not affected
   (2.9 slots).
+- **Per-TB selection** (§7.11): roundabout only; one helper per TB (Kuo "once"); `map` knows
+  the buildings and the platoon's CAM positions exactly (no map or GNSS error), background
+  vehicles are not in its model; the link budget (8 dB SINR at MCS 14) is a fixed estimate;
+  CAM age is set by the SPS phase vs the 100 ms CAM phase (constant per run), the
+  `--helperDecisionMs` sweep was not run; blind keeps PSFCH (same pool), Kuo's own scheme has
+  none.
 - **SB-SPS re-run comparisons mix several changes** (grant type, D1 + D2 for every UE,
   background SPS rules): per-option effects are only indicated by the seed-1 pilots (§7.9).
 - **SB-SPS grant size**: a grant keeps the size of the SDU it was (re)selected for (the
@@ -739,9 +795,10 @@ Inside an existing tmux session use `tmux new -d -s coop -c "$PWD" '...'`.
       leader's residual collided attempts that the leader missed (§7.10, footprint): a
       helper-assisted selection (helper reports or vetoes resources) is the natural next
       arm.
-11. Per-TB helper selection: run `run_dynhelper.sh` on the server, apply the pre-registered
-    rules (README); then optionally the highway N 45 / 60, Kuo-faithful blind without PSFCH,
-    two helpers per TB (Kuo "twice"), and a `--helperDecisionMs` sweep (0 / 10 / 50).
+11. Per-TB helper selection: ~~server campaign~~ — done (§7.11). Next: robustness of `map`
+    (`--helperDecisionMs` 0 / 50 / 100, position error), the highway N 45 / 60 (no buildings:
+    does `map` reduce to `kuo`?), two helpers per TB (Kuo "twice"), Kuo-faithful blind without
+    PSFCH, and why N 45 is the weakest cell.
 10. SB-SPS follow-ups: isolate the N = 0 grant-size effect (e.g. a grant that also shrinks
     to the new SDU, or per-SDU-size statistics), and, if per-option effects matter,
     a factorial run (grant type x D1/D2) on a few cells.

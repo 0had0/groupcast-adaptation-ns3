@@ -288,7 +288,7 @@ index 19f6c903..475d0ca6 100644
       * Stop and restart the timer protecting the deallocation of the
       * HARQ process ID.  If the HARQ ID is not allocated, this method
 diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-index 18b4e5a3..8ee176ab 100644
+index 18b4e5a3..9dcfd61b 100644
 --- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
 +++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
 @@ -556,6 +556,15 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
@@ -453,6 +453,19 @@ index 18b4e5a3..8ee176ab 100644
              {
                  itGrantVector = itGrantInfo->second.erase(itGrantVector);
              }
+@@ -1687,8 +1826,10 @@ NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(
+                   "Scheduler received an empty resource list from UE MAC");
+ 
+     std::list<SlResourceInfo> selectedTxOpps;
+-    // blind retransmission corresponds to HARQ enabled AND (PSFCH period == 0)
+-    if (allocationInfo.m_harqEnabled && (GetMac()->GetPsfchPeriod() == 0))
++    // blind retransmission corresponds to HARQ disabled with maxNumTx > 1 OR (HARQ enabled AND PSFCH period == 0)
++    const bool isBlind = (!allocationInfo.m_harqEnabled && GetSlMaxTxTransNumPssch() > 1) ||
++                         (allocationInfo.m_harqEnabled && (GetMac()->GetPsfchPeriod() == 0));
++    if (isBlind)
+     {
+         // Select up to N_PSSCH_maxTx resources without regard MinTimeGapPsfch
+         // i.e., for blind retransmissions
 diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h b/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
 index 80a0473c..b2ba8d91 100644
 --- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
@@ -623,10 +636,10 @@ index 1c987513..f681df6e 100644
  
  } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..2005e8ff 100644
+index 57e4cf29..5b81f9d0 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
-@@ -55,6 +55,57 @@ NrSlUeMac::GetTypeId()
+@@ -55,6 +55,68 @@ NrSlUeMac::GetTypeId()
          TypeId("ns3::NrSlUeMac")
              .SetParent<NrUeMac>()
              .AddConstructor<NrSlUeMac>()
@@ -647,6 +660,17 @@ index 57e4cf29..2005e8ff 100644
 +                          BooleanValue(false),
 +                          MakeBooleanAccessor(&NrSlUeMac::m_helperNackTriggered),
 +                          MakeBooleanChecker())
++            .AddAttribute("HelperFeedbackMode",
++                          "Cooperative HARQ helper feedback gating mode: "
++                          "0=blind, 1=nack (Option 1: relay on NACK), 2=allAck (Option 2: relay unless all ACK)",
++                          UintegerValue(0),
++                          MakeUintegerAccessor(&NrSlUeMac::m_helperFbMode),
++                          MakeUintegerChecker<uint8_t>(0, 2))
++            .AddAttribute("HelperGroupSize",
++                          "Expected member ACK count for HelperFeedbackMode=2 (allAck)",
++                          UintegerValue(8),
++                          MakeUintegerAccessor(&NrSlUeMac::m_helperGroupSize),
++                          MakeUintegerChecker<uint32_t>())
 +            .AddAttribute("LeaderTxCount",
 +                          "Unused by the MAC (kept so existing scripts keep working): which "
 +                          "slots the leader keeps is decided by its scheduler",
@@ -684,7 +708,7 @@ index 57e4cf29..2005e8ff 100644
              .AddAttribute("EnableSensing",
                            "Flag to enable NR Sidelink resource selection based on sensing; "
                            "otherwise, use random selection",
-@@ -120,6 +171,10 @@ NrSlUeMac::GetTypeId()
+@@ -120,6 +182,10 @@ NrSlUeMac::GetTypeId()
                              "Information regarding NR SL PSCCH UE scheduling",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_slPscchScheduling),
                              "ns3::SlPscchUeMacStatParameters::TracedCallback")
@@ -695,7 +719,7 @@ index 57e4cf29..2005e8ff 100644
              .AddTraceSource("SlPsschScheduling",
                              "Information regarding NR SL PSSCH UE scheduling",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_slPsschScheduling),
-@@ -131,7 +186,16 @@ NrSlUeMac::GetTypeId()
+@@ -131,7 +197,16 @@ NrSlUeMac::GetTypeId()
              .AddTraceSource("SensingAlgorithm",
                              "Candidates selected by the mode 2 sensing algorithm",
                              MakeTraceSourceAccessor(&NrSlUeMac::m_tracedSensingAlgorithm),
@@ -713,7 +737,7 @@ index 57e4cf29..2005e8ff 100644
      return tid;
  }
  
-@@ -447,10 +511,125 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+@@ -447,10 +522,125 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
          return candidateResources;
      }
  
@@ -840,7 +864,7 @@ index 57e4cf29..2005e8ff 100644
          m_tracedSensingAlgorithm(report, candidateResources, sensingData, transmitHistory);
          return candidateResources;
      }
-@@ -536,6 +715,16 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+@@ -536,6 +726,16 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
          sensingDataProjections.push_back(resourceList);
      }
  
@@ -857,7 +881,7 @@ index 57e4cf29..2005e8ff 100644
      NS_LOG_DEBUG("Size of sensingDataProjections outer vector: " << sensingDataProjections.size());
  
      int rsrpThreshold = m_thresRsrp;
-@@ -560,7 +749,11 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+@@ -560,7 +760,11 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
              std::list<SlResourceInfo> resourceInfoList;
              uint16_t pPrimeRsvpTx =
                  txPool->GetResvPeriodInSlots(bwpId, poolId, params.m_pRsvpTx, slotPeriod);
@@ -870,7 +894,7 @@ index 57e4cf29..2005e8ff 100644
              {
                  auto slResourceInfo = *itCandidate;
                  slResourceInfo.sfn.Add(i * pPrimeRsvpTx);
-@@ -647,6 +840,19 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+@@ -647,6 +851,19 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
                   << " slots");
  
      report.m_finalRsrpThreshold = (rsrpThreshold - 3); // undo the last increment
@@ -890,7 +914,7 @@ index 57e4cf29..2005e8ff 100644
      m_tracedSensingAlgorithm(report, remainingCandidates, updatedSensingData, updatedHistory);
      return remainingCandidates;
  }
-@@ -783,6 +989,35 @@ NrSlUeMac::ExcludeReservedResources(SensingData sensedData,
+@@ -783,6 +1000,35 @@ NrSlUeMac::ExcludeReservedResources(SensingData sensedData,
      }
      uint16_t pPrimeRsvpRx = resvPeriodSlots;
  
@@ -926,7 +950,7 @@ index 57e4cf29..2005e8ff 100644
      for (uint16_t i = 1; i <= q; i++)
      {
          ReservedResource resource(sensedData.sfn,
-@@ -881,6 +1116,141 @@ NrSlUeMac::OverlappedResource(uint8_t firstStart,
+@@ -881,6 +1127,141 @@ NrSlUeMac::OverlappedResource(uint8_t firstStart,
              std::min(firstStart + firstLength, secondStart + secondLength));
  }
  
@@ -1068,7 +1092,7 @@ index 57e4cf29..2005e8ff 100644
  void
  NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
  {
-@@ -890,6 +1260,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
+@@ -890,6 +1271,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
      {
          // oldest data will be at the front of the queue
          m_sensingData.push_back(sensingData);
@@ -1076,7 +1100,7 @@ index 57e4cf29..2005e8ff 100644
      }
  }
  
-@@ -933,6 +1304,194 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
+@@ -933,6 +1315,201 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
          NS_FATAL_ERROR("Received PHY PDU with unknown destination " << sciF2a.GetDstId());
      }
  
@@ -1117,36 +1141,40 @@ index 57e4cf29..2005e8ff 100644
 +        p.lcid = txTag.GetLcid();
 +        p.castType = sciF2a.GetCastType();
 +        p.coop = coop;
-+        if (coop.ownRes == 2)
++        const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
++        if (fbMode == 0)
 +        {
-+            // NACKs of this transmission are known by NackKnownAfter(); one
-+            // more slot for a receiver whose PSFCH is pushed to the next
-+            // occasion by its processing time (NrUePhy)
-+            p.nackUntil =
-+                NackKnownAfter(m_currentSfn, m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId)) +
-+                1;
++            // Blind own grant: trigger resource selection immediately upon decoding
++            SelectOwnRelayResources(p);
 +        }
-+        // first slot at which a NACK of this PSSCH can arrive (its PSFCH
-+        // occasion + 1), in slots since t = 0: m_currentSfn advances only in
-+        // sidelink slots, a NACK can be delivered in another one. The PHY
-+        // delivers the PSSCH a TB decode latency (default 100 us, < half a slot)
-+        // after its end, possibly in the next slot.
++        else
 +        {
-+            const uint8_t gap = m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId);
-+            const int64_t slotNs = m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds();
-+            const int64_t nowNs = Simulator::Now().GetNanoSeconds();
-+            const int64_t psschAbs = nowNs / slotNs - ((nowNs % slotNs < slotNs / 2) ? 1 : 0);
-+            const int64_t cur = static_cast<int64_t>(m_currentSfn.Normalize());
-+            const int64_t psschNorm = psschAbs - m_absSlotOffset;
-+            const int64_t k0 = std::max<int64_t>(0, psschNorm + gap - cur);
-+            p.nackFrom = static_cast<uint64_t>(
-+                static_cast<int64_t>(NackKnownAfter(m_currentSfn, static_cast<uint8_t>(k0))) +
-+                m_absSlotOffset);
++            if (coop.ownRes == 2 || fbMode == 2)
++            {
++                // NACKs/ACKs of this transmission are known by NackKnownAfter()
++                p.nackUntil =
++                    NackKnownAfter(m_currentSfn, m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId)) +
++                    1;
++            }
++            // first slot at which a NACK of this PSSCH can arrive (its PSFCH
++            // occasion + 1), in slots since t = 0
++            {
++                const uint8_t gap = m_slTxPool->GetMinTimeGapPsfch(GetBwpId(), m_poolId);
++                const int64_t slotNs = m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds();
++                const int64_t nowNs = Simulator::Now().GetNanoSeconds();
++                const int64_t psschAbs = nowNs / slotNs - ((nowNs % slotNs < slotNs / 2) ? 1 : 0);
++                const int64_t cur = static_cast<int64_t>(m_currentSfn.Normalize());
++                const int64_t psschNorm = psschAbs - m_absSlotOffset;
++                const int64_t k0 = std::max<int64_t>(0, psschNorm + gap - cur);
++                p.nackFrom = static_cast<uint64_t>(
++                    static_cast<int64_t>(NackKnownAfter(m_currentSfn, static_cast<uint8_t>(k0))) +
++                    m_absSlotOffset);
++            }
++            m_pendingOwnRelays.remove_if([&p](const PendingOwnRelay& q) {
++                return q.dstL2Id == p.dstL2Id && q.fromRnti == p.fromRnti && q.harqId == p.harqId;
++            });
++            m_pendingOwnRelays.push_back(p);
 +        }
-+        m_pendingOwnRelays.remove_if([&p](const PendingOwnRelay& q) {
-+            return q.dstL2Id == p.dstL2Id && q.fromRnti == p.fromRnti && q.harqId == p.harqId;
-+        });
-+        m_pendingOwnRelays.push_back(p);
 +    }
 +    else if (m_enableChainedRes && coop.helperId != 0 && coop.helperId == GetRnti() &&
 +             coop.relayedFromRnti == 0 && !coop.ownRes)
@@ -1224,12 +1252,15 @@ index 57e4cf29..2005e8ff 100644
 +                    relayPb->AddPacket(copy);
 +                }
 +                relay.harqId = harqIdOpt.value();
-+                // NACK-triggered: the receivers give PSFCH feedback on the relayed
++                // NACK/Feedback-triggered: the receivers give PSFCH feedback on the relayed
 +                // copy too (SCI-2A HARQ feedback indicator), so the helper's next
-+                // relay slot can be NACK-gated as well
-+                relay.harqEnabled = m_helperNackTriggered;
-+                relay.relayNackGated = m_helperNackTriggered;
++                // relay slot can be gated as well
++                const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
++                relay.harqEnabled = (fbMode > 0);
++                relay.relayNackGated = (fbMode > 0);
++                relay.relayFbMode = fbMode;
 +                relay.relayNackSeen = false;
++                relay.relayOverheardAcks.clear();
 +                relay.relayAwaitRnti = txTag.GetRnti();
 +                relay.nSelected = static_cast<uint8_t>(relay.slotAllocations.size());
 +                relay.tbTxCounter = 1; // grant removed after its last slot
@@ -1271,7 +1302,7 @@ index 57e4cf29..2005e8ff 100644
      for (auto& pktIt : dataPkts)
      {
          pktIt->RemovePacketTag(tag);
-@@ -985,6 +1544,28 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -985,6 +1562,40 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                           << " slot " << sfn.GetSlot() << " Normalized slot number "
                           << sfn.Normalize());
  
@@ -1285,11 +1316,23 @@ index 57e4cf29..2005e8ff 100644
 +        {
 +            SfnSf deadline;
 +            deadline.FromEncoding(it->coop.deadline);
-+            if (!(sfn < deadline) || (it->coop.ownRes == 2 && sfn.Normalize() > it->nackUntil))
++            const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
++            const bool expired = !(sfn < deadline) || (it->coop.ownRes == 2 && sfn.Normalize() > it->nackUntil) ||
++                                 (fbMode == 2 && it->nackUntil > 0 && sfn.Normalize() > it->nackUntil);
++            if (expired)
 +            {
-+                // no NACK before the deadline: Option-1 success, nothing to relay
-+                m_coopRelayTrace(COOP_RELAY_NO_NACK, it->fromRnti, it->harqId, sfn.Normalize());
-+                it = m_pendingOwnRelays.erase(it);
++                if (fbMode == 2 && (it->overheardAcks.size() < m_helperGroupSize || it->nackSeen))
++                {
++                    // Option 2 trigger fired at decision deadline
++                    PendingOwnRelay p = *it;
++                    it = m_pendingOwnRelays.erase(it);
++                    SelectOwnRelayResources(p);
++                }
++                else
++                {
++                    m_coopRelayTrace(COOP_RELAY_NO_NACK, it->fromRnti, it->harqId, sfn.Normalize());
++                    it = m_pendingOwnRelays.erase(it);
++                }
 +            }
 +            else
 +            {
@@ -1300,7 +1343,7 @@ index 57e4cf29..2005e8ff 100644
      bool atLeastOneTransmissionInSlot = false;
      // If a grant is scheduled for this slot, code below will provide the
      // TTI indication to the PHY (for either PSCCH or PSSCH).  However,
-@@ -1025,29 +1606,73 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1025,29 +1636,88 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
              bool removeGrant = false;
              NrSlGrant currentGrant = *itGrant;
              // Rename use of *itGrant (and currentGrant) below with "nrSlGrant"
@@ -1340,13 +1383,13 @@ index 57e4cf29..2005e8ff 100644
 +                              "NrUeMac::DoNrSlSlotIndication, rnti: "
 +                                  << GetRnti() << " harqId: " << +itGrant->harqId);
 +                if (currentSlotIt == itGrant->slotAllocations.end())
-                 {
--                    currentSlotIt++;
--                    if (currentSlotIt == itGrant->slotAllocations.end())
++                {
 +                    removeGrant = true;
 +                }
 +                else
-+                {
+                 {
+-                    currentSlotIt++;
+-                    if (currentSlotIt == itGrant->slotAllocations.end())
 +                    // Find the first slot that is either at Now() or in the future
 +                    while (currentSlotIt->sfn < sfn)
                      {
@@ -1365,12 +1408,27 @@ index 57e4cf29..2005e8ff 100644
 +                                 currentGrant.usurpedByHelper.count(currentSlot) > 0 &&
 +                                 currentGrant.usurpedByHelper.at(currentSlot);
              // Rename use of currentSlot below with "nrSlSlotAlloc"
++            bool cancelRelay = false;
 +            if (!removeGrant && currentGrant.slotAllocations.begin()->sfn == sfn &&
-+                currentGrant.relayNackGated && !currentGrant.relayNackSeen)
++                currentGrant.relayNackGated)
 +            {
-+                // Option 1 at the helper: no NACK overheard for the previous
-+                // transmission of this TB -> success, cancel the remaining relay slots
-+                NS_LOG_DEBUG("Helper RNTI " << GetRnti() << ": no NACK for HARQ "
++                if (currentGrant.relayFbMode == 2)
++                {
++                    if (currentGrant.relayOverheardAcks.size() >= m_helperGroupSize &&
++                        !currentGrant.relayNackSeen)
++                    {
++                        cancelRelay = true;
++                    }
++                }
++                else if (!currentGrant.relayNackSeen)
++                {
++                    cancelRelay = true;
++                }
++            }
++            if (cancelRelay)
++            {
++                // Option 1 or 2 at the helper: success -> cancel the remaining relay slots
++                NS_LOG_DEBUG("Helper RNTI " << GetRnti() << ": feedback success for HARQ "
 +                                            << +currentGrant.relayedHarqId << " of RNTI "
 +                                            << currentGrant.relayAwaitRnti << ", relay slot "
 +                                            << sfn.Normalize() << " cancelled");
@@ -1385,7 +1443,7 @@ index 57e4cf29..2005e8ff 100644
              if (!removeGrant && currentGrant.slotAllocations.begin()->sfn == sfn)
              {
                  NS_LOG_INFO("Grant at : Frame = " << currentSlot.sfn.GetFrame()
-@@ -1065,7 +1690,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1065,7 +1735,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                          << currentSlot.dstL2Id
                                          << " harqId: " << +currentGrant.harqId
                                          << " Packet Size: " << itPkt->GetSize());
@@ -1398,7 +1456,7 @@ index 57e4cf29..2005e8ff 100644
                          }
                      }
                      else
-@@ -1098,13 +1727,32 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1098,13 +1772,33 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                           << currentSlot.dstL2Id
                                           << " harqId: " << +currentGrant.harqId
                                           << " Packet Size: " << itPkt->GetSize());
@@ -1423,6 +1481,7 @@ index 57e4cf29..2005e8ff 100644
 +                        if (currentGrant.relayNackGated)
 +                        {
 +                            itGrant->relayNackSeen = false;
++                            itGrant->relayOverheardAcks.clear();
 +                            itGrant->relayAwaitRnti = GetRnti();
 +                            itGrant->relayNackAfter = 0;
 +                            m_relayFbKeys[{currentSlot.dstL2Id, currentGrant.relayedHarqId}] =
@@ -1432,7 +1491,7 @@ index 57e4cf29..2005e8ff 100644
                  }
                  // Remove current slot allocation from this grant
                  if (currentGrant.tbTxCounter == currentGrant.nSelected)
-@@ -1123,169 +1771,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1123,169 +1817,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                   << " slot = " << currentSlot.sfn.GetSlot());
                      continue;
                  }
@@ -1587,15 +1646,15 @@ index 57e4cf29..2005e8ff 100644
 -                        if (gaps.size() > 1)
 +                        NrSlSciF2aHeader::CoopInfo coop;
 +                        if (relaying)
-+                        {
-+                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
-+                        }
-+                        else if (currentGrant.helperId != 0)
                          {
 -                            sciF1a.SetGapReTx2(gaps.at(1));
 -                            NS_ASSERT_MSG(gaps.at(0) < gaps.at(1),
 -                                          "Incorrect computation of ReTx slot gaps");
 -                            sciF1a.SetIndexStartSbChReTx2(sbChIndex.at(1));
++                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
++                        }
++                        else if (currentGrant.helperId != 0)
++                        {
 +                            // later reserved slots handed to the helper (the current
 +                            // slot was already erased from itGrant)
 +                            coop.helperId = currentGrant.helperId;
@@ -1836,7 +1895,7 @@ index 57e4cf29..2005e8ff 100644
                  }
              }
              else
-@@ -1317,6 +2050,138 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1317,6 +2096,140 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
      }
  }
  
@@ -1958,7 +2017,9 @@ index 57e4cf29..2005e8ff 100644
 +    relay.relayedFromRnti = p.fromRnti;
 +    relay.relayedSrcL2Id = p.srcL2Id;
 +    relay.relayedHarqId = p.harqId;
-+    relay.relayNackGated = true;
++    const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
++    relay.relayFbMode = fbMode;
++    relay.relayNackGated = (fbMode > 0);
 +    relay.relayNackSeen = true; // triggered by the NACK just overheard
 +    relay.relayAwaitRnti = p.fromRnti;
 +    m_nrSlHarq->ForceHarqIdForRelay(relay.harqId, p.dstL2Id, relay.nSelected, p.pb, p.coop.tbSize);
@@ -1975,7 +2036,7 @@ index 57e4cf29..2005e8ff 100644
  std::vector<uint8_t>
  NrSlUeMac::ComputeGaps(const SfnSf& sfn,
                         std::set<SlGrantResource>::const_iterator it,
-@@ -1737,10 +2602,164 @@ NrSlUeMac::EnableSensing(bool enableSensing)
+@@ -1737,10 +2650,190 @@ NrSlUeMac::EnableSensing(bool enableSensing)
      m_enableSensing = enableSensing;
  }
  
@@ -2089,30 +2150,56 @@ index 57e4cf29..2005e8ff 100644
 +    if (m_enableChainedRes && harqInfo.m_bwpIndex == GetBwpId())
 +    {
 +        // Helper: the PSFCH of the TB's transmitter (and of the helper's own
-+        // relayed copies) is overheard; a NACK enables the next relay slot
-+        if (!harqInfo.IsReceivedOk())
++        // relayed copies) is overheard
++        auto itGrants = m_slGrants.find(harqInfo.m_dstL2Id);
++        if (itGrants != m_slGrants.end())
 +        {
-+            auto itGrants = m_slGrants.find(harqInfo.m_dstL2Id);
-+            if (itGrants != m_slGrants.end())
++            for (auto& grant : itGrants->second)
 +            {
-+                for (auto& grant : itGrants->second)
++                if (grant.relayNackGated && grant.relayedHarqId == harqInfo.m_harqProcessId &&
++                    grant.relayAwaitRnti == harqInfo.m_txRnti &&
++                    (grant.relayNackAfter == 0 ||
++                     m_currentSfn.Normalize() > grant.relayNackAfter))
 +                {
-+                    if (grant.relayNackGated && grant.relayedHarqId == harqInfo.m_harqProcessId &&
-+                        grant.relayAwaitRnti == harqInfo.m_txRnti &&
-+                        (grant.relayNackAfter == 0 ||
-+                         m_currentSfn.Normalize() > grant.relayNackAfter))
++                    if (grant.relayFbMode == 2)
++                    {
++                        if (harqInfo.IsReceivedOk())
++                        {
++                            grant.relayOverheardAcks.insert(harqInfo.m_rnti);
++                        }
++                        else
++                        {
++                            grant.relayNackSeen = true;
++                        }
++                    }
++                    else if (!harqInfo.IsReceivedOk())
 +                    {
 +                        grant.relayNackSeen = true;
 +                    }
 +                }
 +            }
-+            for (auto it = m_pendingOwnRelays.begin(); it != m_pendingOwnRelays.end(); ++it)
++        }
++        for (auto it = m_pendingOwnRelays.begin(); it != m_pendingOwnRelays.end(); ++it)
++        {
++            if (it->dstL2Id == harqInfo.m_dstL2Id && it->fromRnti == harqInfo.m_txRnti &&
++                it->harqId == harqInfo.m_harqProcessId &&
++                Simulator::Now().GetNanoSeconds() /
++                        m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds() >=
++                    static_cast<int64_t>(it->nackFrom))
 +            {
-+                if (it->dstL2Id == harqInfo.m_dstL2Id && it->fromRnti == harqInfo.m_txRnti &&
-+                    it->harqId == harqInfo.m_harqProcessId &&
-+                    Simulator::Now().GetNanoSeconds() /
-+                            m_nrSlUePhySapProvider->GetSlotPeriod().GetNanoSeconds() >=
-+                        static_cast<int64_t>(it->nackFrom))
++                const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
++                if (fbMode == 2)
++                {
++                    if (harqInfo.IsReceivedOk())
++                    {
++                        it->overheardAcks.insert(harqInfo.m_rnti);
++                    }
++                    else
++                    {
++                        it->nackSeen = true;
++                    }
++                }
++                else if (!harqInfo.IsReceivedOk())
 +                {
 +                    PendingOwnRelay p = *it;
 +                    m_pendingOwnRelays.erase(it);
@@ -2141,7 +2228,7 @@ index 57e4cf29..2005e8ff 100644
      {
          // This HARQ is for us.  If this is a HARQ ACK, check whether to cancel
 diff --git a/model/nr-sl-ue-mac.h b/model/nr-sl-ue-mac.h
-index 9562ebd0..8c513bd3 100644
+index 9562ebd0..f05a3971 100644
 --- a/model/nr-sl-ue-mac.h
 +++ b/model/nr-sl-ue-mac.h
 @@ -8,6 +8,7 @@
@@ -2160,7 +2247,7 @@ index 9562ebd0..8c513bd3 100644
  #include <unordered_set>
  
  // test classes outside of namespace ns3
-@@ -86,8 +88,50 @@ class NrSlUeMac : public NrUeMac
+@@ -86,8 +88,52 @@ class NrSlUeMac : public NrUeMac
          uint32_t tbSize{0}; //!< Size of Transport Block in bytes
          Time rri{0}; //!< The resource reservation interval for the semi-persistent scheduled grant
          SidelinkInfo::CastType castType{SidelinkInfo::CastType::Invalid}; //!< Cast type
@@ -2173,6 +2260,8 @@ index 9562ebd0..8c513bd3 100644
 +        uint8_t relayedHarqId{0};   //!< helper relay grant: HARQ id of the original TX
 +        bool relayNackGated{false}; //!< helper relay grant: send a slot only after a NACK
 +        bool relayNackSeen{false};  //!< helper relay grant: NACK heard for the last transmission
++        uint8_t relayFbMode{0};     //!< helper relay grant: 0=blind, 1=nack, 2=allAck
++        std::set<uint16_t> relayOverheardAcks; //!< Option 2: member RNTIs that sent ACK
 +        uint16_t relayAwaitRnti{0}; //!< helper relay grant: RNTI of the last transmission of the TB
 +        bool helperOwnRes{false};  //!< leader grant: the helper selects its own relay resources
 +        uint8_t relayTxMax{0};     //!< leader grant: relay budget of the helper (own resources)
@@ -2211,7 +2300,7 @@ index 9562ebd0..8c513bd3 100644
      /**
       * \brief Structure to pass parameters to trigger the selection of candidate
       * resources as per TR 38.214 Section 8.1.4
-@@ -127,6 +171,68 @@ class NrSlUeMac : public NrUeMac
+@@ -127,6 +173,68 @@ class NrSlUeMac : public NrUeMac
          int m_finalRsrpThreshold;                    //!< Final RSRP threshold used in algorithm
      };
  
@@ -2280,7 +2369,7 @@ index 9562ebd0..8c513bd3 100644
      // SCHED API primitive for NR Sidelink
      // From FAPI 2.0.0 Small Cell Forum originated LTE MAC scheduler API
  
-@@ -349,6 +455,84 @@ class NrSlUeMac : public NrUeMac
+@@ -349,6 +457,84 @@ class NrSlUeMac : public NrUeMac
       */
      bool SlotHasPsfch(const SfnSf& sfn) const;
  
@@ -2365,7 +2454,7 @@ index 9562ebd0..8c513bd3 100644
      /**
       * \brief Get the reservation period in slots
       *
-@@ -687,6 +871,80 @@ class NrSlUeMac : public NrUeMac
+@@ -687,6 +873,80 @@ class NrSlUeMac : public NrUeMac
          const std::list<SensingData>& sensingData,
          const std::list<SfnSf>& transmitHistory) const;
  
@@ -2446,7 +2535,7 @@ index 9562ebd0..8c513bd3 100644
      /**
       * \brief Check if subchannels ranges in two resources overlap
       * \param firstStart Starting subchannel index of first resource
-@@ -808,6 +1066,47 @@ class NrSlUeMac : public NrUeMac
+@@ -808,6 +1068,51 @@ class NrSlUeMac : public NrUeMac
      std::unordered_set<uint32_t>
          m_sidelinkRxDestinations; //!< vector holding Sidelink communication destinations for
                                    //!< reception
@@ -2456,6 +2545,8 @@ index 9562ebd0..8c513bd3 100644
 +                                       //!< the current period (and by dynamic grants)
 +    bool m_spsReselectOnMisfit{false}; //!< SPS: reselect when an RLC SDU does not fit
 +    bool m_helperNackTriggered{false}; //!< helper relays only after an overheard NACK
++    uint8_t m_helperFbMode{0};         //!< helper feedback mode: 0=blind, 1=nack, 2=allAck
++    uint32_t m_helperGroupSize{8};     //!< expected member ACK count for allAck (Option 2)
 +    std::map<std::pair<uint32_t, uint8_t>, Time>
 +        m_relayFbKeys; //!< (dstL2Id, HARQ id) of relayed copies awaiting PSFCH -> expiry
 +    TracedCallback<uint8_t, uint16_t, uint8_t, uint64_t> m_coopRelayTrace; //!< "CoopRelay"
@@ -2477,6 +2568,8 @@ index 9562ebd0..8c513bd3 100644
 +                               //!< transmission can arrive: an earlier NACK on the same
 +                               //!< HARQ id is for an earlier transmission (SPS keeps the
 +                               //!< HARQ id across reservation periods)
++        std::set<uint16_t> overheardAcks; //!< Option 2: member RNTIs that sent ACK
++        bool nackSeen{false};             //!< Option 2: NACK received
 +    };
 +    std::list<PendingOwnRelay> m_pendingOwnRelays; //!< helper: TBs awaiting a NACK
 +    int64_t m_absSlotOffset{0}; //!< slots since t = 0 minus the normalized SFN (last SL slot)
@@ -2494,7 +2587,7 @@ index 9562ebd0..8c513bd3 100644
      bool m_enableSensing{false};  //!< Flag to enable NR Sidelink resource selection based on
                                    //!< sensing; otherwise, use random selection
      uint8_t m_minTimeGapProcessing{
-@@ -870,6 +1169,15 @@ class NrSlUeMac : public NrUeMac
+@@ -870,6 +1175,15 @@ class NrSlUeMac : public NrUeMac
                     const std::list<SensingData>&,
                     const std::list<SfnSf>&>
          m_tracedSensingAlgorithm;

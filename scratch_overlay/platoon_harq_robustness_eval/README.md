@@ -1311,6 +1311,71 @@ subchannels; aperiodic1 dynamic, no retransmission; aperiodic-periodic collision
 aperiodic vehicles choosing the same fresh resource (nothing to sense) and periodic pairs
 beyond 600 m.
 
+## One-TB leader traffic classes (2026-10-14, for the PLAN.md campaign)
+
+**Why.** In the pool of the new campaign (μ 1, dedicated carrier, 5 × 10 PRB, MCS 14,
+PSFCH period 1) the largest TB is **1333 B**. This is 5G-LENA's `NrAmc::CalculateTbSize`
+with 9 PSSCH symbols, as `NrSlCoopScheduler` sizes a grant; 1, 2, 3 and 4 subchannels give
+264 / 531 / 798 / 1066 B.
+
+A leader packet adds 37 B on its way to the TB: UDP 8, IPv4 20, PDCP 2, the RLC UM header
+estimate 2, and SCI-2A 5. The app's `SeqTsSizeHeader` is inside the payload. So the largest
+single-TB payload is 1296 B. This overhead model reproduces every size → PRB mapping
+measured in `results/campaign`.
+
+aperiodic1 (200–2000 B) breaks this. Packets of 200–1200 B take 1 TB, but 1400–2000 B take
+**3 TBs** (50 + 10 + 10 or 50 + 20/30 + 10 PRB), which gives 1.8 TBs per packet in every
+aperiodic1 run, on both carriers and at N 0. Every TB must arrive, and each one has its own
+HARQ process, helper and reservation. The comparison of retransmission strategies would then
+measure segmentation.
+
+| `--traffic` | base | sizes (B) | arrivals | PDB |
+|---|---|---|---|---|
+| `periodic1tb` | periodic1 | 190 / 300 (unchanged, already 1 TB) | 100 ms | 100 ms |
+| `periodic2tb` | periodic2 | 800 (p 0.8) / 1200 (unchanged, already 1 TB) | 10 ms | 10 ms |
+| `aperiodic1tb` | aperiodic1 | **{200, 400, …, 1200} uniform** (aperiodic1: up to 2000) | 50 ms + Exp(50 ms), unchanged | 50 ms |
+
+Only the leader's flow changes; background aperiodic1 keeps sizes up to 2000 B. With the
+`*tb` classes unused every output file is byte-identical to before (pilots: highway
+aperiodic1 on the dedicated carrier, roundabout periodic1 `leaderRes` + map selection;
+20 s each). The run CSV gains the columns below.
+
+**Implementation.**
+- `CustomTrafficApplication` attribute `Aperiodic1MaxSize` (default 2000; must be 200 + k·200).
+  It changes only the upper bound of the same uniform draw, so the size stream and the
+  arrival times stay identical.
+- The program maps a `*tb` class to its base class (`BaseTraffic`) and sets the attribute on
+  the leader's application only.
+
+**Assertions** (the run aborts):
+- At start-up, the largest packet of a `*tb` class + 37 B must fit the pool's largest TB,
+  computed with the leader scheduler's own AMC. Example: `periodic2tb` at μ 2 (2 × 10 PRB,
+  531 B) aborts.
+- At the end of the run, no leader packet of a `*tb` class may be split over several TBs
+  when its first TB carried no earlier packet, i.e. when it did not fit on its own. Stock
+  SPS without `--spsReselectOnMisfit` makes `periodic1tb` abort (8 packets in 12 s).
+
+**Run CSV columns** (appended):
+
+| column | meaning |
+|---|---|
+| `tb_max_b` | largest TB of the pool |
+| `payload_max_b` | largest packet of the class |
+| `leader_pkt_multi_tb` | leader packets carried by more than one TB (whole run) |
+| `leader_pkt_multi_tb_unqueued` | the subset that did not fit on its own |
+
+**Pilots** (laptop, highway IVD 30 N 0, seed 1, 20 s, SB-SPS re-run flags + dedicated carrier):
+
+| class | TBs per packet | packets split | grant slots | group / worst PRR |
+|---|---|---|---|---|
+| `aperiodic1` | 1.76 | 67 | 3.00 | 0.743 / 0.275 |
+| `aperiodic1tb` | **1.000** | 0 | 3.00 | 0.929 / 0.677 |
+| `periodic2tb` | 1.000 | 0 | 3.00 | 0.895 / 0.489 |
+| `periodic1tb` (roundabout, `leaderRes` + map) | 1.000 | 0 | 3.00 | 0.984 / 0.952 |
+
+`aperiodic1tb` has the same packet arrival times as `aperiodic1`; only the sizes change.
+One seed: no verdict on the PRR.
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

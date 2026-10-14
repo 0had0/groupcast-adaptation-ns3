@@ -1978,8 +1978,10 @@ NrSlCoopScheduler::DoNrSlAllocation(
                   "Scheduler received an empty resource list from UE MAC");
 
     std::list<SlResourceInfo> selectedTxOpps;
-    // blind retransmission corresponds to HARQ enabled AND (PSFCH period == 0)
-    if (allocationInfo.m_harqEnabled && (GetMac()->GetPsfchPeriod() == 0))
+    // blind retransmission corresponds to HARQ disabled with maxNumTx > 1 OR (HARQ enabled AND PSFCH period == 0)
+    const bool isBlind = (!allocationInfo.m_harqEnabled && GetSlMaxTxTransNumPssch() > 1) ||
+                         (allocationInfo.m_harqEnabled && (GetMac()->GetPsfchPeriod() == 0));
+    if (isBlind)
     {
         // Select up to N_PSSCH_maxTx resources without regard MinTimeGapPsfch
         // i.e., for blind retransmissions

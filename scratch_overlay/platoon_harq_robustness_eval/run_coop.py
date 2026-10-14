@@ -108,8 +108,11 @@ SEEDS = list(range(1, 11))
 BIN = None
 HELPER = 4
 RLC_MS = 0.0
-PDB_MS = {"periodic1": 100.0, "periodic2": 10.0}  # the program's packet delay budgets
-LAT_STEP_MS = {"periodic1": 0.5, "periodic2": 0.1}  # grid of the reliability-latency curve
+# the program's packet delay budgets; *tb = the one-TB classes (same PDB as the base class)
+PDB_MS = {"periodic1": 100.0, "periodic2": 10.0, "aperiodic1": 50.0,
+          "periodic1tb": 100.0, "periodic2tb": 10.0, "aperiodic1tb": 50.0}
+LAT_STEP_MS = {"periodic1": 0.5, "periodic2": 0.1, "aperiodic1": 0.25,  # reliability-latency grid
+               "periodic1tb": 0.5, "periodic2tb": 0.1, "aperiodic1tb": 0.25}
 
 
 def tag_of(sc, ivd, tr, nbg, seed):
