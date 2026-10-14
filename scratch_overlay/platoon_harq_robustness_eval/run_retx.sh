@@ -14,7 +14,7 @@
 #   BG_CARS (default 60; set to 30 for cost-reduction knob)
 #   BIN (explicit binary path)
 
-set -uo pipefail
+set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$HERE"
 REPO=$(cd ../.. && pwd)
@@ -52,7 +52,7 @@ status() {
 step_build() {
   log "build: setup.sh --force + ns3 build ($(git -C "$REPO" rev-parse --short HEAD))"
   (cd "$REPO" && ./setup.sh --force) || return 1
-  (cd "$REPO/ns-3-dev" && ./ns3 build platoon_harq_robustness_eval) || return 1
+  (cd "$REPO/ns-3-dev" && ./ns3 build platoon_harq_robustness_eval test_helper_select) || return 1
   log "build: OK"
 }
 

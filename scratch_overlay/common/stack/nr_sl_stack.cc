@@ -293,8 +293,7 @@ BuildSlStack(const SlStackParams& p,
             if (tdm)
             {
                 const uint32_t numUes = ctx.ueNetDev.GetN();
-                uint32_t phaseLength = 1;
-                det->SetSlotPartition(numUes * phaseLength, i * phaseLength, phaseLength);
+                det->SetSlotPartition(numUes, i);
             }
             // Carry per-destination fixed-MCS overrides (split-MCS groupcast).
             for (const auto& kv : p.dstMcsOverride)

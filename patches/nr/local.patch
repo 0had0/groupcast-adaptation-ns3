@@ -636,7 +636,7 @@ index 1c987513..f681df6e 100644
  
  } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..5b81f9d0 100644
+index 57e4cf29..380093ba 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
 @@ -55,6 +55,68 @@ NrSlUeMac::GetTypeId()
@@ -1548,7 +1548,7 @@ index 57e4cf29..5b81f9d0 100644
 +                    sciF2a.SetDstId(currentSlot.dstL2Id);
 +                    // fields which are not used yet that is why we set them to 0
 +                    sciF2a.SetCsiReq(0);
-+                    SidelinkLcIdentifier slLcId;
++                    [[maybe_unused]] SidelinkLcIdentifier slLcId;
 +                    // If multiple TB and LC are handled by this grant, they should
 +                    // all share the same cast type, so it should suffice to fetch the
 +                    // cast type from the first LC ID associated with the grant
