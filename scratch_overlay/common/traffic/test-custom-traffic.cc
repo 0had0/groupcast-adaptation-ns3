@@ -26,7 +26,7 @@ int
 main(int argc, char* argv[])
 {
     bool verbose = true;
-    uint32_t testMode = 0; // 0=Periodic1, 1=Periodic2, 2=Periodic3, 3=Aperiodic1, 4=Aperiodic2
+    uint32_t testMode = 0; // 0=Periodic1, 1=Periodic2, 2=Periodic3, 3=Aperiodic1, 4=Aperiodic2, 5=Periodic4
     double simTime = 2.0;   // Simulation time in seconds
 
     CommandLine cmd(__FILE__);
@@ -41,7 +41,7 @@ main(int argc, char* argv[])
         LogComponentEnable("CustomTrafficTest", LOG_LEVEL_INFO);
     }
 
-    const char* modeNames[] = {"Periodic1", "Periodic2", "Periodic3", "Aperiodic1", "Aperiodic2"};
+    const char* modeNames[] = {"Periodic1", "Periodic2", "Periodic3", "Aperiodic1", "Aperiodic2", "Periodic4"};
     NS_LOG_UNCOND("Testing CustomTrafficApplication with mode: " << modeNames[testMode]);
 
     // Create nodes

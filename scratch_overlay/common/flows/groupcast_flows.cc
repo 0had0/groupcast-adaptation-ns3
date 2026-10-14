@@ -105,8 +105,10 @@ DefaultRriForTrafficClass(TrafficClass tc)
     switch (tc)
     {
         case TrafficClass::Periodic1:  return MilliSeconds(50);
-        case TrafficClass::Periodic2:  return MilliSeconds(10); // 5ms unsupported by pool-factory enum
+        case TrafficClass::Periodic2:  return MilliSeconds(20); // 5ms unsupported by pool-factory enum
         case TrafficClass::Periodic3:  return MilliSeconds(10);
+        case TrafficClass::Periodic4:  return MilliSeconds(20);
+        case TrafficClass::Periodic5:  return MilliSeconds(50);
         case TrafficClass::Aperiodic1: return MilliSeconds(0);
         case TrafficClass::Aperiodic2: return MilliSeconds(0);
         case TrafficClass::OnOffConstant:
@@ -298,6 +300,8 @@ ParseFlowsSpec(const std::string& spec)
                         {"periodic1",  TrafficClass::Periodic1},
                         {"periodic2",  TrafficClass::Periodic2},
                         {"periodic3",  TrafficClass::Periodic3},
+                        {"periodic4",  TrafficClass::Periodic4},
+                        {"periodic5",  TrafficClass::Periodic5},
                         {"aperiodic1", TrafficClass::Aperiodic1},
                         {"aperiodic2", TrafficClass::Aperiodic2},
                     };
@@ -305,8 +309,8 @@ ParseFlowsSpec(const std::string& spec)
                     if (it == kMap.end())
                     {
                         throw std::runtime_error(
-                            "traffic must be onoff|periodic1|periodic2|periodic3|"
-                            "aperiodic1|aperiodic2: " + val);
+                            "traffic must be onoff|periodic1|periodic2|periodic3|periodic4|"
+                            "periodic5|aperiodic1|aperiodic2: " + val);
                     }
                     fd.trafficClass = it->second;
                 }
@@ -727,6 +731,8 @@ InstallGroupcastFlows(const NodeContainer& nodes,
             case TrafficClass::Periodic1:  tcName = "periodic1";  break;
             case TrafficClass::Periodic2:  tcName = "periodic2";  break;
             case TrafficClass::Periodic3:  tcName = "periodic3";  break;
+            case TrafficClass::Periodic4:  tcName = "periodic4";  break;
+            case TrafficClass::Periodic5:  tcName = "periodic5";  break;
             case TrafficClass::Aperiodic1: tcName = "aperiodic1"; break;
             case TrafficClass::Aperiodic2: tcName = "aperiodic2"; break;
             default: break;

@@ -53,7 +53,9 @@ enum class TrafficClass : uint8_t
     Periodic2     = 2, // 10 ms, 800 B (0.8) or 1200 B (0.2)
     Periodic3     = 3, // 30 ms, uniform 30–60 kB, 10 kB step
     Aperiodic1    = 4, // 50 ms + Exp(50 ms), uniform 200–2000 B, 200 B step
-    Aperiodic2    = 5  // 10 ms + Exp(10 ms), uniform 10–30 kB, 4 kB step
+    Aperiodic2    = 5, // 10 ms + Exp(10 ms), uniform 10–30 kB, 4 kB step
+    Periodic4     = 6,
+    Periodic5     = 7
 };
 
 // HARQ feedback mode selector (additive — defaults preserve original behavior).

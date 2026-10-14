@@ -40,11 +40,13 @@ class CustomTrafficApplication : public Application
   public:
     enum TrafficMode
     {
-        PERIODIC_1,
-        PERIODIC_2,
-        PERIODIC_3,
-        APERIODIC_1,
-        APERIODIC_2
+        PERIODIC_1  = 0,
+        PERIODIC_2  = 1,
+        PERIODIC_3  = 2,
+        APERIODIC_1 = 3,
+        APERIODIC_2 = 4,
+        PERIODIC_4  = 5,
+        PERIODIC_5  = 6
     };
 
     /**
@@ -111,6 +113,7 @@ class CustomTrafficApplication : public Application
     uint32_t m_periodic1Index;
     uint32_t m_periodic1StartIndex;
     uint64_t m_maxBytes;
+    uint32_t m_aperiodic1MaxSize; //!< largest aperiodic1 packet (Aperiodic1MaxSize)
     uint64_t m_totBytes;
     EventId m_sendEvent;
     TypeId m_tid;

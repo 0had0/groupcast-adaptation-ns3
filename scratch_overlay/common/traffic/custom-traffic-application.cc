@@ -83,7 +83,11 @@ CustomTrafficApplication::GetTypeId()
                                           CustomTrafficApplication::APERIODIC_1,
                                           "Aperiodic1",
                                           CustomTrafficApplication::APERIODIC_2,
-                                          "Aperiodic2"))
+                                          "Aperiodic2",
+                                          CustomTrafficApplication::PERIODIC_4,
+                                          "Periodic4",
+                                          CustomTrafficApplication::PERIODIC_5,
+                                          "Periodic4"))
             .AddAttribute("Remote",
                           "The address of the destination",
                           AddressValue(),
@@ -111,6 +115,13 @@ CustomTrafficApplication::GetTypeId()
                           UintegerValue(0),
                           MakeUintegerAccessor(&CustomTrafficApplication::m_maxBytes),
                           MakeUintegerChecker<uint64_t>())
+            .AddAttribute("Aperiodic1MaxSize",
+                          "Largest aperiodic1 packet (B): sizes stay uniform on "
+                          "{200, 400, ..., max}. Default 2000 = the original aperiodic1; "
+                          "must be 200 + k * 200.",
+                          UintegerValue(2000),
+                          MakeUintegerAccessor(&CustomTrafficApplication::m_aperiodic1MaxSize),
+                          MakeUintegerChecker<uint32_t>(200, 2000))
             .AddAttribute("Protocol",
                           "The type of protocol to use.",
                           TypeIdValue(UdpSocketFactory::GetTypeId()),
@@ -150,6 +161,7 @@ CustomTrafficApplication::CustomTrafficApplication()
       m_periodic1Index(0),
       m_periodic1StartIndex(0),
       m_maxBytes(0),
+      m_aperiodic1MaxSize(2000),
       m_totBytes(0),
       m_seq(0)
 {
@@ -231,6 +243,10 @@ CustomTrafficApplication::StartApplication()
 
     m_periodic1StartIndex = DynamicCast<UniformRandomVariable>(m_uniformRng)->GetInteger(0, PERIODIC1_SIZE_COUNT - 1);
     m_periodic1Index = m_periodic1StartIndex;
+    NS_ABORT_MSG_IF((m_aperiodic1MaxSize - APERIODIC1_MIN_SIZE) % APERIODIC1_STEP != 0,
+                    "Aperiodic1MaxSize must be " << APERIODIC1_MIN_SIZE << " + k * "
+                                                 << APERIODIC1_STEP << ", got "
+                                                 << m_aperiodic1MaxSize);
 
     // Configure exponential RNG mean based on traffic mode
     Ptr<ExponentialRandomVariable> expRng = DynamicCast<ExponentialRandomVariable>(m_expRng);
@@ -395,6 +411,18 @@ CustomTrafficApplication::ScheduleNextTx()
                 }
                 break;
 
+            case CustomTrafficApplication::PERIODIC_4:
+                nextInterval = MilliSeconds(20);
+                if (DynamicCast<BernoulliRandomVariable>(m_bernoulliRng)->GetValue(PERIODIC2_PROB_LARGE) == 1.0)
+                {
+                    packetSize = PERIODIC2_SIZE_LARGE;
+                }
+                else
+                {
+                    packetSize = PERIODIC2_SIZE_SMALL;
+                }
+                break;
+
             case CustomTrafficApplication::PERIODIC_3:
                 nextInterval = MilliSeconds(30);
                 packetSize = QuantizeUniform(PERIODIC3_MIN, PERIODIC3_MAX, PERIODIC3_STEP);
@@ -405,7 +433,7 @@ CustomTrafficApplication::ScheduleNextTx()
                     // Mean already set in StartApplication()
                     Ptr<ExponentialRandomVariable> expRng = DynamicCast<ExponentialRandomVariable>(m_expRng);
                     nextInterval = MilliSeconds(APERIODIC1_BASE_INTERVAL) + MilliSeconds(static_cast<uint32_t>(expRng->GetValue()));
-                    packetSize = QuantizeUniform(APERIODIC1_MIN_SIZE, APERIODIC1_MAX_SIZE, APERIODIC1_STEP);
+                    packetSize = QuantizeUniform(APERIODIC1_MIN_SIZE, m_aperiodic1MaxSize, APERIODIC1_STEP);
                 }
                 break;
 
@@ -418,6 +446,11 @@ CustomTrafficApplication::ScheduleNextTx()
                 }
                 break;
 
+                        case CustomTrafficApplication::PERIODIC_5:
+                nextInterval = MilliSeconds(50);
+                packetSize = PERIODIC2_SIZE_LARGE;
+                break;
+                
             default:
                 NS_FATAL_ERROR("Invalid traffic mode");
                 return;
