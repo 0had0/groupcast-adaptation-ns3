@@ -492,9 +492,12 @@ NackOnlyHarqController::Decide(size_t idx)
             for (size_t k = 0; k < m_members.size(); ++k)
             {
                 uint32_t nid = m_members[k]->GetNode()->GetId();
-                if (nid == tx.helperNode && tx.nackedMembers.count(nid) == 0)
+                if (nid == tx.helperNode)
                 {
-                    continue; // the named helper's silence carries no information
+                    // the named helper never ACKs: its silence carries no information, and
+                    // recording only its NACKs would bias its estimated link downwards (the
+                    // selector would avoid a member because it was chosen). Skip it here.
+                    continue;
                 }
                 uint8_t kind = 2; // DTX default (silent failure)
                 if (tx.ackedMembers.count(nid) > 0)

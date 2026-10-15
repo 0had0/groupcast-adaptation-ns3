@@ -3829,7 +3829,7 @@ main(int argc, char* argv[])
               "helper_nack_no_slot,helper_sci_missed,helper_sci_missed_rate,"
               "helper_sci_missed_tb,helper_sci_missed_unserved,helper_ack_suppressed,"
               "helper_ack_rx,relay_after_allack,hstat_rule,hstat_tie_m,hstat_cand_max_fail,"
-              "kuo_objective\n";
+              "kuo_objective,pos_err_m\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4053,7 +4053,7 @@ main(int argc, char* argv[])
                << hSciMissedTbs.size() << ',' << hSciMissedUnserved << ','
                << *helperAckSuppressed << ',' << ctl.nHelperAck << ',' << relayAfterAllAck << ','
                << hstatRule << ',' << hstatTieM << ',' << hstatCandMaxFail << ',' << kuoObjective
-               << '\n';
+               << ',' << posErrM << '\n';
         }
     }
 

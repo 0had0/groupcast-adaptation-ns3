@@ -1535,9 +1535,28 @@ The run check verifies `hstat_rule` / `kuo_objective` against the arm's flags.
   - `reliableAhead` moves the H4 helper ahead (members 4–5 instead of 6–7);
   - maxmin = maxmean at N 0.
 
-**Stale runs:** `move_stale_runs.py results/retx_campaign [--apply] [--strict]` moves the
-runs these fixes and the R6 fix make stale. It decides from each run's own CSV (missing
-columns = older binary); nothing is deleted.
+**Follow-up (same day).**
+- **Helper statistics bias fixed.** The member named as helper for a TB is now left out of
+  the H4–H6 statistics of that TB. Before, its NACKs were recorded but its silent successes
+  were not, so its estimated leader link was biased downward.
+- **Position error for the geometric selectors.** `run_retx.py --posErrM` (default 1.5 m,
+  env `POS_ERR_M`) adds `--posErrM` to every H3 (`map`) and H6 (`harqMap`) arm. The run
+  CSV records it (`pos_err_m`) and the run check verifies it. H2 / H4 / H5 use exact CAM
+  positions.
+- **Runner options.** `--bg`, `--scenarios`, `--ivds` and `--traffics` restrict a stage's
+  cells. A run that exits without its run CSV counts as failed.
+
+**Laptop test of the H strategies:** `./run_local_h.sh` runs the stage-B arms with no
+background traffic and one seed (IVD 15 / 30, both scenarios, all three traffic classes:
+216 runs at the default 18 arms; JOBS = 2). It is resumable and writes
+`results/retx_local_h/summary_h.csv` (worst-member PRR, GPRR, tx/packet, helper changes per
+arm and scenario). Variants via `H4_RULES` / `KUO_OBJECTIVES`, as for the server.
+
+**Stale runs:** `move_stale_runs.py results/retx_campaign [--apply] [--posErrM 1.5]` moves
+the runs these fixes and the R6 fix make stale. It decides from each run's own CSV (missing
+columns = older binary): R6 before the R6 fix; H4–H6 before the statistics fix; H3 / H6
+without the position error; H2 on the highway before the P(LOS) fix. Nothing is deleted; each
+application moves to a new `pre_fix_<date-time>` folder.
 
 ## Running on another machine (e.g. a Linux server)
 

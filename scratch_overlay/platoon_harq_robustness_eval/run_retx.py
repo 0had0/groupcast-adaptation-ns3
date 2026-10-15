@@ -193,11 +193,17 @@ def check_run_csv(run_csv, expected_flags):
     if r.get("harq_mode") == "opt2" and int(float(r.get("helper_ack_rx", 0))) != 0:
         bad.append(f"helper_ack_rx={r.get('helper_ack_rx')}")
     # the selector options the run actually used must be the ones its arm asked for
-    want = {"--hstatRule=": ("hstat_rule", "nearest"), "--kuoObjective=": ("kuo_objective", "mean")}
+    want = {"--hstatRule=": ("hstat_rule", "nearest"), "--kuoObjective=": ("kuo_objective", "mean"),
+            "--posErrM=": ("pos_err_m", "0")}
     for prefix, (col, default) in want.items():
         val = next((f[len(prefix):] for f in expected_flags if f.startswith(prefix)), default)
-        if col in r and r[col] != val:
-            bad.append(f"{col}={r[col]} (want {val})")
+        if col in r:
+            try:
+                same = abs(float(r[col]) - float(val)) < 1e-9
+            except ValueError:
+                same = r[col] == val
+            if not same:
+                bad.append(f"{col}={r[col]} (want {val})")
     return bad
 
 # ---------------------------------------------------------------------------
@@ -227,6 +233,13 @@ def main():
                         help="stage B: nearestReliable max candidate failure rate")
     parser.add_argument("--kuoObjectives", default="mean",
                         help="stage B: Kuo objectives, comma list of mean | min (mean = the base arms)")
+    parser.add_argument("--posErrM", type=float, default=1.5,
+                        help="CAM position error std dev (m) of the geometric selectors H3 (map) "
+                             "and H6 (harqMap); added to every such arm")
+    parser.add_argument("--bg", default="", help="restrict background levels, e.g. 'none'")
+    parser.add_argument("--scenarios", default="", help="restrict scenarios, e.g. 'highway'")
+    parser.add_argument("--ivds", default="", help="restrict IVDs, e.g. '15,30'")
+    parser.add_argument("--traffics", default="", help="restrict leader traffic classes")
     parser.add_argument("--armFilter", default="",
                         help="regex: run only the arms whose name matches (all stages)")
     args = parser.parse_args()
@@ -280,6 +293,25 @@ def main():
         print("Unknown stage", file=sys.stderr)
         sys.exit(1)
 
+    # optional restriction of the stage's cells (local tests)
+    def _restrict(cur, opt, cast=str):
+        if not opt:
+            return cur
+        want = [cast(x) for x in opt.split(",") if x]
+        bad = [w for w in want if w not in cur]
+        if bad:
+            sys.exit(f"not in this stage: {bad} (stage has {cur})")
+        return [c for c in cur if c in want]
+    bg_list = _restrict(bg_list, args.bg)
+    scenarios = _restrict(scenarios, args.scenarios)
+    ivds = _restrict(ivds, args.ivds, int)
+    traffics = _restrict(traffics, args.traffics)
+
+    # the geometric selectors see positions with the CAM / GNSS error (README, PLAN.md)
+    for name, flags in arms.items():
+        if any(f in flags for f in ("--helperSelect=map", "--helperSelect=harqMap")) and \
+                not any(f.startswith("--posErrM=") for f in flags):
+            flags.append(f"--posErrM={args.posErrM:g}")
     if args.armFilter:
         import re
         arms = {k: v for k, v in arms.items() if re.search(args.armFilter, k)}
@@ -355,6 +387,9 @@ def main():
             rc_code = fut.result()
             if rc_code != 0:
                 print(f"FAILED run: {rcsv} (exit {rc_code})", file=sys.stderr)
+                failed += 1
+            elif not Path(rcsv).exists():
+                print(f"FAILED run: {rcsv} (exit 0 but no run CSV)", file=sys.stderr)
                 failed += 1
             else:
                 bad = check_run_csv(rcsv, arms[arm])
