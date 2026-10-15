@@ -4,6 +4,9 @@
 
 #include "ns3/log.h"
 #include "ns3/node.h"
+#include "ns3/lte-radio-bearer-tag.h"
+#include "ns3/nr-sl-sci-f2a-header.h"
+#include "ns3/nr-spectrum-phy.h"
 #include "ns3/nr-ue-phy.h"
 #include "ns3/simulator.h"
 
@@ -239,6 +242,19 @@ NackOnlyHarqController::OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id)
     {
         return;
     }
+    // the SCI-2A of this PSSCH travels as its own packet (no bearer tag, the header only):
+    // the helper it names for the transmitter's own TB (Option 2 with a helper)
+    LteRadioBearerTag bearer;
+    if (m_mode == HarqMode::OPT2 && !p->PeekPacketTag(bearer))
+    {
+        NrSlSciF2aHeader sci;
+        if (p->GetSize() > 0 && p->PeekHeader(sci) == p->GetSize())
+        {
+            m_pendingHelper[dev] =
+                sci.GetCoopInfo().relayedFromRnti == 0 ? sci.GetCoopInfo().helperId : 0;
+        }
+        return;
+    }
     ByteTagIterator it = p->GetByteTagIterator();
     while (it.HasNext())
     {
@@ -283,6 +299,20 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
     m_pendingSeqs[dev].clear();
     tx.node = m_devNode[dev];
     tx.rnti = p.rnti;
+    if (m_mode == HarqMode::OPT2)
+    {
+        // the helper this transmission's SCI-2A names (sent just before this trace)
+        tx.helperRnti = m_pendingHelper.count(dev) ? m_pendingHelper[dev] : 0;
+        m_pendingHelper.erase(dev);
+        for (const auto& m : m_members)
+        {
+            if (tx.helperRnti != 0 && m->GetMac(0)->GetObject<NrSlUeMac>()->GetRnti() == tx.helperRnti)
+            {
+                tx.helperNode = m->GetNode()->GetId();
+            }
+        }
+        nHelperNamedTx += tx.helperNode != 0 ? 1 : 0;
+    }
 
     const size_t idx = m_txs.size();
     // a helper's relayed copies all have ndi = 0: a copy carrying other packets
@@ -358,6 +388,29 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
         if (now - tx.tS > 0.1)
         {
             break; // older than any pending decision
+        }
+    }
+    if (best && m_mode == HarqMode::OPT2 && best->helperNode != 0 && nodeId == best->helperNode)
+    {
+        if (isAck)
+        {
+            ++nHelperAck; // must not happen: the named helper stays silent on success
+        }
+        else if (!best->helperNack)
+        {
+            // the helper did not get the TB: the leader retransmits in the next slot it
+            // had handed over (the helper listens to it and may relay after it)
+            best->helperNack = true;
+            ++nHelperNack;
+            if (m_macs[dev]->ReclaimSlHelperSlot(m_dst, best->harqId))
+            {
+                best->helperReclaim = true;
+                ++nHelperReclaim;
+            }
+            else
+            {
+                ++nHelperNackNoSlot;
+            }
         }
     }
     if (best)
@@ -437,6 +490,10 @@ NackOnlyHarqController::Decide(size_t idx)
             for (size_t k = 0; k < m_members.size(); ++k)
             {
                 uint32_t nid = m_members[k]->GetNode()->GetId();
+                if (nid == tx.helperNode && tx.nackedMembers.count(nid) == 0)
+                {
+                    continue; // the named helper's silence carries no information
+                }
                 uint8_t kind = 2; // DTX default (silent failure)
                 if (tx.ackedMembers.count(nid) > 0)
                 {
@@ -451,7 +508,16 @@ NackOnlyHarqController::Decide(size_t idx)
             }
         }
         // Option 2: success only if ALL members ACKed; DTX or any NACK counts as NACK
-        const bool allAck = (tx.ackedMembers.size() >= m_members.size() && tx.nNack == 0);
+        // (the named helper never ACKs: success = every other member ACKed and nobody,
+        // the helper included, NACKed)
+        size_t expected = m_members.size();
+        size_t acked = tx.ackedMembers.size();
+        if (tx.helperNode != 0)
+        {
+            expected -= 1;
+            acked -= tx.ackedMembers.count(tx.helperNode);
+        }
+        const bool allAck = (acked >= expected && tx.nNack == 0);
         if (allAck)
         {
             tx.decision = 1;
@@ -470,6 +536,82 @@ NackOnlyHarqController::Decide(size_t idx)
         }
         return;
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Option 2 with a helper: the named helper never ACKs (receiver side)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+class Option2HelperSilenceShim : public Object
+{
+  public:
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::Option2HelperSilenceShim").SetParent<Object>();
+        return tid;
+    }
+
+    void Setup(Ptr<NrUePhy> phy,
+               uint32_t nodeId,
+               std::shared_ptr<uint64_t> suppressed,
+               Callback<void, uint32_t, const SlHarqInfo&> observer)
+    {
+        m_phy = phy;
+        m_nodeId = nodeId;
+        m_suppressed = suppressed;
+        m_observer = observer;
+    }
+
+    void OnFeedback(const SlHarqInfo& info)
+    {
+        // info.m_rnti is this receiver; m_helperRnti the helper the TB's SCI-2A names
+        if (info.IsReceivedOk() && info.m_helperRnti != 0 && info.m_helperRnti == info.m_rnti)
+        {
+            ++*m_suppressed; // decoded as the named helper: stay silent, listen
+            return;
+        }
+        if (!m_observer.IsNull())
+        {
+            m_observer(m_nodeId, info);
+        }
+        m_phy->EnqueueSlHarqFeedback(info);
+    }
+
+  private:
+    Ptr<NrUePhy> m_phy;
+    uint32_t m_nodeId{0};
+    std::shared_ptr<uint64_t> m_suppressed;
+    Callback<void, uint32_t, const SlHarqInfo&> m_observer;
+};
+
+} // namespace
+
+std::shared_ptr<uint64_t>
+InstallOption2HelperSilence(const std::vector<Ptr<NrUeNetDevice>>& devs,
+                            Callback<void, uint32_t, const SlHarqInfo&> observer)
+{
+    auto suppressed = std::make_shared<uint64_t>(0);
+    for (const auto& dev : devs)
+    {
+        for (uint8_t bwp = 0; bwp < dev->GetCcMapSize(); ++bwp)
+        {
+            Ptr<NrUePhy> phy = dev->GetPhy(bwp);
+            if (!phy || !phy->GetSpectrumPhy())
+            {
+                continue;
+            }
+            Ptr<Option2HelperSilenceShim> shim = CreateObject<Option2HelperSilenceShim>();
+            shim->Setup(phy, dev->GetNode()->GetId(), suppressed, observer);
+            // the callback holds the Ptr: the shim lives as long as the binding
+            phy->GetSpectrumPhy()->SetPhySlHarqFeedbackCallback(
+                MakeCallback(&Option2HelperSilenceShim::OnFeedback, shim));
+        }
+    }
+    return suppressed;
 }
 
 } // namespace ns3

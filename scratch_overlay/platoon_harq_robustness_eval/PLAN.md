@@ -66,6 +66,13 @@ moderate, high}, MCS 14:
   - R4–R6: the leader reserves with SB-SPS and delegates the retransmission slots to a helper
     selected per TB. The helper relays blind (R4), on overheard Option-1 NACKs (R5), or on
     overheard Option-2 feedback (R6).
+  - R6 rule (implemented 2026-10-15, README "HARQ Option 2 with a per-TB helper"):
+    - the named helper never ACKs: when it decoded the TB it is silent and listens; it
+      relays unless all members − 1 others ACKed; when it did not decode it NACKs;
+    - the leader ignores the helper's silence and, on its NACK, takes back the next
+      handed-over slot and retransmits;
+    - success = all non-helper members ACKed and no NACK.
+    A helper that misses the SCI is silent too; this is measured (`helper_sci_missed*`).
 - **Helper selection (H)**:
   - H1 mid member (4)
   - H2 Kuo, distance-only
@@ -123,7 +130,7 @@ Evidence from this session that shapes the plan:
 | R2 Option 1 at the leader | exists | `nack_only_harq.*`, `common/mcd/mcr_nack_only_gate.*` |
 | R3 Option 2 at the leader | **new**: stock CTTC cancels on the *first* ACK; needs "all 8 ACK, a missing ACK (DTX) counts as a NACK" | extend `NackOnlyHarqController` with mode `opt2`; `sp.harqOption=2` path in `common/stack/nr_sl_stack.cc` (no NACK-only gate) |
 | R4 / R5 with S1 | exist (`leaderRes`, `--helperBlind`) | `nr_sl_coop_scheduler.cc:1690`, `contrib/nr` `NrSlUeMac` relay path (`nr-sl-ue-mac.cc:1395-1480`) |
-| R6 helper gated by Option-2 feedback | **new**: relay unless all members ACKed (matched by time, as for Option 1) | `NrSlUeMac` (`relayNackGated` → feedback-mode enum), patch in `patches/nr/local.patch` |
+| R6 helper gated by Option-2 feedback | **exists** (2026-10-15): `HelperFeedbackMode=2`, `HelperGroupSize` = members − 1; the named helper never ACKs (receiver shim `InstallOption2HelperSilence`); the leader reclaims a handed slot on the helper's NACK (`NrSlUeMac::ReclaimSlHelperSlot`); `SlHarqInfo::m_helperRnti` from SCI-2A | `NrSlUeMac`, `nack_only_harq.*`, patch in `patches/nr/local.patch` |
 | S3 helper dynamic own grant | exists for NACK (`ownRes`); **check / add blind and Option-2 triggers** | `nr-sl-ue-mac.cc:1312-1376` |
 | S2 helper own SB-SPS | **new**: a relay SPS reservation per flow, RRI = the flow's RRI, slots after the leader's first transmission + PSFCH gap, realigned when the leader reselects, released after `sl-ReselectAfter` unused periods | `NrSlCoopScheduler` (helper side) + `NrSlUeMac` |
 | One-TB leader classes `periodic1tb` / `periodic2tb` / `aperiodic1tb` | **exists** (2026-10-14): start-up TB-fit guard, end-of-run split check, run-CSV columns `tb_max_b`, `payload_max_b`, `leader_pkt_multi_tb`, `leader_pkt_multi_tb_unqueued` | program (`BaseTraffic`, `MaxLeaderPayload`), `CustomTrafficApplication::Aperiodic1MaxSize` |
@@ -190,7 +197,7 @@ base flags), or the end-of-run check aborts.
 |---|---|---|---|
 | none | 0 | — | 0 |
 | moderate | 60 | 1.67 | ≈ 0.30 |
-| high | 60 | 3.33 | ≈ 0.60, probably a little lower (overlapping reservations saturate) |
+| high | 60 | 3.33 | ≈ 0.60 by linear scaling — **but a 9 s laptop pilot measured 0.92** (highway IVD 30, periodic2tb leader, 223 background flows); see the note below |
 
 **Why this lever:**
 - It keeps the area: the simulator has no communication-range cut-off, so on the highway
@@ -199,6 +206,11 @@ base flags), or the end-of-run check aborts.
 - Runtime grows with the number of transmissions × receivers, i.e. about ×k, instead of
   ×k² for k times more cars.
 - Moderate and high differ only in the load, not in the interferer geometry.
+
+**k is not linear at high load (pilot 2026-10-15).** k = 3.33 overshot (CBR 0.92 instead
+of ≈ 0.6). Before stage A, the `calib` step must report the measured CBR for k ∈ {1.67, 2.0,
+2.5, 3.33} per scenario. Use the k closest to 0.3 / 0.6 and record the choice in the run
+CSV (`bg_flows_per_car`). This picks k; it is not a lever validation.
 
 **Cost knob** (not the default): `BG_CARS=30` with k doubled (3.33 / 6.67) halves the runtime
 at the same CBR, with fewer, busier interferers.
@@ -252,6 +264,11 @@ at the same CBR, with fewer, busier interferers.
 - `res_per_pkt_{used,reserved}`, `eff_member_pkts_per_res`, `platoon_cbr_share`
 - `helper_assigned`, `helper_decoded`, `helper_drop_rate`, `relay_needed`, `relay_sent`,
   `relay_ok`
+- Option 2 with a helper (exists): `helper_named_tx`, `helper_decoded_tx`, `helper_corrupt_tx`,
+  `helper_nack_sent`, `helper_nack_not_sent`, `helper_nack_lost`, `helper_nack`,
+  `helper_reclaim`, `helper_nack_no_slot`, `helper_sci_missed`, `helper_sci_missed_rate`,
+  `helper_sci_missed_tb`, `helper_sci_missed_unserved`, `helper_ack_suppressed`,
+  `helper_ack_rx` (= 0, asserted), `relay_after_allack` (README table)
 - per member: `prr`, `prr_pdb`, `late = prr − prr_pdb`, delay p50 / p95 / p99, losses by
   reason (the collision / channel / other split exists)
 - `sel_ops_mean`, `sel_cpu_us_mean`

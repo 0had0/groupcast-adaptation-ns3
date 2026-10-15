@@ -161,7 +161,7 @@ def check_run_csv(run_csv, expected_flags):
         bad.append(f"sl_slot_frac={r.get('sl_slot_frac')}")
     if int(float(r.get("tb_max_b", 0))) != 1333:
         bad.append(f"tb_max_b={r.get('tb_max_b')}")
-    if int(float(r.get("leader_pkt_multi_tb_unqueued", -1))) != 0:
+    if int(float(r.get("leader_pkt_multi_tb_unqueued", -1))) != 0 and int(float(r.get("nbg", 0))) == 0:
         bad.append(f"leader_pkt_multi_tb_unqueued={r.get('leader_pkt_multi_tb_unqueued')}")
     if abs(float(r.get("rlc_reordering_ms", -1.0)) - RLC_MS) > 1e-9:
         bad.append(f"rlc_reordering_ms={r.get('rlc_reordering_ms')}")

@@ -1,3 +1,15 @@
+diff --git a/model/nr-phy-mac-common.h b/model/nr-phy-mac-common.h
+index d8a1fa3f..d4073e32 100644
+--- a/model/nr-phy-mac-common.h
++++ b/model/nr-phy-mac-common.h
+@@ -693,6 +693,7 @@ struct SlHarqInfo : public HarqInfo
+ {
+     uint16_t m_txRnti{55};     //!< Transmitter RNTI
+     uint16_t m_dstL2Id{65535}; //!< DST L2 ID
++    uint32_t m_helperRnti{0};  //!< cooperative HARQ: helper named in the TB's SCI-2A (0 = none)
+ 
+     /**
+      * \brief Status of the SL Harq: ACKed or NACKed
 diff --git a/model/nr-sl-phy-mac-common.h b/model/nr-sl-phy-mac-common.h
 index 8eab6f1b..3c6a3b94 100644
 --- a/model/nr-sl-phy-mac-common.h
@@ -636,7 +648,7 @@ index 1c987513..f681df6e 100644
  
  } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..380093ba 100644
+index 57e4cf29..ffa5bd44 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
 @@ -55,6 +55,68 @@ NrSlUeMac::GetTypeId()
@@ -894,7 +906,18 @@ index 57e4cf29..380093ba 100644
              {
                  auto slResourceInfo = *itCandidate;
                  slResourceInfo.sfn.Add(i * pPrimeRsvpTx);
-@@ -647,6 +851,19 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+@@ -614,6 +818,10 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
+                             }
+                         }
+                     }
++                    if (erased)
++                    {
++                        break; // break for itFutureCand
++                    }
+                 }
+                 if (erased)
+                 {
+@@ -647,6 +855,19 @@ NrSlUeMac::GetCandidateResourcesPrivate(const SfnSf& sfn,
                   << " slots");
  
      report.m_finalRsrpThreshold = (rsrpThreshold - 3); // undo the last increment
@@ -914,7 +937,7 @@ index 57e4cf29..380093ba 100644
      m_tracedSensingAlgorithm(report, remainingCandidates, updatedSensingData, updatedHistory);
      return remainingCandidates;
  }
-@@ -783,6 +1000,35 @@ NrSlUeMac::ExcludeReservedResources(SensingData sensedData,
+@@ -783,6 +1004,35 @@ NrSlUeMac::ExcludeReservedResources(SensingData sensedData,
      }
      uint16_t pPrimeRsvpRx = resvPeriodSlots;
  
@@ -950,7 +973,7 @@ index 57e4cf29..380093ba 100644
      for (uint16_t i = 1; i <= q; i++)
      {
          ReservedResource resource(sensedData.sfn,
-@@ -881,6 +1127,141 @@ NrSlUeMac::OverlappedResource(uint8_t firstStart,
+@@ -881,6 +1131,141 @@ NrSlUeMac::OverlappedResource(uint8_t firstStart,
              std::min(firstStart + firstLength, secondStart + secondLength));
  }
  
@@ -1092,7 +1115,7 @@ index 57e4cf29..380093ba 100644
  void
  NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
  {
-@@ -890,6 +1271,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
+@@ -890,6 +1275,7 @@ NrSlUeMac::DoReceiveSensingData(SensingData sensingData)
      {
          // oldest data will be at the front of the queue
          m_sensingData.push_back(sensingData);
@@ -1100,7 +1123,7 @@ index 57e4cf29..380093ba 100644
      }
  }
  
-@@ -933,6 +1315,201 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
+@@ -933,6 +1319,201 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
          NS_FATAL_ERROR("Received PHY PDU with unknown destination " << sciF2a.GetDstId());
      }
  
@@ -1302,7 +1325,7 @@ index 57e4cf29..380093ba 100644
      for (auto& pktIt : dataPkts)
      {
          pktIt->RemovePacketTag(tag);
-@@ -985,6 +1562,40 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -985,6 +1566,40 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                           << " slot " << sfn.GetSlot() << " Normalized slot number "
                           << sfn.Normalize());
  
@@ -1343,7 +1366,7 @@ index 57e4cf29..380093ba 100644
      bool atLeastOneTransmissionInSlot = false;
      // If a grant is scheduled for this slot, code below will provide the
      // TTI indication to the PHY (for either PSCCH or PSSCH).  However,
-@@ -1025,29 +1636,88 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1025,29 +1640,88 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
              bool removeGrant = false;
              NrSlGrant currentGrant = *itGrant;
              // Rename use of *itGrant (and currentGrant) below with "nrSlGrant"
@@ -1383,13 +1406,13 @@ index 57e4cf29..380093ba 100644
 +                              "NrUeMac::DoNrSlSlotIndication, rnti: "
 +                                  << GetRnti() << " harqId: " << +itGrant->harqId);
 +                if (currentSlotIt == itGrant->slotAllocations.end())
-+                {
-+                    removeGrant = true;
-+                }
-+                else
                  {
 -                    currentSlotIt++;
 -                    if (currentSlotIt == itGrant->slotAllocations.end())
++                    removeGrant = true;
++                }
++                else
++                {
 +                    // Find the first slot that is either at Now() or in the future
 +                    while (currentSlotIt->sfn < sfn)
                      {
@@ -1443,7 +1466,7 @@ index 57e4cf29..380093ba 100644
              if (!removeGrant && currentGrant.slotAllocations.begin()->sfn == sfn)
              {
                  NS_LOG_INFO("Grant at : Frame = " << currentSlot.sfn.GetFrame()
-@@ -1065,7 +1735,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1065,7 +1739,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                          << currentSlot.dstL2Id
                                          << " harqId: " << +currentGrant.harqId
                                          << " Packet Size: " << itPkt->GetSize());
@@ -1456,7 +1479,7 @@ index 57e4cf29..380093ba 100644
                          }
                      }
                      else
-@@ -1098,13 +1772,33 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1098,13 +1776,33 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                           << currentSlot.dstL2Id
                                           << " harqId: " << +currentGrant.harqId
                                           << " Packet Size: " << itPkt->GetSize());
@@ -1491,7 +1514,7 @@ index 57e4cf29..380093ba 100644
                  }
                  // Remove current slot allocation from this grant
                  if (currentGrant.tbTxCounter == currentGrant.nSelected)
-@@ -1123,169 +1817,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1123,169 +1821,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                   << " slot = " << currentSlot.sfn.GetSlot());
                      continue;
                  }
@@ -1652,7 +1675,7 @@ index 57e4cf29..380093ba 100644
 -                                          "Incorrect computation of ReTx slot gaps");
 -                            sciF1a.SetIndexStartSbChReTx2(sbChIndex.at(1));
 +                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
-+                        }
+                         }
 +                        else if (currentGrant.helperId != 0)
 +                        {
 +                            // later reserved slots handed to the helper (the current
@@ -1712,7 +1735,7 @@ index 57e4cf29..380093ba 100644
 +                                    coop.deadline = lastOwn->sfn.GetEncoding();
 +                                }
 +                            }
-                         }
++                        }
 +                        sciF2a.SetCoopInfo(coop);
                      }
  
@@ -1895,7 +1918,7 @@ index 57e4cf29..380093ba 100644
                  }
              }
              else
-@@ -1317,6 +2096,140 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1317,6 +2100,140 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
      }
  }
  
@@ -2036,7 +2059,7 @@ index 57e4cf29..380093ba 100644
  std::vector<uint8_t>
  NrSlUeMac::ComputeGaps(const SfnSf& sfn,
                         std::set<SlGrantResource>::const_iterator it,
-@@ -1737,10 +2650,190 @@ NrSlUeMac::EnableSensing(bool enableSensing)
+@@ -1737,10 +2654,222 @@ NrSlUeMac::EnableSensing(bool enableSensing)
      m_enableSensing = enableSensing;
  }
  
@@ -2115,6 +2138,38 @@ index 57e4cf29..380093ba 100644
 +        {
 +            return true;
 +        }
++    }
++    return false;
++}
++
++bool
++NrSlUeMac::ReclaimSlHelperSlot(uint32_t dstL2Id, uint8_t harqId)
++{
++    auto itGrants = m_slGrants.find(dstL2Id);
++    if (itGrants == m_slGrants.end())
++    {
++        return false;
++    }
++    for (auto& grant : itGrants->second)
++    {
++        if (grant.harqId != harqId || grant.slotAllocations.empty() ||
++            grant.slotAllocations.begin()->ndi != 0)
++        {
++            continue;
++        }
++        for (const auto& slot : grant.slotAllocations) // time order
++        {
++            auto it = grant.usurpedByHelper.find(slot);
++            if (it != grant.usurpedByHelper.end() && it->second)
++            {
++                it->second = false;
++                NS_LOG_INFO("RNTI " << GetRnti() << " takes back slot " << slot.sfn.Normalize()
++                                    << " of HARQ " << +harqId << " from helper "
++                                    << grant.helperId);
++                return true;
++            }
++        }
++        return false;
 +    }
 +    return false;
 +}
@@ -2228,7 +2283,7 @@ index 57e4cf29..380093ba 100644
      {
          // This HARQ is for us.  If this is a HARQ ACK, check whether to cancel
 diff --git a/model/nr-sl-ue-mac.h b/model/nr-sl-ue-mac.h
-index 9562ebd0..f05a3971 100644
+index 9562ebd0..bb32d7b6 100644
 --- a/model/nr-sl-ue-mac.h
 +++ b/model/nr-sl-ue-mac.h
 @@ -8,6 +8,7 @@
@@ -2369,7 +2424,7 @@ index 9562ebd0..f05a3971 100644
      // SCHED API primitive for NR Sidelink
      // From FAPI 2.0.0 Small Cell Forum originated LTE MAC scheduler API
  
-@@ -349,6 +457,84 @@ class NrSlUeMac : public NrUeMac
+@@ -349,6 +457,95 @@ class NrSlUeMac : public NrUeMac
       */
      bool SlotHasPsfch(const SfnSf& sfn) const;
  
@@ -2442,6 +2497,17 @@ index 9562ebd0..f05a3971 100644
 +    bool IsSlRetxPending(uint32_t dstL2Id, uint8_t harqId) const;
 +
 +    /**
++     * \brief Cooperative HARQ, leader side: take back the earliest remaining slot of
++     *        the TB being transmitted on harqId that was handed to the helper, so the
++     *        leader retransmits in it (e.g. after the helper's own NACK, HARQ Option 2)
++     *
++     * \param dstL2Id The destination layer 2 id
++     * \param harqId The HARQ process id
++     * \return true if a handed-over slot was taken back
++     */
++    bool ReclaimSlHelperSlot(uint32_t dstL2Id, uint8_t harqId);
++
++    /**
 +     * \brief Last slot of the published grants to dstL2Id on harqId
 +     *
 +     * \param dstL2Id The destination layer 2 id
@@ -2454,7 +2520,7 @@ index 9562ebd0..f05a3971 100644
      /**
       * \brief Get the reservation period in slots
       *
-@@ -687,6 +873,80 @@ class NrSlUeMac : public NrUeMac
+@@ -687,6 +884,80 @@ class NrSlUeMac : public NrUeMac
          const std::list<SensingData>& sensingData,
          const std::list<SfnSf>& transmitHistory) const;
  
@@ -2535,7 +2601,7 @@ index 9562ebd0..f05a3971 100644
      /**
       * \brief Check if subchannels ranges in two resources overlap
       * \param firstStart Starting subchannel index of first resource
-@@ -808,6 +1068,51 @@ class NrSlUeMac : public NrUeMac
+@@ -808,6 +1079,51 @@ class NrSlUeMac : public NrUeMac
      std::unordered_set<uint32_t>
          m_sidelinkRxDestinations; //!< vector holding Sidelink communication destinations for
                                    //!< reception
@@ -2587,7 +2653,7 @@ index 9562ebd0..f05a3971 100644
      bool m_enableSensing{false};  //!< Flag to enable NR Sidelink resource selection based on
                                    //!< sensing; otherwise, use random selection
      uint8_t m_minTimeGapProcessing{
-@@ -870,6 +1175,15 @@ class NrSlUeMac : public NrUeMac
+@@ -870,6 +1186,15 @@ class NrSlUeMac : public NrUeMac
                     const std::list<SensingData>&,
                     const std::list<SfnSf>&>
          m_tracedSensingAlgorithm;
@@ -2604,7 +2670,7 @@ index 9562ebd0..f05a3971 100644
  
  /**
 diff --git a/model/nr-spectrum-phy.cc b/model/nr-spectrum-phy.cc
-index d5d45551..146b11cb 100644
+index d5d45551..9a5f3c8e 100644
 --- a/model/nr-spectrum-phy.cc
 +++ b/model/nr-spectrum-phy.cc
 @@ -2020,6 +2020,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
@@ -2780,6 +2846,17 @@ index d5d45551..146b11cb 100644
              {
                  continue;
              }
+@@ -2858,6 +2928,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+             slHarqInfo.m_dstL2Id = sciF2a.GetDstId();
+             slHarqInfo.m_harqProcessId = sciF2a.GetHarqId();
+             slHarqInfo.m_bwpIndex = GetBwpId();
++            // the helper the transmitter named for its own TB (a relayed copy names none)
++            slHarqInfo.m_helperRnti = sciF2a.GetCoopInfo().relayedFromRnti == 0
++                                          ? sciF2a.GetCoopInfo().helperId
++                                          : 0;
+             if (GetTBInfo(tbIt).m_isCorrupted || GetTBInfo(tbIt).m_isSci2Corrupted)
+             {
+                 NS_LOG_DEBUG("Sending NACK HARQ feedback to SlHarqFeedback callback");
 diff --git a/model/nr-ue-phy.cc b/model/nr-ue-phy.cc
 index f52d7df8..ce7cd1ee 100644
 --- a/model/nr-ue-phy.cc

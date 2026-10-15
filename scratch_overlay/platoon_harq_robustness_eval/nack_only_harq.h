@@ -99,6 +99,12 @@ struct LeaderTx
     double decideAtS{0.0};        //!< time of the decision (its PSFCH occasion + 1 slot + 13.5 sym)
     uint32_t node{0};             //!< transmitting node (index in the node container)
     uint16_t rnti{0};             //!< transmitting UE's RNTI
+    // Option 2 with a helper (PLAN.md R6): the helper named in this TB's SCI-2A never
+    // ACKs; the leader ignores its silence and reacts only to its NACK
+    uint32_t helperRnti{0};       //!< helper named for this TB (0 = none)
+    uint32_t helperNode{0};       //!< its node index (0 = none)
+    bool helperNack{false};       //!< the named helper NACKed this transmission
+    bool helperReclaim{false};    //!< ... and the leader took back the next handed slot
 };
 
 class NackOnlyHarqController
@@ -154,6 +160,12 @@ class NackOnlyHarqController
     uint64_t nStale{0};           //!< decisions skipped (HARQ id already reused)
     uint64_t nSlotMisaligned{0};  //!< MAC trace not at a slot boundary (sanity)
     uint64_t nAckNoRetxLeft{0};   //!< SPS: implicit ACK not delivered, no reserved retx left
+    // Option 2 with a helper named per TB (leader transmissions carrying a helper)
+    uint64_t nHelperNamedTx{0};   //!< leader transmissions with a named helper
+    uint64_t nHelperNack{0};      //!< NACKs of the named helper
+    uint64_t nHelperReclaim{0};   //!< ... after which a handed-over slot was taken back
+    uint64_t nHelperNackNoSlot{0};//!< ... with no handed-over slot left to take back
+    uint64_t nHelperAck{0};       //!< ACKs of the named helper (must be 0: it stays silent)
 
     HarqMode GetMode() const { return m_mode; }
     typedef Callback<void, double, uint32_t, uint32_t, uint8_t> FeedbackCallback;
@@ -201,6 +213,20 @@ class NackOnlyHarqController
     std::vector<LeaderTx> m_txs;
     std::map<uint8_t, uint32_t> m_curGen;      //!< harqId -> current TB generation
     std::map<uint8_t, size_t> m_lastTxOfHarq;  //!< harqId -> index of its last transmission
+    std::map<size_t, uint32_t> m_pendingHelper; //!< dev -> helper in the SCI-2A just sent
 };
+
+/**
+ * HARQ Option 2 with a helper named per TB (PLAN.md R6), receiver side: a member that
+ * decoded a TB whose SCI-2A names it as the helper does not send its ACK (it listens to
+ * the other members' PSFCH instead, half-duplex); its NACK is sent as usual. Re-binds the
+ * PHY HARQ-feedback callback of every device (Option 2 installs no other gate).
+ * @param devs      the UE devices (members)
+ * @param observer  called with (node id, feedback) for every feedback actually sent
+ * @return counter of suppressed helper ACKs (shared, read at the end of the run)
+ */
+std::shared_ptr<uint64_t> InstallOption2HelperSilence(
+    const std::vector<Ptr<NrUeNetDevice>>& devs,
+    Callback<void, uint32_t, const SlHarqInfo&> observer);
 
 } // namespace ns3

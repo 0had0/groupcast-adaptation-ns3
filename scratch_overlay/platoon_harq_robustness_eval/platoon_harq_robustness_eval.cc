@@ -186,6 +186,7 @@ struct MemberRx
 {
     int8_t status{0};        //!< 0 = no PSSCH decode attempt (SCI missed), 1 ok, 2 corrupt
     float sinrDb{-99.0f};
+    bool sci2Bad{false};     //!< corrupt because SCI-2A failed: no HARQ feedback possible
 };
 
 /// Transmissions of the platoon's TBs by one node (leader, or the helper's
@@ -359,6 +360,7 @@ struct Global
     int mcsRxMax{-1};
     // NACKs the members sent (ground truth for the relay check)
     std::vector<NackSent> nackSent;
+    std::vector<NackSent> ackSent; // Option 2: ACKs the members sent (same record)
     // SCI-1A sent by every node, time order: [node]
     std::vector<std::vector<SciTx>> sciTx;
     // raw slot (SfnSf::Normalize()) -> slotAbs = round(t / tSlot) offset, from the
@@ -662,6 +664,18 @@ OnNackSent(uint32_t nodeId, const SlHarqInfo& info)
     }
 }
 
+/// Option 2 (InstallOption2HelperSilence): every ACK / NACK a member sends
+void
+OnFeedbackSent(uint32_t nodeId, const SlHarqInfo& info)
+{
+    if (nodeId >= 1 && nodeId <= g.numMembers)
+    {
+        (info.IsReceivedOk() ? g.ackSent : g.nackSent)
+            .push_back({Simulator::Now().GetSeconds(), nodeId, info.m_txRnti,
+                        info.m_harqProcessId});
+    }
+}
+
 inline int64_t
 RawSlot(uint32_t frame, uint32_t subframe, uint32_t slot)
 {
@@ -939,6 +953,7 @@ OnMemberPsschRx(uint32_t member, SlRxDataPacketTraceParams p)
     g.mcsRxMax = std::max(g.mcsRxMax, static_cast<int>(p.m_mcs));
     MemberRx& r = S.phy[best][member - 1];
     r.status = p.m_corrupt ? 2 : 1;
+    r.sci2Bad = p.m_sci2Corrupted;
     r.sinrDb = (p.m_sinr > 0.0) ? static_cast<float>(10.0 * std::log10(p.m_sinr)) : -99.0f;
 }
 
@@ -1951,6 +1966,13 @@ main(int argc, char* argv[])
     {
         memberDevs.push_back(nodes.Get(m)->GetDevice(0)->GetObject<NrUeNetDevice>());
     }
+    // Option 2 at the receivers: stock ACK / NACK, except that a member named as the TB's
+    // helper never ACKs (it listens; PLAN.md R6). Pass-through when no helper is named.
+    std::shared_ptr<uint64_t> helperAckSuppressed = std::make_shared<uint64_t>(0);
+    if (harqMode == "opt2")
+    {
+        helperAckSuppressed = InstallOption2HelperSilence(memberDevs, MakeCallback(&OnFeedbackSent));
+    }
     NackOnlyHarqController ctl;
     NackOnlyHarqController::HarqMode hMode = NackOnlyHarqController::HarqMode::OPT1;
     if (harqMode == "blind") hMode = NackOnlyHarqController::HarqMode::BLIND;
@@ -1973,7 +1995,9 @@ main(int argc, char* argv[])
         auto dev = nodes.Get(i)->GetDevice(0)->GetObject<NrUeNetDevice>();
         auto mac = dev->GetMac(0)->GetObject<NrSlUeMac>();
         mac->SetAttribute("HelperFeedbackMode", UintegerValue(helperFbMode));
-        mac->SetAttribute("HelperGroupSize", UintegerValue(numMembers));
+        // ACKs the helper can overhear: every member but itself (it never hears its own
+        // PSFCH, and under Option 2 it does not send an ACK as the named helper)
+        mac->SetAttribute("HelperGroupSize", UintegerValue(numMembers - 1));
     }
     g.leaderMac = leaderDev->GetMac(0)->GetObject<NrSlUeMac>();
     g.side[0].ctl = &ctl;
@@ -2365,6 +2389,8 @@ main(int argc, char* argv[])
     //    transmission of its transmitter (leader, or the helper for its own
     //    copies) with that HARQ id received just before it is enqueued
     std::vector<uint16_t> nNackSent(utx.size(), 0);
+    std::vector<uint16_t> nAckSent(utx.size(), 0); // Option 2: ACKs the members sent
+    std::vector<std::set<uint32_t>> nackersOf(utx.size()); // members whose NACK it got
     {
         // a helper copy carries the leader's HARQ id in its SCI-2A (the members combine
         // it in the leader's process), so the NACKs on it carry that id, not the
@@ -2379,7 +2405,9 @@ main(int argc, char* argv[])
             }
             txOfHarq[{utx[u].side, h}].push_back(u); // utx is in time order
         }
-        for (const NackSent& k : g.nackSent)
+        auto attribute = [&](const std::vector<NackSent>& recs, std::vector<uint16_t>& cnt,
+                             std::vector<std::set<uint32_t>>* who) {
+        for (const NackSent& k : recs)
         {
             int side = -1;
             for (int s = 0; s < g.numSides; ++s)
@@ -2409,12 +2437,19 @@ main(int argc, char* argv[])
                 {
                     if (dt < 0.005)
                     {
-                        ++nNackSent[*rit];
+                        ++cnt[*rit];
+                        if (who)
+                        {
+                            (*who)[*rit].insert(k.member);
+                        }
                     }
                     break;
                 }
             }
         }
+        };
+        attribute(g.nackSent, nNackSent, &nackersOf);
+        attribute(g.ackSent, nAckSent, nullptr);
     }
 
     // -- why did a collided attempt collide although we sense? For attempt u
@@ -2703,10 +2738,81 @@ main(int argc, char* argv[])
             pktMultiTbUnqueued += queued ? 0 : 1;
         }
     }
-    NS_ABORT_MSG_IF(IsOneTbTraffic(traffic) && pktMultiTbUnqueued > 0,
+    NS_ABORT_MSG_IF(IsOneTbTraffic(traffic) && pktMultiTbUnqueued > 0 && numBg == 0,
                     "--traffic=" << traffic << ": " << pktMultiTbUnqueued
-                                 << " leader packets did not fit their own TB (one-TB class; "
+                                 << " leader packets did not fit their own TB at N=0 (one-TB class; "
                                     "SPS needs --spsReselectOnMisfit=true)");
+
+    // Option 2 with a helper named per TB (PLAN.md R6): what the named helper did with each
+    // leader transmission (KPI window). It never ACKs; it NACKs when the TB was corrupt; it
+    // is silent when it decoded the TB -- or when it missed the SCI (no PSSCH decode at all):
+    // then the leader takes the silence for "helper has it" and nobody retransmits for it.
+    uint64_t hNamedTx = 0, hDecodedTx = 0, hCorruptTx = 0, hSciMissed = 0;
+    uint64_t hNackWin = 0, hReclaimWin = 0, hNackSentWin = 0, hNackLost = 0, hCorruptSci2 = 0;
+    uint64_t hSciMissedUnserved = 0;
+    std::set<int64_t> hSciMissedTbs;
+    for (size_t i = 0; i < ltx.size(); ++i)
+    {
+        const LeaderTx& x = ltx[i];
+        if (x.helperNode == 0 || x.helperNode > numMembers || i >= g.side[0].phy.size())
+        {
+            continue;
+        }
+        const int8_t st = g.side[0].phy[i][x.helperNode - 1].status;
+        if (x.tS < kpiStart || x.tS >= kpiEnd)
+        {
+            continue;
+        }
+        const size_t u = uOf[0][i];
+        // the helper's NACK on this transmission: sent by its PHY? credited by the leader?
+        const bool nackSent = u < nackersOf.size() && nackersOf[u].count(x.helperNode) > 0;
+        ++hNamedTx;
+        hDecodedTx += st == 1 ? 1 : 0;
+        hCorruptTx += st == 2 ? 1 : 0;
+        // SCI-2A not decoded: the helper cannot know the TB's HARQ process, destination or
+        // feedback indicator, so it sends no PSFCH (TS 38.213 sec. 16.3; 5G-LENA skips it)
+        hCorruptSci2 += (st == 2 && g.side[0].phy[i][x.helperNode - 1].sci2Bad) ? 1 : 0;
+        hNackSentWin += nackSent ? 1 : 0;
+        hNackLost += (nackSent && !x.helperNack) ? 1 : 0;
+        hNackWin += x.helperNack ? 1 : 0;
+        hReclaimWin += x.helperReclaim ? 1 : 0;
+        if (st == 0)
+        {
+            ++hSciMissed;
+            hSciMissedTbs.insert(static_cast<int64_t>(x.gen));
+            // unserved: no later copy of the TB (leader or helper) and some member still
+            // without it -- the silence cost a retransmission somebody needed
+            bool later = false;
+            std::vector<bool> got(numMembers, false);
+            for (size_t v = 0; v < utx.size(); ++v)
+            {
+                if (utx[v].tb != static_cast<int64_t>(x.gen))
+                {
+                    continue;
+                }
+                later = later || utx[v].x->tS > x.tS + 1e-9;
+                const TxSide& S = g.side[utx[v].side];
+                if (utx[v].idx < S.phy.size() && utx[v].x->tS <= x.tS + 1e-9)
+                {
+                    for (uint32_t m = 0; m < numMembers; ++m)
+                    {
+                        got[m] = got[m] || S.phy[utx[v].idx][m].status == 1;
+                    }
+                }
+            }
+            const bool someoneMissing =
+                std::any_of(got.begin(), got.end(), [](bool b) { return !b; });
+            hSciMissedUnserved += (!later && someoneMissing) ? 1 : 0;
+        }
+    }
+    if (harqMode == "opt2")
+    {
+        NS_ABORT_MSG_IF(ctl.nHelperAck > 0,
+                        "assertion failed: the named helper ACKed "
+                            << ctl.nHelperAck << " transmissions (it must stay silent)");
+        NS_ABORT_MSG_IF(ctl.nHelperNamedTx > 0 && hDecodedTx > 0 && *helperAckSuppressed == 0,
+                        "assertion failed: the named helper decoded TBs but no ACK was suppressed");
+    }
 
     struct MemberAgg
     {
@@ -3401,6 +3507,7 @@ main(int argc, char* argv[])
     //    takes the TB as delivered)
     uint64_t lTx = 0, lTxColl = 0, lNew = 0, lRetx = 0, hTx = 0, hTxColl = 0;
     uint64_t relayNoNack = 0, relayNoRxNack = 0, relayNoDecode = 0;
+    uint64_t relayAfterAllAck = 0; // Option 2: relays although every other member had ACKed
     // per-TB helper: copies by a member other than the TB's chosen helper (must be 0),
     // and the delay of a TB's first copy after the leader's initial transmission
     uint64_t relayByUnchosen = 0;
@@ -3495,6 +3602,11 @@ main(int argc, char* argv[])
         if (prev == SIZE_MAX || nNackSent[prev] == 0)
         {
             ++relayNoNack;
+        }
+        if (harqMode == "opt2" && prev != SIZE_MAX && nNackSent[prev] == 0 &&
+            nAckSent[prev] + 1 >= numMembers)
+        {
+            ++relayAfterAllAck; // the members other than the helper had all ACKed
         }
         if (prev == SIZE_MAX || utx[prev].x->nNack == 0)
         {
@@ -3692,7 +3804,12 @@ main(int argc, char* argv[])
               "res_unused_no_trigger,res_unused_no_data,res_unused_helper_not_decoded,"
               "res_unused_reselected,res_per_pkt_used,res_per_pkt_reserved,"
               "eff_member_pkts_per_res,platoon_cbr_share,helper_assigned,helper_decoded,"
-              "helper_drop_rate,relay_needed,relay_sent,relay_ok,sel_ops_mean,sel_cpu_us_mean\n";
+              "helper_drop_rate,relay_needed,relay_sent,relay_ok,sel_ops_mean,sel_cpu_us_mean,"
+              "helper_named_tx,helper_decoded_tx,helper_corrupt_tx,helper_nack_sent,"
+              "helper_nack_not_sent,helper_corrupt_sci2,helper_nack_lost,helper_nack,helper_reclaim,"
+              "helper_nack_no_slot,helper_sci_missed,helper_sci_missed_rate,"
+              "helper_sci_missed_tb,helper_sci_missed_unserved,helper_ack_suppressed,"
+              "helper_ack_rx,relay_after_allack\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -3907,7 +4024,14 @@ main(int argc, char* argv[])
                << resPerPktUsed << ',' << resPerPktReserved << ',' << effMemberPktsPerRes
                << ',' << platoonCbrShare << ',' << helperAssigned << ',' << helperDecoded << ','
                << helperDropRate << ',' << relayNeeded << ',' << relaySent << ',' << relayOk
-               << ',' << selOpsMean << ',' << selCpuUsMean << '\n';
+               << ',' << selOpsMean << ',' << selCpuUsMean << ',' << hNamedTx << ','
+               << hDecodedTx << ',' << hCorruptTx << ',' << hNackSentWin << ','
+               << static_cast<int64_t>(hCorruptTx) - static_cast<int64_t>(hNackSentWin) << ','
+               << hCorruptSci2 << ',' << hNackLost << ',' << hNackWin << ',' << hReclaimWin << ','
+               << hNackWin - hReclaimWin << ',' << hSciMissed << ','
+               << (hNamedTx ? static_cast<double>(hSciMissed) / hNamedTx : 0.0) << ','
+               << hSciMissedTbs.size() << ',' << hSciMissedUnserved << ','
+               << *helperAckSuppressed << ',' << ctl.nHelperAck << ',' << relayAfterAllAck << '\n';
         }
     }
 

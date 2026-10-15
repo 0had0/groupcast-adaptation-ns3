@@ -1376,6 +1376,102 @@ aperiodic1 on the dedicated carrier, roundabout periodic1 `leaderRes` + map sele
 `aperiodic1tb` has the same packet arrival times as `aperiodic1`; only the sizes change.
 One seed: no verdict on the PRR.
 
+## HARQ Option 2 with a per-TB helper (R6): the helper never ACKs (2026-10-15)
+
+**Problem found.** With Option 2 every member that decoded a TB sends its ACK in the same
+PSFCH occasion, the named helper included. 5G-LENA is half-duplex for PSFCH
+(`nr-spectrum-phy.cc`: an incoming PSFCH is ignored while the UE transmits), as is a real UE.
+So the helper did not hear the other members.
+
+Pilot (roundabout IVD 30 N 0, periodic1tb, dedicated carrier, helper 4, 20 s, seed 1):
+- In 8 s the helper ignored 405 PSFCH and received 35.
+- It also waited for 8 ACKs, its own included, which it can never hear.
+- Result: R6 cancelled **0** relays, i.e. it was blind relaying (2.98 tx/packet, like R4).
+
+**Rule (user's design).**
+- **The leader** names the TB's helper in SCI-2A (as before).
+- **The non-helper members** answer ACK / NACK (Option 2).
+- **The named helper never ACKs.**
+  - It decoded the TB: it stays silent, listens to the other members' PSFCH, and relays in
+    its handed-over slot unless all `members − 1` others ACKed.
+  - It did not decode: it NACKs.
+- **The leader ignores the helper's silence** and reacts only to its NACK. It then takes back
+  the next handed-over slot and retransmits itself. The helper listens to that
+  retransmission and, once it has the TB, relays after it.
+- **Success** for the leader = every member but the helper ACKed and nobody NACKed.
+
+**Implementation.**
+- **NR patch** (`patches/nr/local.patch`):
+  - `SlHarqInfo::m_helperRnti` carries the helper named in the TB's SCI-2A to the receiver's
+    feedback (`nr-spectrum-phy.cc`; 0 for a relayed copy).
+  - `NrSlUeMac::ReclaimSlHelperSlot(dst, harqId)` turns the earliest remaining handed-over
+    slot of the current TB back into a leader slot.
+- **Receivers** (`InstallOption2HelperSilence`, `nack_only_harq.cc`): for Option 2 a shim on
+  the PHY feedback callback drops the ACK of a member whose RNTI is the TB's `m_helperRnti`.
+  Everything else passes, so it is a pass-through for R3. It also records every ACK / NACK
+  sent.
+- **Leader** (`NackOnlyHarqController`, Option 2):
+  - The helper of each transmission is read from the SCI-2A the leader sends.
+  - A NACK from that member triggers the reclaim.
+  - The all-ACK decision and the H4–H6 statistics leave the helper's silence out.
+- **Helper:** `HelperGroupSize` = members − 1.
+
+**Known blind spot, measured, not hidden.** A helper that cannot give feedback is silent
+too, and the leader then assumes the helper has the TB. Two cases:
+- it missed the SCI-1A (`helper_sci_missed`);
+- it decoded SCI-1A but not SCI-2A (`helper_corrupt_sci2`).
+
+Plain Option 2 detects such silence as DTX; the "helper never ACKs" rule gives that up for
+the helper only.
+
+**Run-CSV columns** (appended; leader transmissions with a named helper, KPI window):
+
+| column | meaning |
+|---|---|
+| `helper_named_tx` | leader transmissions whose SCI-2A named a helper |
+| `helper_decoded_tx` / `helper_corrupt_tx` | the helper decoded / got the TB corrupt (ground truth, PHY) |
+| `helper_nack_sent` | the helper's PHY sent a NACK for it |
+| `helper_nack_not_sent` | `helper_corrupt_tx − helper_nack_sent`: corrupt but no NACK left the helper |
+| `helper_corrupt_sci2` | corrupt because SCI-2A failed: the helper does not know the TB's HARQ process, destination or feedback indicator, so it sends no PSFCH (TS 38.213 §16.3; 5G-LENA skips the feedback). Explains `helper_nack_not_sent` exactly in the pilots |
+| `helper_nack_lost` | NACK sent but not credited by the leader |
+| `helper_nack` | NACKs the leader credited |
+| `helper_reclaim` | … after which it took back a handed-over slot |
+| `helper_nack_no_slot` | … with no handed-over slot left (always for S2 / S3: the leader reserves none) |
+| `helper_sci_missed` | **the helper missed the SCI and stayed silent** |
+| `helper_sci_missed_rate` | `helper_sci_missed / helper_named_tx` |
+| `helper_sci_missed_tb` | distinct TBs with such a miss |
+| `helper_sci_missed_unserved` | misses after which no copy of the TB followed while some member still lacked it |
+| `helper_ack_suppressed` | ACKs the shim kept the helper from sending (whole run) |
+| `helper_ack_rx` | ACKs the leader received from the named helper (must be 0) |
+| `relay_after_allack` | relays although every other member had ACKed the previous transmission |
+
+**Assertions** (the run aborts):
+- `helper_ack_rx > 0`;
+- a helper that decoded TBs but had no ACK suppressed;
+- (existing) a leader retransmission after all-ACK.
+
+R4 / R5 (S1 and S3) stay byte-identical; the run CSV only gains the columns above.
+
+**Pilots** (laptop):
+
+| run | relays sent / cancelled | tx/packet | worst PRR | helper NACK → reclaim | SCI missed |
+|---|---|---|---|---|---|
+| R4 blind, S1 | 352 / 0 | 2.96 | 0.928 | — | — |
+| R5 Option 1, S1 | 84 / 175 | 1.47 | 0.952 | — | — |
+| R6 before the fix, S1 | 354 / **0** | 2.98 | 0.922 | — | — |
+| **R6, S1** | 192 / **81** | **2.14** | 0.952 | 4 → 4 | 0 |
+| R6, S3 | 188 / 75 | 2.07 | 0.922 | 3 → 0 (no slot) | 0 |
+
+These are roundabout IVD 30 N 0, 20 s, as above.
+
+A loaded pilot (highway IVD 30 N 60, `--bgFlowsPerCar=3.33`, periodic2tb, 9 s):
+- the helper missed the SCI on 63 of 901 named transmissions (7 %);
+- 353 helper NACKs were credited, 332 slots taken back.
+- Of the helper's 568 corrupt receptions, 215 had a failed SCI-2A and sent no NACK
+  (`helper_nack_not_sent` = `helper_corrupt_sci2` = 215, `helper_nack_lost` = 0).
+- So 278 of the helper's 831 failures (33 %) were silent; 54 of the 63 SCI misses got no
+  later copy of the TB.
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash
