@@ -380,24 +380,32 @@ def main():
         return
 
     failed = 0
+    done_count = 0
+    t0 = time.time()
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futures = {ex.submit(run_single, cmd, out, log): (rcsv, arm) for cmd, out, log, rcsv, arm in tasks}
         for fut in cf.as_completed(futures):
             rcsv, arm = futures[fut]
             rc_code = fut.result()
+            done_count += 1
+            elapsed = time.time() - t0
+            rate = done_count / max(1e-3, elapsed)
+            rem_s = (len(tasks) - done_count) / max(1e-3, rate)
             if rc_code != 0:
-                print(f"FAILED run: {rcsv} (exit {rc_code})", file=sys.stderr)
+                print(f"[{done_count}/{len(tasks)}] FAILED run: {rcsv} (exit {rc_code})", file=sys.stderr, flush=True)
                 failed += 1
             elif not Path(rcsv).exists():
-                print(f"FAILED run: {rcsv} (exit 0 but no run CSV)", file=sys.stderr)
+                print(f"[{done_count}/{len(tasks)}] FAILED run: {rcsv} (exit 0 but no run CSV)", file=sys.stderr, flush=True)
                 failed += 1
             else:
                 bad = check_run_csv(rcsv, arms[arm])
                 if bad:
-                    print(f"CHECK FAILED {rcsv}: {', '.join(bad)}", file=sys.stderr)
+                    print(f"[{done_count}/{len(tasks)}] CHECK FAILED {rcsv}: {', '.join(bad)}", file=sys.stderr, flush=True)
                     failed += 1
+                elif done_count % 5 == 0 or done_count == len(tasks):
+                    print(f"[{done_count}/{len(tasks)}] completed ({rate:.2f} runs/s, est rem: {rem_s/3600:.1f}h, {failed} failed)", flush=True)
 
-    print(f"Batch completed: {len(tasks) - failed} ok, {failed} failed.")
+    print(f"Batch completed: {len(tasks) - failed} ok, {failed} failed.", flush=True)
     if failed > 0:
         sys.exit(1)
 
