@@ -244,9 +244,13 @@ at the same CBR, with fewer, busier interferers.
    - `--posErrM` (H3, default 1.5 m) and background blockers from CAMs.
    - `harq` (H4): worst = argmax NACK/DTX rate over `--hstatWindowMs` (ties → farther); the
      helper is the member nearest to it, preferring one ahead of it; no data → member 4.
-   - `harqKuo` (H5) and `harqMap` (H6): Kuo eq. 17 with P̂(L→r) = (n_r(1−ν_r) + n₀P_model) /
+   - `harqKuo` (H5) and `harqMap` (H6): Kuo eq. 12–13 (one relay) with P̂(L→r) = (n_r(1−ν_r) + n₀P_model) /
      (n_r + n₀), n₀ = `--hstatPrior` (default 10).
    - Windows {0.5, 1, 3} s.
+   - Implemented 2026-10-15 (README "Helper selection: Kuo one-relay objective, fixes, H4
+     rules"): the objective is Kuo eq. 12–13 (one relay; `--kuoObjective=mean|min`). H4 has
+     four candidate rules (`--hstatRule`; stage B variants via `H4_RULES`, `KUO_OBJECTIVES`).
+     The selector learns from first transmissions only, and P(LOS) is the scenario's.
    - Per-decision cost logged: link evaluations, building tests, CPU µs (log only).
 7. **T2 = min(PDB, `--t2Ms`) in slots**; IVD 20 traces (`gen_mobility.py --ivd 20`, highway
    and roundabout, N 0 and N 60, seeds 1–20); `--bgFlowsPerCar` (table row above).

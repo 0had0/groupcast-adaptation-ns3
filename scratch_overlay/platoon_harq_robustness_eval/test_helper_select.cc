@@ -659,12 +659,12 @@ TestTbLevelFeedbackUpdate()
         sel.OnFeedback(now - 0.1, m, 100, static_cast<uint8_t>(FeedbackKind::ACK));
     }
 
-    // Since member 8 eventually succeeded on TB 100, its packet-level outcome is ACK (0 failures)!
-    // All members have 100% success on TB 100. So H4 should fall back to 4 (no member is failing).
+    // One observation per TB: its FIRST transmission's outcome (the direct link). Member 8's
+    // later ACK on a retransmission of TB 100 must not overwrite its first failure (DTX).
     uint32_t chosen = sel.Choose(now, now, 0, 5);
-    TEST_ASSERT(chosen == 4, "TB 100 resolved to ACK; H4 sees no failing members and returns fallback 4");
+    TEST_ASSERT(chosen == 7, "TB 100: member 8's first-transmission failure kept; helper 7");
 
-    // Now for TB 101: Member 8 fails with DTX and never ACKs
+    // TB 101: member 8 fails again: 2 failures in 2 TBs, still the worst, helper 7
     sel.OnFeedback(now - 0.05, 8, 101, static_cast<uint8_t>(FeedbackKind::DTX));
     for (uint32_t m = 1; m <= 7; ++m)
     {
@@ -672,8 +672,6 @@ TestTbLevelFeedbackUpdate()
     }
 
     chosen = sel.Choose(now, now, 0, 5);
-    // Member 8 failed TB 101 (1 failure out of 2 TBs), other members have 0 failures.
-    // Member 8 is worst, nearest ahead is member 7.
     TEST_ASSERT(chosen == 7, "TB 101 failed; member 8 is worst and helper is member 7");
     Simulator::Destroy();
     std::cout << "OK\n";
@@ -706,6 +704,100 @@ TestScenarioAwarePathloss()
 // ---------------------------------------------------------------------------
 // Main test runner
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Test 22: H4 candidate rules (hstatRule)
+// ---------------------------------------------------------------------------
+static void
+TestHarqCandidateRules()
+{
+    std::cout << "[Test 22] H4 candidate rules ... ";
+    NodeContainer nodes = SetupPlatoonNodes(30.0);
+    // worst = member 5 (fails 10/10); member 4 fails 8/10, member 6 0/10, member 3 2/10;
+    // members 4 and 6 are equally near member 5
+    auto feed = [](HelperSelector& sel, double now) {
+        for (uint32_t tb = 1; tb <= 10; ++tb)
+        {
+            for (uint32_t m = 1; m <= 8; ++m)
+            {
+                bool fail = (m == 5) || (m == 4 && tb <= 8) || (m == 3 && tb <= 2);
+                sel.OnFeedback(now - 0.5 + 0.01 * tb, m, 100 + tb,
+                               static_cast<uint8_t>(fail ? FeedbackKind::NACK : FeedbackKind::ACK));
+            }
+        }
+    };
+    const char* rules[] = {"nearest", "nearestAhead", "nearestReliable", "reliableAhead"};
+    const uint32_t expect[] = {4, 4, 6, 2}; // reliableAhead: 1 and 2 never fail, 2 is nearer
+    for (int k = 0; k < 4; ++k)
+    {
+        HelperSelector sel;
+        HelperSelector::Config cfg;
+        cfg.policy = "harq";
+        cfg.fallback = 4;
+        cfg.hstatWindowMs = 1000.0;
+        cfg.hstatRule = rules[k];
+        cfg.hstatCandMaxFail = 0.5;
+        sel.Init(cfg, nodes, 8, nullptr);
+        Simulator::Stop(Seconds(0.2));
+        Simulator::Run();
+        feed(sel, 1.0);
+        const uint32_t chosen = sel.Choose(1.0, 1.0, 0, 5);
+        TEST_ASSERT(chosen == expect[k], std::string("rule ") + rules[k] + " picks the expected helper");
+        Simulator::Destroy();
+    }
+    // position error 1.5 m: the tie tolerance (max(1, 2 sigma) = 3 m) keeps "ahead" on ties
+    {
+        HelperSelector sel;
+        HelperSelector::Config cfg;
+        cfg.policy = "harq";
+        cfg.fallback = 4;
+        cfg.posErrM = 1.5;
+        cfg.hstatRule = "nearest";
+        sel.Init(cfg, nodes, 8, nullptr);
+        Simulator::Stop(Seconds(0.2));
+        Simulator::Run();
+        feed(sel, 1.0);
+        TEST_ASSERT(sel.Choose(1.0, 1.0, 0, 5) == 4, "nearest under position error keeps the member ahead");
+        Simulator::Destroy();
+    }
+    std::cout << "OK\n";
+}
+
+// ---------------------------------------------------------------------------
+// Test 23: Kuo objective (eq. 13 maxmean vs maxmin) and highway P(LOS)
+// ---------------------------------------------------------------------------
+static void
+TestKuoObjective()
+{
+    std::cout << "[Test 23] Kuo objective mean / min ... ";
+    NodeContainer nodes = SetupPlatoonNodes(60.0); // tail at 480 m: distant links matter
+    for (const char* sc : {"urban", "highway"})
+    {
+        for (const char* obj : {"mean", "min"})
+        {
+            HelperSelector sel;
+            HelperSelector::Config cfg;
+            cfg.policy = "kuo";
+            cfg.scenario = sc;
+            cfg.kuoObjective = obj;
+            sel.Init(cfg, nodes, 8, nullptr);
+            Simulator::Stop(Seconds(0.2));
+            Simulator::Run();
+            const uint32_t chosen = sel.Choose(0.15, 0.15, 0, 1);
+            TEST_ASSERT(chosen >= 1 && chosen <= 8, "a member is chosen");
+            const auto& row = sel.Rows().back();
+            float best = -1.0f;
+            for (float g : row.score)
+            {
+                best = std::max(best, g);
+            }
+            TEST_ASSERT(row.score[chosen - 1] == best, "the chosen member has the best score");
+            Simulator::Destroy();
+        }
+    }
+    std::cout << "OK\n";
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -735,6 +827,8 @@ main(int argc, char* argv[])
     TestPropagationParameterValidation();
     TestTbLevelFeedbackUpdate();
     TestScenarioAwarePathloss();
+    TestHarqCandidateRules();
+    TestKuoObjective();
 
     std::cout << "========================================\n";
     std::cout << "Results: " << g_passCount << " passed, " << g_failCount << " failed.\n";

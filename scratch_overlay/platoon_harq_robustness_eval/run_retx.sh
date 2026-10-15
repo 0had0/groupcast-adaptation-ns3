@@ -224,7 +224,8 @@ step_stageA() {
   local real
   real=$(find_bin)
   log "stageA: starting Retransmission Strategies campaign"
-  python3 "$HERE/run_retx.py" --stage A --bin "$real" --results "$OUT/stageA" --jobs "$JOBS" --seeds "$SEEDS" || return 1
+  python3 "$HERE/run_retx.py" --stage A --bin "$real" --results "$OUT/stageA" --jobs "$JOBS" --seeds "$SEEDS" \
+      --armFilter "${ARM_FILTER:-}" || return 1
   log "stageA: completed"
 }
 
@@ -232,7 +233,10 @@ step_stageB() {
   local real
   real=$(find_bin)
   log "stageB: starting Helper Selection campaign"
-  python3 "$HERE/run_retx.py" --stage B --bin "$real" --results "$OUT/stageB" --jobs "$JOBS" --seeds "$SEEDS" || return 1
+  # H4_RULES / H4_CAND_MAX_FAIL / KUO_OBJECTIVES add strategy variants beside the base arms
+  python3 "$HERE/run_retx.py" --stage B --bin "$real" --results "$OUT/stageB" --jobs "$JOBS" --seeds "$SEEDS" \
+      --h4Rules "${H4_RULES:-nearest}" --h4CandMaxFail "${H4_CAND_MAX_FAIL:-0.5}" \
+      --kuoObjectives "${KUO_OBJECTIVES:-mean}" --armFilter "${ARM_FILTER:-}" || return 1
   log "stageB: completed"
 }
 
@@ -240,7 +244,8 @@ step_stageC() {
   local real
   real=$(find_bin)
   log "stageC: starting Helper Scheduling campaign"
-  python3 "$HERE/run_retx.py" --stage C --bin "$real" --results "$OUT/stageC" --jobs "$JOBS" --seeds "$SEEDS" || return 1
+  python3 "$HERE/run_retx.py" --stage C --bin "$real" --results "$OUT/stageC" --jobs "$JOBS" --seeds "$SEEDS" \
+      --armFilter "${ARM_FILTER:-}" || return 1
   log "stageC: completed"
 }
 

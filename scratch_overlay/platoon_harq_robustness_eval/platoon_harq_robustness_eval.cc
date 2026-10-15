@@ -1461,6 +1461,10 @@ main(int argc, char* argv[])
     double posErrM = 0.0;
     double hstatWindowMs = 1000.0;
     double hstatPrior = 10.0;
+    std::string hstatRule = "nearest";   // H4 candidate rule (helper_select.h)
+    double hstatTieM = -1.0;             // H4 distance tie tolerance (m), < 0 = auto
+    double hstatCandMaxFail = 0.5;       // H4 nearestReliable: max candidate failure rate
+    std::string kuoObjective = "mean";   // Kuo eq. 13 maxmean | maxmin
     double t2Ms = 0.0;
                                     // (extra channel-condition queries: may perturb the run)
 
@@ -1573,6 +1577,17 @@ main(int argc, char* argv[])
     cmd.AddValue("posErrM", "position error std dev (m) for helper selection (H3)", posErrM);
     cmd.AddValue("hstatWindowMs", "HARQ statistics sliding window (ms) for H4..H6", hstatWindowMs);
     cmd.AddValue("hstatPrior", "Dirichlet prior n0 for H5/H6", hstatPrior);
+    cmd.AddValue("hstatRule",
+                 "H4 (harq) candidate rule: nearest | nearestAhead | nearestReliable | reliableAhead",
+                 hstatRule);
+    cmd.AddValue("hstatTieM", "H4 distance tie tolerance (m), < 0 = max(1, 2 posErrM)", hstatTieM);
+    cmd.AddValue("hstatCandMaxFail",
+                 "H4 nearestReliable: max failure rate of a candidate helper (0..1)",
+                 hstatCandMaxFail);
+    cmd.AddValue("kuoObjective",
+                 "kuo / map / harqKuo / harqMap objective (Kuo 2021 eq. 12): mean = maxmean "
+                 "(eq. 13) | min = maxmin",
+                 kuoObjective);
     cmd.AddValue("t2Ms", "selection window T2 in ms (0 = default 33 slots)", t2Ms);
     cmd.Parse(argc, argv);
 
@@ -2091,6 +2106,10 @@ main(int argc, char* argv[])
         hc.posErrM = posErrM;
         hc.hstatWindowMs = hstatWindowMs;
         hc.hstatPrior = hstatPrior;
+        hc.hstatRule = hstatRule;
+        hc.hstatTieM = hstatTieM;
+        hc.hstatCandMaxFail = hstatCandMaxFail;
+        hc.kuoObjective = kuoObjective;
         hc.prngSeed = 104729u * seed + run;
         hsel.Init(hc, nodes, numMembers, g.geom);
     }
@@ -3809,7 +3828,8 @@ main(int argc, char* argv[])
               "helper_nack_not_sent,helper_corrupt_sci2,helper_nack_lost,helper_nack,helper_reclaim,"
               "helper_nack_no_slot,helper_sci_missed,helper_sci_missed_rate,"
               "helper_sci_missed_tb,helper_sci_missed_unserved,helper_ack_suppressed,"
-              "helper_ack_rx,relay_after_allack\n";
+              "helper_ack_rx,relay_after_allack,hstat_rule,hstat_tie_m,hstat_cand_max_fail,"
+              "kuo_objective\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4031,7 +4051,9 @@ main(int argc, char* argv[])
                << hNackWin - hReclaimWin << ',' << hSciMissed << ','
                << (hNamedTx ? static_cast<double>(hSciMissed) / hNamedTx : 0.0) << ','
                << hSciMissedTbs.size() << ',' << hSciMissedUnserved << ','
-               << *helperAckSuppressed << ',' << ctl.nHelperAck << ',' << relayAfterAllAck << '\n';
+               << *helperAckSuppressed << ',' << ctl.nHelperAck << ',' << relayAfterAllAck << ','
+               << hstatRule << ',' << hstatTieM << ',' << hstatCandMaxFail << ',' << kuoObjective
+               << '\n';
         }
     }
 

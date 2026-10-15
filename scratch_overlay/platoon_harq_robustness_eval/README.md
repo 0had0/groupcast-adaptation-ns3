@@ -1223,7 +1223,7 @@ transmission and hands the reserved retransmission slots over, SB-SPS re-run fla
 | `none` | — | — | `--helperMode=none` |
 | `s4Nack` | static member 4 (Kuo's "middle Tx", baseline) | NACK (Option 1) | `--helperMode=leaderRes --helper=4` |
 | `s4Blind` | static member 4 | every handed slot | + `--helperBlind=true` |
-| `kuoNack` / `kuoBlind` | max-mean GPRR (Kuo eq. 17), distance-only P(LOS) | NACK / blind | + `--helperSelect=kuo` |
+| `kuoNack` / `kuoBlind` | max-mean GPRR (Kuo eq. 12–13, one relay), distance-only P(LOS) | NACK / blind | + `--helperSelect=kuo` |
 | `mapNack` / `mapBlind` | the same with the building map + CAM positions | NACK / blind | + `--helperSelect=map` |
 
 **Selection** (`helper_select.{h,cc}`): GPRR(i) = mean_r [1 - Pf(L->r)(Pf(L->i) + (1 -
@@ -1471,6 +1471,73 @@ A loaded pilot (highway IVD 30 N 60, `--bgFlowsPerCar=3.33`, periodic2tb, 9 s):
   (`helper_nack_not_sent` = `helper_corrupt_sci2` = 215, `helper_nack_lost` = 0).
 - So 278 of the helper's 831 failures (33 %) were silent; 54 of the 63 SCI misses got no
   later copy of the TB.
+
+## Helper selection: Kuo one-relay objective, fixes, H4 rules (2026-10-15)
+
+**Objective = Kuo et al. 2021, one-time retransmission (Sec. IV-C, eq. 11–13).** With
+P_a−b = 1 − P(success) of a link:
+
+GPRR_i = 1/|ω−t| · Σ_{r∈ω−t} [1 − P_t−r·(P_t−i + (1 − P_t−i)·P_i−r)] (eq. 12),
+and the helper is argmax_i (eq. 13, "maxmean once").
+
+- `--kuoObjective=min` uses Kuo's "maxmin once" benchmark: argmax_i of min_r.
+- One helper relays one TB: the two-retransmitter case (eq. 14–18) is not used.
+- Two deviations from Kuo, both stated:
+  - candidates are the members only (Kuo also lets the transmitter itself retransmit; here
+    R1–R3 are the leader-only arms);
+  - the helper's own term is its direct link (it gets no retransmission).
+- The code already computed eq. 12. The earlier comments and README cited eq. 17 (the
+  two-relay formula); corrected.
+- The link model stays the simulator's: TR 37.885 path loss + shadowing + NLOSv blockage
+  against the TB's link budget. Kuo uses a −90 dBm sensitivity step.
+
+**Fixes** (review 2026-10-15):
+
+| # | before | now | affects |
+|---|---|---|---|
+| 1 | a member's ACK on the leader's *retransmission* of a TB overwrote its failure on the *first* transmission | the selector gets the first transmission's outcome only (controller and `OnFeedback`) — the direct link pL[r] that eq. 12 and H4 estimate | H4–H6 (R6) |
+| 2 | P(LOS) = urban 1.05·e^(−0.0114 d) in every scenario | the scenario's TR 37.885 P(LOS): highway = Kuo eq. 2–3 (min(1, 2.1013e-6 d² − 0.002 d + 1.0193), d ≤ 475 m; max(0, 0.54 − 0.001 (d − 475)) beyond) | kuo / harqKuo on the highway. map: unchanged in practice — the in-lane platoon blocks every non-adjacent link, adjacent links succeed with P ≈ 1 (pilot: identical scores) |
+| 3 | H4 distance tie window 1 mm (never a tie under position error) | `--hstatTieM` (default max(1 m, 2·posErrM)) | H4 |
+
+Not changed, by evidence: `map` keeps the LOS / NLOSv mixture on a geometrically clear link.
+ns-3's `ThreeGppV2v{Urban,Highway}ChannelConditionModel` still draws NLOSv with 1 − P(LOS)
+there, and the geometric wrapper only adds vehicle blockage. So returning pure LOS would make
+the selector overconfident.
+
+**H4 candidate rules** (`--hstatRule`, w = the member with the highest failure rate in the
+window):
+
+| rule | helper |
+|---|---|
+| `nearest` (default) | the member nearest to w; ties within `--hstatTieM` → the one ahead of w |
+| `nearestAhead` | the nearest member ahead of w (closer to the leader); w = 1 → nearest |
+| `nearestReliable` | nearest to w among members with own failure rate ≤ `--hstatCandMaxFail` (0.5); none → the most reliable member |
+| `reliableAhead` | among the members ahead of w, the lowest failure rate (ties → nearest to w); w = 1 → nearestReliable |
+
+Run CSV (appended): `hstat_rule`, `hstat_tie_m`, `hstat_cand_max_fail`, `kuo_objective`.
+
+**Trying strategies** (`run_retx.sh`, stage B). The base arms keep their names, so completed
+runs are reused. Variants are extra arms:
+- `H4_RULES=nearest,reliableAhead,nearestReliable` adds `R6_S1_H4-<rule>_w<w>`;
+- `H4_CAND_MAX_FAIL=0.5` sets the nearestReliable threshold;
+- `KUO_OBJECTIVES=mean,min` adds `<arm>-maxmin` for every kuo / map / harqKuo / harqMap arm;
+- `ARM_FILTER=<regex>` runs only matching arms (all stages).
+
+The run check verifies `hstat_rule` / `kuo_objective` against the arm's flags.
+
+**Validation:**
+- `test_helper_select`: 65 / 65. Test 20 was updated to the first-transmission rule; new
+  tests 22 (the four H4 rules, the tie under 1.5 m position error) and 23 (mean / min,
+  urban / highway).
+- Pilots (roundabout / highway IVD 30 N 0, 20 s):
+  - roundabout map, highway map and roundabout harqMap are byte-identical to before;
+  - highway kuo changed (3 of 180 choices);
+  - `reliableAhead` moves the H4 helper ahead (members 4–5 instead of 6–7);
+  - maxmin = maxmean at N 0.
+
+**Stale runs:** `move_stale_runs.py results/retx_campaign [--apply] [--strict]` moves the
+runs these fixes and the R6 fix make stale. It decides from each run's own CSV (missing
+columns = older binary); nothing is deleted.
 
 ## Running on another machine (e.g. a Linux server)
 

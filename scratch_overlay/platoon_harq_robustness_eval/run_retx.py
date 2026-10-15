@@ -93,7 +93,7 @@ def generate_stageAprime_arms():
     }
     return arms
 
-def generate_stageB_arms():
+def generate_stageB_arms(h4_rules=("nearest",), h4_cand_max_fail=0.5, kuo_objectives=("mean",)):
     """Stage B: Helper selection (18 arms).
     R4: H1..H3
     R5: H1..H3
@@ -126,6 +126,26 @@ def generate_stageB_arms():
             "--retx=R6", "--helperSched=S1", "--helperSelect=harqMap",
             f"--hstatWindowMs={w}", "--helper=4", "--maxNumTx=3"
         ]
+    # extra H4 candidate rules (README "H4 rules"): arms R6_S1_H4-<rule>_w<w>; the default
+    # rule "nearest" keeps the names above, so completed runs stay recognised
+    for rule in h4_rules:
+        if rule == "nearest":
+            continue
+        for w in [500, 1000, 3000]:
+            flags = ["--retx=R6", "--helperSched=S1", "--helperSelect=harq",
+                     f"--hstatWindowMs={w}", f"--hstatRule={rule}", "--helper=4", "--maxNumTx=3"]
+            if rule == "nearestReliable":
+                flags.append(f"--hstatCandMaxFail={h4_cand_max_fail:g}")
+            arms[f"R6_S1_H4-{rule}_w{w}"] = flags
+    # Kuo objective variants (eq. 13 maxmean is the default; "min" = Kuo's maxmin benchmark):
+    # every arm whose selector evaluates Kuo's GPRR_i (kuo, map, harqKuo, harqMap)
+    for obj in kuo_objectives:
+        if obj == "mean":
+            continue
+        for name, flags in list(arms.items()):
+            if any(f in flags for f in ("--helperSelect=kuo", "--helperSelect=map",
+                                         "--helperSelect=harqKuo", "--helperSelect=harqMap")):
+                arms[f"{name}-max{obj}"] = flags + [f"--kuoObjective={obj}"]
     return arms
 
 def generate_stageC_arms(best_h_map=None):
@@ -170,6 +190,14 @@ def check_run_csv(run_csv, expected_flags):
     if r.get("harq_mode") == "opt1":
         if int(float(r.get("leader_retx_without_nack", 0))) != 0:
             bad.append(f"leader_retx_without_nack={r.get('leader_retx_without_nack')}")
+    if r.get("harq_mode") == "opt2" and int(float(r.get("helper_ack_rx", 0))) != 0:
+        bad.append(f"helper_ack_rx={r.get('helper_ack_rx')}")
+    # the selector options the run actually used must be the ones its arm asked for
+    want = {"--hstatRule=": ("hstat_rule", "nearest"), "--kuoObjective=": ("kuo_objective", "mean")}
+    for prefix, (col, default) in want.items():
+        val = next((f[len(prefix):] for f in expected_flags if f.startswith(prefix)), default)
+        if col in r and r[col] != val:
+            bad.append(f"{col}={r[col]} (want {val})")
     return bad
 
 # ---------------------------------------------------------------------------
@@ -192,6 +220,15 @@ def main():
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4, help="Parallel job count")
     parser.add_argument("--seeds", default="1-5", help="Seed range or comma list, e.g. '1-5'")
     parser.add_argument("--maxTime", type=float, default=0.0, help="Override simulation duration")
+    parser.add_argument("--h4Rules", default="nearest",
+                        help="stage B: H4 candidate rules, comma list of nearest | nearestAhead | "
+                             "nearestReliable | reliableAhead (nearest = the base arms)")
+    parser.add_argument("--h4CandMaxFail", type=float, default=0.5,
+                        help="stage B: nearestReliable max candidate failure rate")
+    parser.add_argument("--kuoObjectives", default="mean",
+                        help="stage B: Kuo objectives, comma list of mean | min (mean = the base arms)")
+    parser.add_argument("--armFilter", default="",
+                        help="regex: run only the arms whose name matches (all stages)")
     args = parser.parse_args()
 
     # Parse seeds
@@ -217,7 +254,9 @@ def main():
         traffics = ["aperiodic1tb"]
         bg_list = ["none", "moderate", "high"]
     elif args.stage == "B":
-        arms = generate_stageB_arms()
+        arms = generate_stageB_arms(tuple(x for x in args.h4Rules.split(",") if x),
+                                    args.h4CandMaxFail,
+                                    tuple(x for x in args.kuoObjectives.split(",") if x))
         scenarios = ["highway", "roundabout"]
         ivds = [15, 30]
         traffics = TRAFFIC_CLASSES
@@ -241,6 +280,9 @@ def main():
         print("Unknown stage", file=sys.stderr)
         sys.exit(1)
 
+    if args.armFilter:
+        import re
+        arms = {k: v for k, v in arms.items() if re.search(args.armFilter, k)}
     print(f"[{args.stage}] {len(arms)} arms x {len(scenarios)} scen x {len(ivds)} ivds x {len(bg_list)} bg x {len(traffics)} traffic x {len(seeds)} seeds")
     total_planned = len(arms) * len(scenarios) * len(ivds) * len(bg_list) * len(traffics) * len(seeds)
     print(f"Total planned runs: {total_planned}")

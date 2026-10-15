@@ -484,7 +484,9 @@ NackOnlyHarqController::Decide(size_t idx)
     }
     if (m_mode == HarqMode::OPT2)
     {
-        if (!m_fbCallback.IsNull())
+        // the selector's link statistics: the outcome of the TB's first transmission only
+        // (the direct leader -> member link; a retransmission's ACK is a different trial)
+        if (!m_fbCallback.IsNull() && tx.txInTb == 1)
         {
             const double nowS = Simulator::Now().GetSeconds();
             for (size_t k = 0; k < m_members.size(); ++k)

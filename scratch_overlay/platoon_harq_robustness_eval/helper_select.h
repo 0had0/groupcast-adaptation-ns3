@@ -1,13 +1,14 @@
 // helper_select.h -- per-TB helper selection for the leader (Kuo et al., IEEE Access 2021)
 //
 // The leader picks, for every TB it publishes, the member that relays it in the handed-over
-// retransmission slots, maximising the expected group PRR (Kuo eq. 17, one helper):
+// retransmission slots, maximising the expected group PRR (Kuo eq. 12-13: one-time retransmission, "maxmean once"):
 //   GPRR(i) = mean_r [ 1 - Pf(L->r) * ( Pf(L->i) + (1 - Pf(L->i)) * Pf(i->r) ) ]
 // with Pf = 1 - P(success) of a link. P(success) follows Kuo eq. 7 with the TR 37.885 urban
 // models the simulation uses: path loss LOS / NLOSv (LOS + blockage max{0, N(mu, 4.5 dB)},
 // mu = 9 + max(0, 15 log10 d - 41)) / NLOS (building), shadowing, success if the path loss
 // stays below the link budget PL_max of the TB's allocation at MCS 14.
-//   kuo  distance only: P_LOS(d) = min(1, 1.05 exp(-0.0114 d)), else NLOSv (Kuo, no map)
+//   kuo  distance only: P_LOS(d) of the scenario (TR 37.885; urban min(1, 1.05 exp(-0.0114 d)),
+//        highway Kuo eq. 2-3), else NLOSv (Kuo, no map)
 //   map  building map + positions: a building on the segment -> NLOS, another vehicle's box
 //        -> NLOSv, else LOS with probability P_LOS(d) (the simulator's own condition model)
 //   static  always the fallback member (tests the selector path)
@@ -94,7 +95,23 @@ class HelperSelector
         double posErrM{0.0};           //!< H3/map: position error std dev (m), 0 = exact
         double hstatWindowMs{1000.0};  //!< H4..H6: HARQ feedback history window (ms)
         double hstatPrior{10.0};       //!< H5/H6: Dirichlet prior n0 for model blending
-        double pResource{1.0};         //!< Kuo 2021 faithful reproduction: pResource = 1.0
+        // H4 (harq) candidate rule, given the worst member w (highest failure rate in the
+        // window, ties -> farther from the leader):
+        //   nearest          the member nearest to w (distance ties within hstatTieM ->
+        //                    the one ahead of w, i.e. closer to the leader)
+        //   nearestAhead     the nearest member ahead of w (smaller index); w = 1 -> nearest
+        //   nearestReliable  nearest, among members whose own failure rate <=
+        //                    hstatCandMaxFail (none -> the most reliable member)
+        //   reliableAhead    among the members ahead of w, the most reliable (lowest failure
+        //                    rate; ties -> nearest to w); w = 1 -> nearestReliable
+        std::string hstatRule{"nearest"};
+        double hstatTieM{-1.0};        //!< distance tie tolerance (m); < 0 = max(1, 2 posErrM)
+        double hstatCandMaxFail{0.5};  //!< nearestReliable: max failure rate of a candidate
+        // Kuo et al. 2021 one-time retransmission (Sec. IV-C): GPRR_i of eq. (12), and the
+        // helper i = argmax of  mean_r  (eq. 13, "maxmean once", Kuo's proposal)  or of
+        // min_r ("maxmin once", Kuo's benchmark)
+        std::string kuoObjective{"mean"}; //!< mean | min
+        double pResource{1.0};         //!< extra factor on the relay link (not in Kuo; 1 = eq. 12)
         std::string scenario{"urban"}; //!< urban | highway
         uint64_t prngSeed{1234567};    //!< seed for position error PRNG (deterministic)
     };
@@ -136,6 +153,7 @@ class HelperSelector
     double PSuccess(const Cam& c, uint32_t ia, uint32_t ib, double plMax, uint32_t& linkCount, uint32_t& bldCount) const;
     double PlLos(double d) const;
     double PlNlos(double d) const;
+    double ProbLos(double d) const; //!< TR 37.885 P(LOS) of the scenario (Kuo eq. 2-3 highway)
     int Geometry(const Cam& c, uint32_t ia, uint32_t ib, uint32_t& bldCount) const; //!< 0 building, 1 vehicle, 2 LOS
 
     Config m_cfg;

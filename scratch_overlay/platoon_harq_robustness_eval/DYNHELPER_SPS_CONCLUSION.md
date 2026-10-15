@@ -162,7 +162,7 @@ who relays a copy in those slots.
 | `none` | nobody: the leader keeps its own reserved retransmissions (standard Mode-2 NACK-only HARQ) | leader retransmits after a NACK | `--helperMode=none` |
 | `s4Nack` | always member 4, the middle car (Kuo's "middle Tx" baseline) | only after a member sends a NACK (Option 1) | `--helperMode=leaderRes --helper=4` |
 | `s4Blind` | member 4 | in every handed slot, no feedback needed | + `--helperBlind=true` |
-| `kuoNack` / `kuoBlind` | chosen per TB (Kuo eq. 17, distance-only LOS model, **no building map**) | NACK / blind | + `--helperSelect=kuo` |
+| `kuoNack` / `kuoBlind` | chosen per TB (Kuo eq. 12–13, one relay, distance-only LOS model, **no building map**) | NACK / blind | + `--helperSelect=kuo` |
 | `mapNack` / `mapBlind` | chosen per TB, same score, link conditions from the building map + positions | NACK / blind | + `--helperSelect=map` |
 
 Some terms used throughout:

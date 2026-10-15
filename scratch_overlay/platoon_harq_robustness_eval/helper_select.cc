@@ -6,6 +6,7 @@
 #include "ns3/building.h"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 
 namespace ns3
@@ -39,6 +40,14 @@ HelperSelector::Init(const Config& cfg,
     NS_ABORT_MSG_IF(!std::isfinite(cfg.sinrReqDb), "HelperSelector: sinrReqDb must be finite");
     NS_ABORT_MSG_IF(cfg.hstatPrior < 0.0 || !std::isfinite(cfg.hstatPrior),
                     "HelperSelector: hstatPrior must be >= 0 (got " << cfg.hstatPrior << ")");
+    NS_ABORT_MSG_IF(cfg.hstatRule != "nearest" && cfg.hstatRule != "nearestAhead" &&
+                        cfg.hstatRule != "nearestReliable" && cfg.hstatRule != "reliableAhead",
+                    "HelperSelector: bad hstatRule " << cfg.hstatRule
+                        << " (nearest | nearestAhead | nearestReliable | reliableAhead)");
+    NS_ABORT_MSG_IF(cfg.kuoObjective != "mean" && cfg.kuoObjective != "min",
+                    "HelperSelector: bad kuoObjective " << cfg.kuoObjective << " (mean | min)");
+    NS_ABORT_MSG_IF(cfg.hstatCandMaxFail < 0.0 || cfg.hstatCandMaxFail > 1.0,
+                    "HelperSelector: hstatCandMaxFail must be in [0, 1]");
 
     m_cfg = cfg;
     m_nodes = nodes;
@@ -72,16 +81,13 @@ HelperSelector::OnFeedback(double tS, uint32_t memberIndex, uint32_t tbGen, uint
         FeedbackKind fKind = static_cast<FeedbackKind>(kind);
         if (tbGen > 0)
         {
-            // One observation per completed TB / packet delivery trial
+            // One observation per TB: the outcome of its first transmission (the direct
+            // leader -> member link that pL[r] and the H4 failure rate estimate). A later
+            // ACK on a retransmission of the same TB must not overwrite that failure.
             for (auto it = m_feedback.rbegin(); it != m_feedback.rend(); ++it)
             {
                 if (it->member == member && it->tbGen == tbGen)
                 {
-                    if (fKind == FeedbackKind::ACK)
-                    {
-                        it->kind = FeedbackKind::ACK;
-                        it->t = tS;
-                    }
                     return;
                 }
             }
@@ -158,6 +164,22 @@ HelperSelector::PlLos(double d) const
     }
     // 3GPP TR 37.885 V2V Urban LOS
     return 38.77 + 16.7 * std::log10(dClamped) + 18.2 * std::log10(m_cfg.fcGHz);
+}
+
+double
+HelperSelector::ProbLos(double d) const
+{
+    if (m_cfg.scenario == "highway")
+    {
+        // TR 37.885 V2V Highway (Kuo et al. eq. 2-3)
+        if (d <= 475.0)
+        {
+            return ClampProbability(2.1013e-6 * d * d - 0.002 * d + 1.0193);
+        }
+        return ClampProbability(0.54 - 0.001 * (d - 475.0));
+    }
+    // TR 37.885 V2V Urban
+    return ClampProbability(1.05 * std::exp(-0.0114 * d));
 }
 
 double
@@ -239,7 +261,9 @@ HelperSelector::PSuccess(const Cam& c, uint32_t ia, uint32_t ib, double plMax, u
     const Vector& a = c.pos[ia];
     const Vector& b = c.pos[ib];
     const double d = std::hypot(b.x - a.x, b.y - a.y);
-    const double pLos = ClampProbability(1.05 * std::exp(-0.0114 * d));
+    // the scenario's P(LOS), as the simulator's own ThreeGppV2v{Urban,Highway} condition
+    // model draws it for a link no building blocks
+    const double pLos = ProbLos(d);
     // P(PL + shadowing <= plMax), LOS
     const double sLos = Phi((plMax - PlLos(d)) / m_cfg.shadowLosDb);
     // NLOSv: + blockage B = max(0, N(mu, 4.5)); P(PL_LOS + B + X <= plMax), X ~ N(0, 3)
@@ -272,6 +296,8 @@ HelperSelector::PSuccess(const Cam& c, uint32_t ia, uint32_t ib, double plMax, u
         {
             return ClampProbability(sNlosv);
         }
+        // geometrically clear: the simulator still draws NLOSv with 1 - P(LOS) (the
+        // geometric wrapper only adds vehicle blockage), so the mixture is the right model
         return ClampProbability(pLos * sLos + (1.0 - pLos) * sNlosv);
     }
     // kuo / harqKuo / harq / default: distance only, LOS / NLOSv mixture
@@ -352,29 +378,88 @@ HelperSelector::Choose(double now, double tNdi, uint8_t harqId, uint16_t nSubch)
         }
         else
         {
-            // Pick member nearest to worst, preferring one ahead of it (closer to leader)
-            uint32_t bestH = m_cfg.fallback;
-            double minDist = 1e9;
-            for (uint32_t h = 1; h <= M; ++h)
-            {
-                if (h == worst)
+            // candidate rule (Config::hstatRule); distances from the CAM positions
+            const double tie = m_cfg.hstatTieM >= 0.0 ? m_cfg.hstatTieM
+                                                      : std::max(1.0, 2.0 * m_cfg.posErrM);
+            auto failRate = [&](uint32_t h) {
+                return attempts[h] > 0 ? static_cast<double>(failures[h]) / attempts[h] : 0.0;
+            };
+            auto dist = [&](uint32_t h) {
+                return std::hypot(c.pos[h].x - c.pos[worst].x, c.pos[h].y - c.pos[worst].y);
+            };
+            // nearest to worst among the candidates admitted by ok(); distance ties within
+            // `tie` go to the one ahead of worst (smaller index, closer to the leader)
+            auto nearestOf = [&](const std::function<bool(uint32_t)>& ok) {
+                uint32_t bestH = 0;
+                double minDist = 1e18;
+                for (uint32_t h = 1; h <= M; ++h)
                 {
-                    continue;
+                    if (h == worst || !ok(h))
+                    {
+                        continue;
+                    }
+                    const double d = dist(h);
+                    if (bestH == 0 || d < minDist - tie)
+                    {
+                        minDist = d;
+                        bestH = h;
+                    }
+                    else if (d <= minDist + tie && h < worst && bestH > worst)
+                    {
+                        minDist = std::min(minDist, d);
+                        bestH = h; // equally near and ahead of worst
+                    }
                 }
-                const double d = std::hypot(c.pos[h].x - c.pos[worst].x, c.pos[h].y - c.pos[worst].y);
-                if (d < minDist - 1e-3)
+                return bestH;
+            };
+            auto mostReliableOf = [&](const std::function<bool(uint32_t)>& ok) {
+                uint32_t bestH = 0;
+                for (uint32_t h = 1; h <= M; ++h)
                 {
-                    minDist = d;
-                    bestH = h;
-                }
-                else if (std::abs(d - minDist) <= 1e-3)
-                {
-                    // Tie: prefer one ahead of worst (smaller index, closer to leader)
-                    if (h < worst && bestH >= worst)
+                    if (h == worst || !ok(h))
+                    {
+                        continue;
+                    }
+                    if (bestH == 0 || failRate(h) < failRate(bestH) - 1e-12 ||
+                        (std::abs(failRate(h) - failRate(bestH)) <= 1e-12 && dist(h) < dist(bestH)))
                     {
                         bestH = h;
                     }
                 }
+                return bestH;
+            };
+            auto any = [](uint32_t) { return true; };
+            auto ahead = [&](uint32_t h) { return h < worst; };
+            auto reliable = [&](uint32_t h) { return failRate(h) <= m_cfg.hstatCandMaxFail; };
+            uint32_t bestH = 0;
+            const std::string& rule = m_cfg.hstatRule;
+            if (rule == "nearestAhead")
+            {
+                bestH = nearestOf(ahead);
+            }
+            else if (rule == "nearestReliable")
+            {
+                bestH = nearestOf(reliable);
+                if (bestH == 0)
+                {
+                    bestH = mostReliableOf(any);
+                }
+            }
+            else if (rule == "reliableAhead")
+            {
+                bestH = mostReliableOf(ahead);
+                if (bestH == 0)
+                {
+                    bestH = nearestOf(reliable);
+                }
+            }
+            if (bestH == 0) // "nearest", or a rule with no admissible candidate
+            {
+                bestH = nearestOf(any);
+            }
+            if (bestH == 0)
+            {
+                bestH = m_cfg.fallback;
             }
             row.chosen = bestH;
         }
@@ -449,25 +534,36 @@ HelperSelector::Choose(double now, double tNdi, uint8_t harqId, uint16_t nSubch)
         }
     }
 
-    // Kuo (2021) objective: pResource = 1.0 (reproduces eq. 17 faithfully)
-    const double pResource = m_cfg.pResource;
+    // Kuo et al. 2021, one-time retransmission (Sec. IV-C): with P_a-b = 1 - P(success),
+    //   GPRR_i = 1/|w-t| sum_{r in w-t} 1 - P_t-r (P_t-i + (1 - P_t-i) P_i-r)    (eq. 12)
+    // i.e. success_r = pL[r] + (1 - pL[r]) pL[i] p_ir. The helper's own term (r = i) is its
+    // direct link pL[i] (it gets no retransmission). Candidates: the members (Kuo also lets
+    // the transmitter itself retransmit; here R1..R3 are the leader-only arms). Helper =
+    // argmax_i of the mean (eq. 13, "maxmean once") or of the minimum ("maxmin once").
+    const double pResource = m_cfg.pResource; // 1 = eq. 12
+    const bool maxmin = (m_cfg.kuoObjective == "min");
     double best = -1.0;
     for (uint32_t i = 1; i <= M; ++i)
     {
         double sum = 0.0;
+        double worstR = 1.0;
         for (uint32_t r = 1; r <= M; ++r)
         {
+            double pSuccess;
             if (r == i)
             {
-                sum += pL[r];
-                continue;
+                pSuccess = pL[r];
             }
-            const double pir = pLink[i][r];
-            const double pRelay = ClampProbability(pResource * pir);
-            const double pSuccess = pL[r] + (1.0 - pL[r]) * pL[i] * pRelay;
-            sum += ClampProbability(pSuccess);
+            else
+            {
+                const double pir = pLink[i][r];
+                const double pRelay = ClampProbability(pResource * pir);
+                pSuccess = ClampProbability(pL[r] + (1.0 - pL[r]) * pL[i] * pRelay);
+            }
+            sum += pSuccess;
+            worstR = std::min(worstR, pSuccess);
         }
-        const double g = ClampProbability(sum / M);
+        const double g = ClampProbability(maxmin ? worstR : sum / M);
         row.score[i - 1] = static_cast<float>(g);
         // Deterministic tie-breaking: higher direct link pL[i], then lower index
         if (g > best + 1e-12 || (std::abs(g - best) <= 1e-12 && pL[i] > pL[row.chosen]))
