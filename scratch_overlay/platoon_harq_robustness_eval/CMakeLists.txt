@@ -27,3 +27,5 @@ build_exec(
     "${ns3-contrib-libs}"
   EXECUTABLE_DIRECTORY_PATH ${CMAKE_OUTPUT_DIRECTORY}/scratch/platoon_harq_robustness_eval/
 )
+
+add_subdirectory(tests)

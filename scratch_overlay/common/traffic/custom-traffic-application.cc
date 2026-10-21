@@ -122,6 +122,12 @@ CustomTrafficApplication::GetTypeId()
                           UintegerValue(2000),
                           MakeUintegerAccessor(&CustomTrafficApplication::m_aperiodic1MaxSize),
                           MakeUintegerChecker<uint32_t>(200, 2000))
+            .AddAttribute("FixedSize",
+                          "If > 0, every packet has this size (B, SeqTsSize header included) "
+                          "while the mode keeps its arrival process. 0 = the mode's sizes.",
+                          UintegerValue(0),
+                          MakeUintegerAccessor(&CustomTrafficApplication::m_fixedSize),
+                          MakeUintegerChecker<uint32_t>(0, 65000))
             .AddAttribute("Protocol",
                           "The type of protocol to use.",
                           TypeIdValue(UdpSocketFactory::GetTypeId()),
@@ -162,6 +168,7 @@ CustomTrafficApplication::CustomTrafficApplication()
       m_periodic1StartIndex(0),
       m_maxBytes(0),
       m_aperiodic1MaxSize(2000),
+      m_fixedSize(0),
       m_totBytes(0),
       m_seq(0)
 {
@@ -454,6 +461,12 @@ CustomTrafficApplication::ScheduleNextTx()
             default:
                 NS_FATAL_ERROR("Invalid traffic mode");
                 return;
+        }
+        if (m_fixedSize > 0)
+        {
+            // the class keeps its arrival process (and its size draws, so the random
+            // streams stay aligned); every packet gets the fixed size
+            packetSize = m_fixedSize;
         }
 
         m_sendEvent = Simulator::Schedule(nextInterval, &CustomTrafficApplication::SendPacket, this, packetSize);

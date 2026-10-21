@@ -245,7 +245,7 @@ NackOnlyHarqController::OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id)
     // the SCI-2A of this PSSCH travels as its own packet (no bearer tag, the header only):
     // the helper it names for the transmitter's own TB (Option 2 with a helper)
     LteRadioBearerTag bearer;
-    if (m_mode == HarqMode::OPT2 && !p->PeekPacketTag(bearer))
+    if ((m_mode == HarqMode::OPT2 || m_opt1HelperNack) && !p->PeekPacketTag(bearer))
     {
         NrSlSciF2aHeader sci;
         if (p->GetSize() > 0 && p->PeekHeader(sci) == p->GetSize())
@@ -299,7 +299,7 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
     m_pendingSeqs[dev].clear();
     tx.node = m_devNode[dev];
     tx.rnti = p.rnti;
-    if (m_mode == HarqMode::OPT2)
+    if ((m_mode == HarqMode::OPT2 || m_opt1HelperNack) && m_helperTakeover)
     {
         // the helper this transmission's SCI-2A names (sent just before this trace)
         tx.helperRnti = m_pendingHelper.count(dev) ? m_pendingHelper[dev] : 0;
@@ -335,6 +335,20 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
         if (tx.seqs.empty() && last != m_lastTxOfHarq.end())
         {
             tx.seqs = m_txs[last->second].seqs;
+        }
+    }
+    if (tx.txInTb == 1)
+    {
+        m_pendingOrigin.erase(tx.harqId);
+    }
+    else if (dev == 0)
+    {
+        // a leader retransmission in a handed slot it took back
+        auto po = m_pendingOrigin.find(tx.harqId);
+        if (po != m_pendingOrigin.end())
+        {
+            tx.origin = po->second;
+            m_pendingOrigin.erase(po);
         }
     }
     m_lastTxOfHarq[tx.harqId] = idx;
@@ -376,12 +390,16 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
     // attribute feedback to the pending transmission of this HARQ id whose
     // PSFCH occasion this is: the one decided next.
     const double now = Simulator::Now().GetSeconds();
+    // exact binding: this PSFCH belongs to the transmission decided within the next slot
+    const double slotS = m_slot.GetSeconds();
     LeaderTx* best = nullptr;
     for (size_t i = m_txs.size(); i-- > 0;)
     {
         LeaderTx& tx = m_txs[i];
+        const bool inOccasion =
+            !m_exactPsfch || (tx.decideAtS >= now - 1e-9 && tx.decideAtS - now < slotS);
         if (tx.harqId == info.m_harqProcessId && tx.decision < 0 && tx.tS < now &&
-            tx.node == m_devNode[dev] && (!best || tx.decideAtS < best->decideAtS))
+            tx.node == m_devNode[dev] && inOccasion && (!best || tx.decideAtS < best->decideAtS))
         {
             best = &tx;
         }
@@ -390,11 +408,24 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
             break; // older than any pending decision
         }
     }
-    if (best && m_mode == HarqMode::OPT2 && best->helperNode != 0 && nodeId == best->helperNode)
+    if (!best && m_exactPsfch)
+    {
+        ++nFbLate;
+        return;
+    }
+    // the named helper's NACK (Option 2: its own PSFCH resource; Option 1 with
+    // m_opt1HelperNack: a dedicated helper resource next to the shared NACK one)
+    if (best && (m_mode == HarqMode::OPT2 || m_opt1HelperNack) && best->helperNode != 0 &&
+        nodeId == best->helperNode)
     {
         if (isAck)
         {
             ++nHelperAck; // must not happen: the named helper stays silent on success
+        }
+        else if (m_exactPsfch && m_curGen[best->harqId] != best->gen)
+        {
+            // the HARQ id already carries the next TB: a reclaim would take its slot
+            ++nHelperNackStale;
         }
         else if (!best->helperNack)
         {
@@ -406,6 +437,7 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
             {
                 best->helperReclaim = true;
                 ++nHelperReclaim;
+                m_pendingOrigin[best->harqId] = 1;
             }
             else
             {
@@ -470,6 +502,7 @@ NackOnlyHarqController::Decide(size_t idx)
         {
             tx.decision = 0;
             ++nNackDecision;
+            MaybeScheduleFallback(idx);
             return;
         }
         tx.decision = 1;
@@ -538,8 +571,98 @@ NackOnlyHarqController::Decide(size_t idx)
         {
             tx.decision = 0;
             ++nNackDecision;
+            MaybeScheduleFallback(idx);
         }
         return;
+    }
+}
+
+void
+NackOnlyHarqController::SetLeaderFallback(bool on)
+{
+    m_fallback = on && m_mode != HarqMode::BLIND;
+    if (m_fallback)
+    {
+        m_leader->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+            "RxPscchTraceUe",
+            MakeCallback(&NackOnlyHarqController::OnLeaderPscch, this));
+    }
+}
+
+void
+NackOnlyHarqController::OnLeaderPscch(SlRxCtrlPacketTraceParams p)
+{
+    if (p.m_corrupt)
+    {
+        return;
+    }
+    const int64_t slotAbs =
+        static_cast<int64_t>(std::floor(p.m_timeMs * 1e-3 / m_slot.GetSeconds() + 1e-9));
+    std::set<int64_t>& heard = m_sciHeard[p.m_txRnti];
+    heard.insert(slotAbs);
+    while (!heard.empty() && *heard.begin() < slotAbs - 4000)
+    {
+        heard.erase(heard.begin()); // older than 2 s at mu 1: no check looks back that far
+    }
+}
+
+void
+NackOnlyHarqController::MaybeScheduleFallback(size_t idx)
+{
+    const LeaderTx& tx = m_txs[idx];
+    if (!m_fallback || tx.helperNode == 0 || tx.helperNack)
+    {
+        return; // no helper, or its NACK already took back a slot
+    }
+    SfnSf next;
+    if (!m_mac->GetSlNextHelperSlot(m_dst, tx.harqId, next))
+    {
+        return; // no handed slot left: nothing the helper should relay in
+    }
+    const SfnSf txSfn(tx.frame, tx.subframe, static_cast<uint8_t>(tx.slot), m_mu);
+    int64_t d = static_cast<int64_t>(next.Normalize()) - static_cast<int64_t>(txSfn.Normalize());
+    const int64_t wrap = 1024LL * 10 * (1LL << m_mu);
+    if (d < 0)
+    {
+        d += wrap;
+    }
+    const int64_t slotAbs = tx.slotAbs + d;
+    const Time checkAt = m_slot * (slotAbs + 1) + m_sym / 2; // end of the helper's slot
+    if (checkAt <= Simulator::Now())
+    {
+        return;
+    }
+    ++nFallbackCheck;
+    Simulator::Schedule(checkAt - Simulator::Now(),
+                        &NackOnlyHarqController::CheckHelperRelay,
+                        this,
+                        idx,
+                        slotAbs);
+}
+
+void
+NackOnlyHarqController::CheckHelperRelay(size_t idx, int64_t slotAbs)
+{
+    const LeaderTx& tx = m_txs[idx];
+    if (m_curGen[tx.harqId] != tx.gen)
+    {
+        return; // the HARQ process already carries the next TB
+    }
+    auto it = m_sciHeard.find(static_cast<uint16_t>(tx.helperRnti));
+    if (it != m_sciHeard.end() && it->second.count(slotAbs))
+    {
+        ++nFallbackHeard; // the helper relayed
+        return;
+    }
+    // nothing sensed from the helper where a relay was expected: it missed the TB
+    if (m_mac->ReclaimSlHelperSlot(m_dst, tx.harqId))
+    {
+        ++nFallbackTx;
+        m_pendingOrigin[tx.harqId] = 2;
+    }
+    else
+    {
+        ++nFallbackNoSlot;
     }
 }
 

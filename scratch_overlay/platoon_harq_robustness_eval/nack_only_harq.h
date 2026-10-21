@@ -105,6 +105,9 @@ struct LeaderTx
     uint32_t helperNode{0};       //!< its node index (0 = none)
     bool helperNack{false};       //!< the named helper NACKed this transmission
     bool helperReclaim{false};    //!< ... and the leader took back the next handed slot
+    uint8_t origin{0};            //!< 0 regular; leader transmission in a handed slot taken
+                                  //!< back: 1 on the helper's NACK, 2 by the fallback
+                                  //!< (nothing sensed from the helper in its handed slot)
 };
 
 class NackOnlyHarqController
@@ -166,6 +169,12 @@ class NackOnlyHarqController
     uint64_t nHelperReclaim{0};   //!< ... after which a handed-over slot was taken back
     uint64_t nHelperNackNoSlot{0};//!< ... with no handed-over slot left to take back
     uint64_t nHelperAck{0};       //!< ACKs of the named helper (must be 0: it stays silent)
+    uint64_t nFbLate{0};          //!< feedback matching no pending PSFCH occasion (dropped)
+    uint64_t nHelperNackStale{0}; //!< helper NACK for a TB its HARQ id no longer carries
+    uint64_t nFallbackCheck{0};   //!< handed slots checked (a relay was expected)
+    uint64_t nFallbackHeard{0};   //!< ... in which the leader decoded the helper's SCI
+    uint64_t nFallbackTx{0};      //!< ... silent: the leader took back the next handed slot
+    uint64_t nFallbackNoSlot{0};  //!< ... silent, but no handed slot was left
 
     HarqMode GetMode() const { return m_mode; }
     typedef Callback<void, double, uint32_t, uint32_t, uint8_t> FeedbackCallback;
@@ -180,6 +189,40 @@ class NackOnlyHarqController
      */
     void SetSpsSafeAck(bool on) { m_spsSafeAck = on; }
 
+    /**
+     * Bind each PSFCH only to the pending transmission whose PSFCH occasion it
+     * is (it reaches the MAC half a symbol before that transmission's decision),
+     * not to any pending transmission of the same HARQ id. Feedback that arrives
+     * outside every occasion is counted in nFbLate and dropped, and a helper NACK
+     * reclaims a handed-over slot only while the HARQ id still carries that TB.
+     * Off: the earlier binding, under which a late helper NACK could reclaim a
+     * slot of the next TB on the same HARQ id.
+     */
+    void SetExactPsfchAttribution(bool on) { m_exactPsfch = on; }
+
+    /**
+     * Option 1 with a named helper: the helper NACKs on a dedicated PSFCH resource
+     * (not 3GPP: Option 1 shares one NACK resource, so a NACKer cannot be
+     * identified), and the leader takes back the next handed-over slot on it, as
+     * in Option 2. Members other than the helper stay on the shared resource.
+     */
+    void SetOpt1HelperNack(bool on) { m_opt1HelperNack = on && m_mode == HarqMode::OPT1; }
+
+    /**
+     * Helper takeover (R5, R6) off: the named helper is a plain member for the leader
+     * (Option 2: it ACKs and counts in the all-ACK rule; no slot is taken back on its
+     * NACK, no fallback). Arms R4.1 / R4.2. Call before the first transmission.
+     */
+    void SetHelperTakeover(bool on) { m_helperTakeover = on; }
+
+    /**
+     * Leader fallback (G08): after a NACK decision with a named helper that did not
+     * NACK, the leader listens in the helper's next handed slot; if it decodes no SCI
+     * of the helper there (the helper missed the TB), it takes back the following
+     * handed slot and retransmits itself. Call after Install.
+     */
+    void SetLeaderFallback(bool on);
+
     // hooks used by the SAP wrappers
     void OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id);
     void OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& info);
@@ -188,6 +231,9 @@ class NackOnlyHarqController
     void Attach(Ptr<NrUeNetDevice> dev, uint32_t nodeIndex);
     void OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters p);
     void Decide(size_t idx);
+    void MaybeScheduleFallback(size_t idx);
+    void CheckHelperRelay(size_t idx, int64_t slotAbs);
+    void OnLeaderPscch(SlRxCtrlPacketTraceParams p);
     void DeliverSuccess(const LeaderTx& tx);
 
     Ptr<NrUeNetDevice> m_leader;
@@ -197,6 +243,12 @@ class NackOnlyHarqController
     HarqMode m_mode{HarqMode::OPT1};
     FeedbackCallback m_fbCallback;
     bool m_spsSafeAck{false};
+    bool m_exactPsfch{false};
+    bool m_opt1HelperNack{false};
+    bool m_helperTakeover{true};
+    bool m_fallback{false};
+    std::map<uint8_t, uint8_t> m_pendingOrigin;           //!< HARQ id -> origin of its next retx
+    std::map<uint16_t, std::set<int64_t>> m_sciHeard;     //!< leader: slots with a decoded SCI per RNTI
     uint8_t m_gap{3};
     uint8_t m_mu{1};
     Time m_slot;

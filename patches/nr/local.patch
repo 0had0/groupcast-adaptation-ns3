@@ -648,7 +648,7 @@ index 1c987513..f681df6e 100644
  
  } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..ffa5bd44 100644
+index 57e4cf29..8637b750 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
 @@ -55,6 +55,68 @@ NrSlUeMac::GetTypeId()
@@ -1675,7 +1675,7 @@ index 57e4cf29..ffa5bd44 100644
 -                                          "Incorrect computation of ReTx slot gaps");
 -                            sciF1a.SetIndexStartSbChReTx2(sbChIndex.at(1));
 +                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
-                         }
++                        }
 +                        else if (currentGrant.helperId != 0)
 +                        {
 +                            // later reserved slots handed to the helper (the current
@@ -1735,7 +1735,7 @@ index 57e4cf29..ffa5bd44 100644
 +                                    coop.deadline = lastOwn->sfn.GetEncoding();
 +                                }
 +                            }
-+                        }
+                         }
 +                        sciF2a.SetCoopInfo(coop);
                      }
  
@@ -2059,7 +2059,7 @@ index 57e4cf29..ffa5bd44 100644
  std::vector<uint8_t>
  NrSlUeMac::ComputeGaps(const SfnSf& sfn,
                         std::set<SlGrantResource>::const_iterator it,
-@@ -1737,10 +2654,222 @@ NrSlUeMac::EnableSensing(bool enableSensing)
+@@ -1737,10 +2654,251 @@ NrSlUeMac::EnableSensing(bool enableSensing)
      m_enableSensing = enableSensing;
  }
  
@@ -2166,6 +2166,35 @@ index 57e4cf29..ffa5bd44 100644
 +                NS_LOG_INFO("RNTI " << GetRnti() << " takes back slot " << slot.sfn.Normalize()
 +                                    << " of HARQ " << +harqId << " from helper "
 +                                    << grant.helperId);
++                return true;
++            }
++        }
++        return false;
++    }
++    return false;
++}
++
++bool
++NrSlUeMac::GetSlNextHelperSlot(uint32_t dstL2Id, uint8_t harqId, SfnSf& slot) const
++{
++    auto itGrants = m_slGrants.find(dstL2Id);
++    if (itGrants == m_slGrants.end())
++    {
++        return false;
++    }
++    for (const auto& grant : itGrants->second)
++    {
++        if (grant.harqId != harqId || grant.slotAllocations.empty() ||
++            grant.slotAllocations.begin()->ndi != 0)
++        {
++            continue;
++        }
++        for (const auto& s : grant.slotAllocations) // time order
++        {
++            auto it = grant.usurpedByHelper.find(s);
++            if (it != grant.usurpedByHelper.end() && it->second)
++            {
++                slot = s.sfn;
 +                return true;
 +            }
 +        }
@@ -2283,7 +2312,7 @@ index 57e4cf29..ffa5bd44 100644
      {
          // This HARQ is for us.  If this is a HARQ ACK, check whether to cancel
 diff --git a/model/nr-sl-ue-mac.h b/model/nr-sl-ue-mac.h
-index 9562ebd0..bb32d7b6 100644
+index 9562ebd0..bd24adc2 100644
 --- a/model/nr-sl-ue-mac.h
 +++ b/model/nr-sl-ue-mac.h
 @@ -8,6 +8,7 @@
@@ -2424,7 +2453,7 @@ index 9562ebd0..bb32d7b6 100644
      // SCHED API primitive for NR Sidelink
      // From FAPI 2.0.0 Small Cell Forum originated LTE MAC scheduler API
  
-@@ -349,6 +457,95 @@ class NrSlUeMac : public NrUeMac
+@@ -349,6 +457,107 @@ class NrSlUeMac : public NrUeMac
       */
      bool SlotHasPsfch(const SfnSf& sfn) const;
  
@@ -2508,6 +2537,18 @@ index 9562ebd0..bb32d7b6 100644
 +    bool ReclaimSlHelperSlot(uint32_t dstL2Id, uint8_t harqId);
 +
 +    /**
++     * \brief Cooperative HARQ, leader side: the earliest remaining slot of the TB being
++     *        transmitted on harqId that is handed to the helper (the slot
++     *        ReclaimSlHelperSlot would take back)
++     *
++     * \param dstL2Id The destination layer 2 id
++     * \param harqId The HARQ process id
++     * \param slot Set to that slot, if any
++     * \return true if a handed-over slot remains
++     */
++    bool GetSlNextHelperSlot(uint32_t dstL2Id, uint8_t harqId, SfnSf& slot) const;
++
++    /**
 +     * \brief Last slot of the published grants to dstL2Id on harqId
 +     *
 +     * \param dstL2Id The destination layer 2 id
@@ -2520,7 +2561,7 @@ index 9562ebd0..bb32d7b6 100644
      /**
       * \brief Get the reservation period in slots
       *
-@@ -687,6 +884,80 @@ class NrSlUeMac : public NrUeMac
+@@ -687,6 +896,80 @@ class NrSlUeMac : public NrUeMac
          const std::list<SensingData>& sensingData,
          const std::list<SfnSf>& transmitHistory) const;
  
@@ -2601,7 +2642,7 @@ index 9562ebd0..bb32d7b6 100644
      /**
       * \brief Check if subchannels ranges in two resources overlap
       * \param firstStart Starting subchannel index of first resource
-@@ -808,6 +1079,51 @@ class NrSlUeMac : public NrUeMac
+@@ -808,6 +1091,51 @@ class NrSlUeMac : public NrUeMac
      std::unordered_set<uint32_t>
          m_sidelinkRxDestinations; //!< vector holding Sidelink communication destinations for
                                    //!< reception
@@ -2653,7 +2694,7 @@ index 9562ebd0..bb32d7b6 100644
      bool m_enableSensing{false};  //!< Flag to enable NR Sidelink resource selection based on
                                    //!< sensing; otherwise, use random selection
      uint8_t m_minTimeGapProcessing{
-@@ -870,6 +1186,15 @@ class NrSlUeMac : public NrUeMac
+@@ -870,6 +1198,15 @@ class NrSlUeMac : public NrUeMac
                     const std::list<SensingData>&,
                     const std::list<SfnSf>&>
          m_tracedSensingAlgorithm;
@@ -2670,10 +2711,39 @@ index 9562ebd0..bb32d7b6 100644
  
  /**
 diff --git a/model/nr-spectrum-phy.cc b/model/nr-spectrum-phy.cc
-index d5d45551..9a5f3c8e 100644
+index d5d45551..5b1b92f3 100644
 --- a/model/nr-spectrum-phy.cc
 +++ b/model/nr-spectrum-phy.cc
-@@ -2020,6 +2020,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
+@@ -183,6 +183,28 @@ NrSpectrumPhy::GetTypeId()
+                 BooleanValue(false),
+                 MakeBooleanAccessor(&NrSpectrumPhy::DropTbOnRbOnCollision),
+                 MakeBooleanChecker())
++            .AddAttribute("SlAckPrevDecodedTb",
++                          "ACK a sidelink retransmission of a TB this UE already decoded when "
++                          "the SCI-2A enables HARQ feedback (TS 38.321 5.22.2.2). When false, "
++                          "such a retransmission gets no feedback, which a Groupcast Option-2 "
++                          "transmitter reads as DTX, i.e. NACK.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&NrSpectrumPhy::m_slAckPrevDecodedTb),
++                          MakeBooleanChecker())
++            .AddAttribute("SlBlindSoftCombining",
++                          "Soft-combine sidelink copies of a TB sent with HARQ feedback "
++                          "disabled (blind retransmissions). False: every copy is decoded "
++                          "on its own, as independent attempts.",
++                          BooleanValue(true),
++                          MakeBooleanAccessor(&NrSpectrumPhy::m_slBlindSoftCombining),
++                          MakeBooleanChecker())
++            .AddAttribute("SlSoftCombining",
++                          "Soft-combine (HARQ-IR) every sidelink retransmission with the earlier "
++                          "copies of its TB. False: every copy is decoded on its own (ablation "
++                          "of the HARQ-IR gain); overrides SlBlindSoftCombining.",
++                          BooleanValue(true),
++                          MakeBooleanAccessor(&NrSpectrumPhy::m_slSoftCombining),
++                          MakeBooleanChecker())
+             .AddTraceSource("RxPacketTraceEnb",
+                             "The no. of packets received and transmitted by the Base Station",
+                             MakeTraceSourceAccessor(&NrSpectrumPhy::m_rxPacketTraceEnb),
+@@ -2020,6 +2042,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
  {
      NS_LOG_FUNCTION(this << " state: " << m_state);
  
@@ -2697,7 +2767,7 @@ index d5d45551..9a5f3c8e 100644
      switch (m_state)
      {
      case RX_DATA:
-@@ -2387,6 +2404,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2387,6 +2426,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
              DynamicCast<NrSpectrumSignalParametersSlCtrlFrame>(
                  m_slRxSigParamInfo.at(paramIndex).params);
          Ptr<Packet> packet = ctrlParams->packetBurst->GetPackets().front();
@@ -2718,7 +2788,35 @@ index d5d45551..9a5f3c8e 100644
          if (!corrupt)
          {
              error = false; // at least one control packet is OK
-@@ -2569,6 +2600,21 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2554,6 +2607,27 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+         }
+     }
+ 
++    // TS 38.321 5.22.2.2: a retransmission of a TB this UE already decoded is
++    // ACKed when its SCI-2A enables HARQ feedback (off by default: 5G-LENA
++    // sends no feedback for it)
++    auto ackPrevDecoded = [this, &ueRx](uint16_t txRnti, const NrSlSciF2aHeader& sci) {
++        if (!m_slAckPrevDecodedTb || !sci.GetHarqFbIndicator() ||
++            m_phySlHarqFeedbackCallback.IsNull())
++        {
++            return;
++        }
++        SlHarqInfo slHarqInfo;
++        slHarqInfo.m_txRnti = txRnti;
++        slHarqInfo.m_rnti = ueRx->GetPhy(GetBwpId())->GetRnti();
++        slHarqInfo.m_dstL2Id = sci.GetDstId();
++        slHarqInfo.m_harqProcessId = sci.GetHarqId();
++        slHarqInfo.m_bwpIndex = GetBwpId();
++        slHarqInfo.m_helperRnti =
++            sci.GetCoopInfo().relayedFromRnti == 0 ? sci.GetCoopInfo().helperId : 0;
++        slHarqInfo.m_harqStatus = SlHarqInfo::ACK;
++        m_phySlHarqFeedbackCallback(slHarqInfo);
++    };
++
+     // Compute the error and check for collision for each expected TB
+     for (auto& tbIt : m_slTransportBlocks)
+     {
+@@ -2569,6 +2643,21 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          Ptr<Packet> sci2Pkt = RetrieveSci2FromPktBurst(tbIt.second.m_pktIndex);
          NrSlSciF2aHeader sciF2a;
          sci2Pkt->PeekHeader(sciF2a);
@@ -2740,7 +2838,7 @@ index d5d45551..9a5f3c8e 100644
  
          bool sciF2aCorrupted = false;
          bool rbCollided =
-@@ -2612,7 +2658,7 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2612,7 +2701,7 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              tbIt.second.m_outputEmForSci2 = m_slErrorModel->GetTbDecodificationStats(
                  tbIt.second.m_sinrPerceived,
                  tbIt.second.m_expected.m_rbBitmap,
@@ -2749,7 +2847,20 @@ index d5d45551..9a5f3c8e 100644
                  Sci2Mcs,
                  NrErrorModel::NrErrorModelHistory());
              // check the decodification of SCI stage 2 with a random probability
-@@ -2671,11 +2717,11 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2629,6 +2718,12 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+                 m_slSci2aDecodeFailures++;
+                 // If SCI stage 2 is corrupted, data is also corrupted.
+                 tbIt.second.m_isCorrupted = true;
++                if (m_slAckPrevDecodedTb)
++                {
++                    // the missed SCI-2A may carry a new TB (NDI): forget the previous TB
++                    // of this HARQ process so a later retransmission is not ACKed as held
++                    m_harqPhyModule->RemovePrevDecoded(harqRnti, sciF2a.GetHarqId());
++                }
+ 
+                 // Trace
+                 SlRxDataPacketTraceParams traceParams;
+@@ -2671,32 +2766,39 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  NS_LOG_DEBUG("RemovePrevDecoded: " << +sciF2a.GetHarqId()
                                                     << " for the packets received from RNTI "
                                                     << tbIt.first << " rv " << +sciF2a.GetRv());
@@ -2763,7 +2874,20 @@ index d5d45551..9a5f3c8e 100644
              {
                  NS_LOG_DEBUG(
                      "Do not dispatch already decoded TB; may be blind retx: " << tbIt.first);
-@@ -2689,14 +2735,14 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
++                ackPrevDecoded(tbIt.first, sciF2a);
+                 continue;
+             }
+ 
+             NS_LOG_DEBUG("Trying to decode the PSSCH TB from RNTI : " << tbIt.first);
++            if (!m_slSoftCombining || (!m_slBlindSoftCombining && !sciF2a.GetHarqFbIndicator()))
++            {
++                // blind (HARQ feedback disabled) copies decoded independently: no
++                // soft combining with earlier copies of the TB
++                m_harqPhyModule->ResetSlDataHarqProcessStatus(harqRnti, sciF2a.GetHarqId());
++            }
+             // Since we do not rely on RV to track the number of transmissions,
+             // before decoding the data, erase the HARQ history of a TB
+             // which was not decoded and received from the same rnti and HARQ
              // process
              //  retrieve HARQ info
              const NrErrorModel::NrErrorModelHistory& harqInfoList =
@@ -2781,7 +2905,7 @@ index d5d45551..9a5f3c8e 100644
              }
              tbIt.second.m_outputEmForData =
                  m_slErrorModel->GetTbDecodificationStats(tbIt.second.m_sinrPerceived,
-@@ -2728,23 +2774,47 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2728,23 +2830,47 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                                        << tbIt.second.m_outputEmForData->m_tbler << " data corrupt "
                                        << tbIt.second.m_isCorrupted);
                      tbIt.second.m_isCorrupted = false;
@@ -2832,7 +2956,7 @@ index d5d45551..9a5f3c8e 100644
                                                                     sciF2a.GetHarqId(),
                                                                     tbIt.second.m_outputEmForData);
                  }
-@@ -2769,11 +2839,11 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2769,12 +2895,13 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  NS_LOG_DEBUG("RemovePrevDecoded: " << +sciF2a.GetHarqId()
                                                     << " for the packets received from RNTI "
                                                     << tbIt.first << " rv " << +sciF2a.GetRv());
@@ -2844,9 +2968,11 @@ index d5d45551..9a5f3c8e 100644
 -            if (m_harqPhyModule->IsPrevDecoded(tbIt.first, sciF2a.GetHarqId()))
 +            if (m_harqPhyModule->IsPrevDecoded(harqRnti, sciF2a.GetHarqId()))
              {
++                ackPrevDecoded(tbIt.first, sciF2a);
                  continue;
              }
-@@ -2858,6 +2928,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+ 
+@@ -2858,6 +2985,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              slHarqInfo.m_dstL2Id = sciF2a.GetDstId();
              slHarqInfo.m_harqProcessId = sciF2a.GetHarqId();
              slHarqInfo.m_bwpIndex = GetBwpId();
@@ -2857,6 +2983,23 @@ index d5d45551..9a5f3c8e 100644
              if (GetTBInfo(tbIt).m_isCorrupted || GetTBInfo(tbIt).m_isSci2Corrupted)
              {
                  NS_LOG_DEBUG("Sending NACK HARQ feedback to SlHarqFeedback callback");
+diff --git a/model/nr-spectrum-phy.h b/model/nr-spectrum-phy.h
+index aa3abafd..36acb669 100644
+--- a/model/nr-spectrum-phy.h
++++ b/model/nr-spectrum-phy.h
+@@ -996,6 +996,12 @@ class NrSpectrumPhy : public SpectrumPhy
+         m_slRxSigParamInfo; //!< NR Sidelink received signal parameter info
+     bool m_dropTbOnRbCollisionEnabled{
+         false}; //!< when true, drop all receptions on colliding RBs regardless SINR value.
++    bool m_slAckPrevDecodedTb{false}; //!< when true, a retransmission of an already decoded
++                                      //!< TB with HARQ feedback enabled is ACKed (TS 38.321
++                                      //!< 5.22.2.2); false keeps it silent (5G-LENA default)
++    bool m_slSoftCombining{true};      //!< soft-combine every retransmission (HARQ-IR)
++    bool m_slBlindSoftCombining{true}; //!< soft-combine copies sent with HARQ feedback
++                                       //!< disabled; false decodes each copy on its own
+     bool m_slDataErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink DATA is
+                                           //!< enabled, by default is enabled
+     bool m_slCtrlErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink CTRL is
 diff --git a/model/nr-ue-phy.cc b/model/nr-ue-phy.cc
 index f52d7df8..ce7cd1ee 100644
 --- a/model/nr-ue-phy.cc

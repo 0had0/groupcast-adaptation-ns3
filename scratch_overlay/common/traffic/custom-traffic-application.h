@@ -114,6 +114,7 @@ class CustomTrafficApplication : public Application
     uint32_t m_periodic1StartIndex;
     uint64_t m_maxBytes;
     uint32_t m_aperiodic1MaxSize; //!< largest aperiodic1 packet (Aperiodic1MaxSize)
+    uint32_t m_fixedSize;         //!< if > 0, the size of every packet (FixedSize)
     uint64_t m_totBytes;
     EventId m_sendEvent;
     TypeId m_tid;

@@ -1293,9 +1293,19 @@ OnSpsMisfit(uint32_t node,
 //                   1400-2000 B take 3 TBs). Same arrival process.
 // The check at start-up (OneTbGuard) and the per-packet check at the end of the run make
 // "one packet = one TB" an assertion, not an assumption.
+// Fixed-size one-TB classes: the base class's arrival process, every packet the same size
+// (an SB-SPS grant sized on one packet then fits every later one: no misfit, no backlog).
+//   periodic1fx  = periodic1 arrivals, 300 B;  periodic2fx  = periodic2 arrivals, 1200 B;
+//   aperiodic1fx = aperiodic1 arrivals, 1200 B
 const std::map<std::string, std::string> kOneTbBase = {{"periodic1tb", "periodic1"},
                                                        {"periodic2tb", "periodic2"},
-                                                       {"aperiodic1tb", "aperiodic1"}};
+                                                       {"aperiodic1tb", "aperiodic1"},
+                                                       {"periodic1fx", "periodic1"},
+                                                       {"periodic2fx", "periodic2"},
+                                                       {"aperiodic1fx", "aperiodic1"}};
+const std::map<std::string, uint32_t> kFixedSize = {{"periodic1fx", 300},
+                                                    {"periodic2fx", 1200},
+                                                    {"aperiodic1fx", 1200}};
 constexpr uint32_t kAperiodic1TbMaxSize = 1200;
 // bytes a leader packet adds on its way to the TB: UDP 8 + IPv4 20 + PDCP 2 + RLC UM
 // header estimate 2 (the RLC buffer status) + SCI-2A 5 (NrSlCoopScheduler sizing)
@@ -1321,6 +1331,10 @@ MaxLeaderPayload(const std::string& traffic)
     if (traffic == "aperiodic1tb")
     {
         return kAperiodic1TbMaxSize;
+    }
+    if (kFixedSize.count(traffic))
+    {
+        return kFixedSize.at(traffic);
     }
     const std::string base = BaseTraffic(traffic);
     if (base == "periodic1")
@@ -1429,6 +1443,13 @@ main(int argc, char* argv[])
     //   map     max-mean GPRR, link state from the building map + CAM positions
     std::string helperSelect = "off";
     bool helperBlind = false;       // relay in every handed-over slot (no NACK needed)
+    bool reAckDecoded = true;       // receivers ACK retransmissions of a TB they already hold
+    bool psfchExactAttribution = true; // bind each PSFCH to its own transmission only
+    bool blindSoftCombining = false; // blind copies (feedback off) are combined at the RX
+    bool opt1HelperNack = true;      // Option 1: helper NACK on its own resource -> reclaim
+    bool helperTakeover = true;      // R5 / R6: helper NACK / silence lets the leader take over
+    bool leaderFallback = true;      // R5 / R6: leader retransmits if the helper stays silent
+    bool softCombining = true;       // HARQ-IR at the receivers (false: ablation)
     double camPeriodMs = 100.0;     // CAM period: positions known to the leader
     double helperDecisionMs = 0.0;  // positions usable only this long after sampling
     bool helperSelectShadow = false;// compute + log the choice, signal --helper instead
@@ -1516,6 +1537,35 @@ main(int argc, char* argv[])
                  helperSelect);
     cmd.AddValue("helperBlind", "the helper relays in every handed-over slot (no NACK needed)",
                  helperBlind);
+    cmd.AddValue("reAckDecoded",
+                 "a receiver ACKs a retransmission of a TB it already decoded (TS 38.321 "
+                 "5.22.2.2); false: it stays silent, which Option 2 reads as NACK",
+                 reAckDecoded);
+    cmd.AddValue("psfchExactAttribution",
+                 "the leader binds each PSFCH to the transmission of its PSFCH occasion only; "
+                 "false: to any pending transmission of the HARQ id",
+                 psfchExactAttribution);
+    cmd.AddValue("blindSoftCombining",
+                 "receivers soft-combine the copies of a TB sent with HARQ feedback disabled "
+                 "(R1, R4); false (Kuo's model): each copy is an independent attempt",
+                 blindSoftCombining);
+    cmd.AddValue("opt1HelperNack",
+                 "Option 1 with a helper (R5): the helper NACKs on a dedicated PSFCH resource "
+                 "and the leader takes back the next handed-over slot, as in Option 2",
+                 opt1HelperNack);
+    cmd.AddValue("helperTakeover",
+                 "R5 / R6: the named helper's NACK (Option 2 silent on success) lets the leader "
+                 "take back a handed slot; false: the helper is a plain member (R4.1 / R4.2)",
+                 helperTakeover);
+    cmd.AddValue("leaderFallback",
+                 "R5 / R6: after a NACK decision the leader listens in the helper's next handed "
+                 "slot and, if no SCI of the helper is decoded there, retransmits in the "
+                 "following handed slot",
+                 leaderFallback);
+    cmd.AddValue("softCombining",
+                 "receivers soft-combine (HARQ-IR) retransmissions; false: every copy is an "
+                 "independent attempt (ablation of the HARQ-IR gain)",
+                 softCombining);
     cmd.AddValue("camPeriodMs", "CAM period (ms): member positions known to the leader",
                  camPeriodMs);
     cmd.AddValue("helperDecisionMs",
@@ -1570,7 +1620,7 @@ main(int argc, char* argv[])
                  "_sel.csv); needs --helper",
                  hiddenNode);
     cmd.AddValue("harqMode", "leader HARQ feedback mode: blind | opt1 | opt2", harqMode);
-    cmd.AddValue("retx", "retransmission strategy R1..R6", retx);
+    cmd.AddValue("retx", "retransmission strategy R1..R6, R4.1, R4.2", retx);
     cmd.AddValue("helperSched", "helper scheduling S1 | S2 | S3", helperSched);
     cmd.AddValue("aperiodicRri", "RRI (ms) for aperiodic leader SB-SPS (0 = dynamic grant)", aperiodicRri);
     cmd.AddValue("bgFlowsPerCar", "number of background flows per car (>= 1.0)", bgFlowsPerCar);
@@ -1606,9 +1656,13 @@ main(int argc, char* argv[])
         else if (retx == "R4") { harqMode = "blind"; helperBlind = true; }
         else if (retx == "R5") { harqMode = "opt1"; helperBlind = false; }
         else if (retx == "R6") { harqMode = "opt2"; helperBlind = false; }
-        else { NS_ABORT_MSG("invalid --retx=" << retx << ", must be R1..R6"); }
+        // R4.1 / R4.2: Kuo helper relaying with HARQ Option 1 / 2 at the members, without
+        // the helper takeover of R5 / R6 (the helper is a plain member for the leader)
+        else if (retx == "R4.1") { harqMode = "opt1"; helperBlind = false; helperTakeover = false; }
+        else if (retx == "R4.2") { harqMode = "opt2"; helperBlind = false; helperTakeover = false; }
+        else { NS_ABORT_MSG("invalid --retx=" << retx << ", must be R1..R6, R4.1, R4.2"); }
 
-        if (retx == "R4" || retx == "R5" || retx == "R6")
+        if (retx == "R4" || retx == "R5" || retx == "R6" || retx == "R4.1" || retx == "R4.2")
         {
             NS_ABORT_MSG_IF(helperSched.empty(), "--retx=" << retx << " requires --helperSched=S1|S2|S3");
             if (helperSched == "S1") { helperMode = "leaderRes"; }
@@ -1648,6 +1702,12 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSlUeMac::SpsReselectOnMisfit", BooleanValue(spsReselectOnMisfit));
     Config::SetDefault("ns3::NrSlUeMac::SlDynExclusion", BooleanValue(slDynExclusion));
     Config::SetDefault("ns3::NrSlUeMac::SlProjectAnnounced", BooleanValue(slProjectAnnounced));
+    // only Option 2 uses member ACKs (blind: no feedback; Option 1: the gate drops ACKs)
+    Config::SetDefault("ns3::NrSpectrumPhy::SlAckPrevDecodedTb",
+                       BooleanValue(reAckDecoded && harqMode == "opt2"));
+    Config::SetDefault("ns3::NrSpectrumPhy::SlBlindSoftCombining",
+                       BooleanValue(blindSoftCombining));
+    Config::SetDefault("ns3::NrSpectrumPhy::SlSoftCombining", BooleanValue(softCombining));
     // the leader's flow is on SPS only for periodic traffic or aperiodic with aperiodicRri (TrafficFlowKeys)
     const bool leaderSpsCfg = leaderSps && (BaseTraffic(traffic).rfind("periodic", 0) == 0 ||
                                             (BaseTraffic(traffic) == "aperiodic1" && aperiodicRri > 0));
@@ -1970,6 +2030,15 @@ main(int argc, char* argv[])
                                         << nApps);
         Config::Set(app + "/Aperiodic1MaxSize", UintegerValue(kAperiodic1TbMaxSize));
     }
+    if (kFixedSize.count(traffic))
+    {
+        // the leader's application only; background keeps the base class sizes
+        const std::string app = "/NodeList/0/ApplicationList/*/$ns3::CustomTrafficApplication";
+        const uint32_t nApps = Config::LookupMatches(app).GetN();
+        NS_ABORT_MSG_IF(nApps != 1, traffic << ": expected 1 leader CustomTrafficApplication, found "
+                                            << nApps);
+        Config::Set(app + "/FixedSize", UintegerValue(kFixedSize.at(traffic)));
+    }
 
     // -----------------------------------------------------------------------
     // HARQ controller + traces
@@ -1984,7 +2053,7 @@ main(int argc, char* argv[])
     // Option 2 at the receivers: stock ACK / NACK, except that a member named as the TB's
     // helper never ACKs (it listens; PLAN.md R6). Pass-through when no helper is named.
     std::shared_ptr<uint64_t> helperAckSuppressed = std::make_shared<uint64_t>(0);
-    if (harqMode == "opt2")
+    if (harqMode == "opt2" && helperTakeover)
     {
         helperAckSuppressed = InstallOption2HelperSilence(memberDevs, MakeCallback(&OnFeedbackSent));
     }
@@ -1994,6 +2063,10 @@ main(int argc, char* argv[])
     else if (harqMode == "opt2") hMode = NackOnlyHarqController::HarqMode::OPT2;
     ctl.Install(leaderDev, memberDevs, 254, hMode, psfchPeriod ? 3 : 0);
     ctl.SetSpsSafeAck(leaderSpsCfg);
+    ctl.SetExactPsfchAttribution(psfchExactAttribution);
+    ctl.SetHelperTakeover(helperTakeover);
+    ctl.SetOpt1HelperNack(opt1HelperNack && helperTakeover && coop && !helperBlind);
+    ctl.SetLeaderFallback(leaderFallback && helperTakeover && coop && !helperBlind);
     ctl.SetFeedbackCallback(MakeCallback(&HelperSelector::OnFeedback, &hsel));
 
     uint8_t helperFbMode = 0;
@@ -2050,6 +2123,7 @@ main(int argc, char* argv[])
                 }
             }
             hctl.Install(helperDev, others, 254, false, 3);
+            hctl.SetExactPsfchAttribution(psfchExactAttribution);
             g.side[1].ctl = &hctl;
             g.side[1].node = helper;
             g.numSides = 2;
@@ -3308,7 +3382,7 @@ main(int argc, char* argv[])
         const auto& txs = g.side[sideIdx].ctl->Txs();
         std::ofstream lt(fname);
         lt << "t,slot_abs,rb_start,rb_len,harq_id,ndi,rv,tx_in_tb,n_seq,n_nack,decision,"
-              "n_coll,nearest_collider_m,n_nack_sent\n";
+              "n_coll,nearest_collider_m,n_nack_sent,origin\n";
         for (size_t i = 0; i < txs.size(); ++i)
         {
             const LeaderTx& x = txs[i];
@@ -3317,7 +3391,8 @@ main(int argc, char* argv[])
                << x.rbStart << ',' << x.rbLen << ',' << +x.harqId << ',' << +x.ndi << ','
                << +x.rv << ',' << +x.txInTb << ',' << x.seqs.size() << ',' << +x.nNack << ','
                << +x.decision << ',' << nColl[u] << ',' << std::setprecision(1)
-               << nearestCollider[u] << ',' << (u < utx.size() ? nNackSent[u] : 0) << '\n';
+               << nearestCollider[u] << ',' << (u < utx.size() ? nNackSent[u] : 0) << ','
+               << +x.origin << '\n';
         }
     };
     if (writePkt)
@@ -3829,7 +3904,9 @@ main(int argc, char* argv[])
               "helper_nack_no_slot,helper_sci_missed,helper_sci_missed_rate,"
               "helper_sci_missed_tb,helper_sci_missed_unserved,helper_ack_suppressed,"
               "helper_ack_rx,relay_after_allack,hstat_rule,hstat_tie_m,hstat_cand_max_fail,"
-              "kuo_objective,pos_err_m\n";
+              "kuo_objective,pos_err_m,reack_decoded,psfch_exact_attr,fb_late,helper_nack_stale,"
+              "blind_soft_combining,opt1_helper_nack,leader_fixed_size,helper_takeover,leader_fallback,"
+              "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -3986,7 +4063,9 @@ main(int argc, char* argv[])
             double resUsedHelper = 0.0;
             for (const AnyTx& o : g.allTx)
             {
-                if (o.slotAbs >= std::llround(kpiStart / g.tSlot) && o.slotAbs < std::llround(kpiEnd / g.tSlot) && o.node == helper)
+                // relayed copies of any member: the per-TB helper is not --helper, and
+                // helper-less arms have none (members transmit nothing else)
+                if (o.slotAbs >= std::llround(kpiStart / g.tSlot) && o.slotAbs < std::llround(kpiEnd / g.tSlot) && o.node >= 1 && o.node <= numMembers)
                 {
                     resUsedHelper += static_cast<double>(o.rbLen) / subchPrbs;
                 }
@@ -4053,7 +4132,13 @@ main(int argc, char* argv[])
                << hSciMissedTbs.size() << ',' << hSciMissedUnserved << ','
                << *helperAckSuppressed << ',' << ctl.nHelperAck << ',' << relayAfterAllAck << ','
                << hstatRule << ',' << hstatTieM << ',' << hstatCandMaxFail << ',' << kuoObjective
-               << ',' << posErrM << '\n';
+               << ',' << posErrM << ',' << reAckDecoded << ',' << psfchExactAttribution << ','
+               << ctl.nFbLate << ',' << ctl.nHelperNackStale << ',' << blindSoftCombining << ','
+               << (opt1HelperNack && helperTakeover && coop && !helperBlind && harqMode == "opt1") << ','
+               << (kFixedSize.count(traffic) ? kFixedSize.at(traffic) : 0) << ','
+               << helperTakeover << ',' << (leaderFallback && helperTakeover && coop && !helperBlind)
+               << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
+               << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << '\n';
         }
     }
 
