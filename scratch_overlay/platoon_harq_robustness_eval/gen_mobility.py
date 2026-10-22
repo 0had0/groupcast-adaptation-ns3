@@ -365,6 +365,8 @@ RBT_BG_LC_MODE = 0b11000000101   # SUMO default 1621 minus speed-gain (16) and k
 
 
 def run_roundabout(a):
+    global RBT_EXIT_EDGE, RBT_ROUTE
+    RBT_EXIT_EDGE, RBT_ROUTE = f"{a.rbt_exit}_out", f"N2{a.rbt_exit}"
     net_dir = HERE / "sumo" / "roundabout"
     net_path = net_dir / "roundabout.net.xml"
     rou_path = net_dir / "roundabout.rou.xml"
@@ -603,7 +605,7 @@ def run_roundabout(a):
         "bg_in_area_min": min(n_in_samples) if n_in_samples else 0,
         "bg_in_area_max": max(n_in_samples) if n_in_samples else 0,
         "t_end": round(t_rel, 3), "kpi_start": a.warmup, "dt": a.dt, "seed": a.seed,
-        "route": "N_in(lane0) -> ring -> W_out(lane0)",
+        "route": f"N_in(lane0) -> ring -> {RBT_EXIT_EDGE}(lane0)",
         "leader_start_to_giveway_m": round(d_start, 1),
         "leader_mean_speed_mps": round(sum(leader_speeds) / len(leader_speeds), 2),
         "leader_min_speed_mps": round(min(leader_speeds), 2),
@@ -636,6 +638,8 @@ def main():
                     help="leader distance to the give-way line at the start of the KPI window")
     ap.add_argument("--rbt-exit-margin", type=float, default=100.0,
                     help="the run ends when the tail is this far past the W_out start")
+    ap.add_argument("--rbt-exit", choices=["W", "S", "E"], default="W",
+                    help="platoon exit from N_in: W = 1/4 of the ring (default), S = 1/2, E = 3/4")
     ap.add_argument("--rbt-max-time", type=float, default=400.0)
     a = ap.parse_args()
 

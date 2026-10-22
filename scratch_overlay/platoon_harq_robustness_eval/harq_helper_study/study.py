@@ -6,7 +6,7 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
   R4   Kuo helper, blind (Kuo's scheme)                  R4.1 / R4.2  Kuo helper, HARQ Opt 1 / 2, no takeover
   R5 / R6  Kuo helper, HARQ Opt 1 / 2, helper NACK takeover + leader fallback (G08)
   *_noIR   R2, R3, R4.1, R4.2 with --softCombining=false (HARQ-IR ablation)
-Cells: {highway, roundabout} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
+Cells: {highway, roundabout (N->W, 1/4 ring), roundaboutE (N->E, 3/4 ring; full profile)} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
 
 Usage:
   study.py run   --profile smoke|local1|full [--jobs N] [--seeds 1-5] [--out DIR]
@@ -60,10 +60,54 @@ def profile_spec(profile, seeds_arg=None):
                     tmax=lambda sc, bg: (20.0 if bg != 'none' else (53.0 if sc == 'highway' else 0.0)))
     if profile == 'full':
         seeds = parse_seeds(seeds_arg or '1-5')
-        return dict(scen=['highway', 'roundabout'], bgs=['none', 'moderate'],
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=['none', 'moderate'],
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=seeds,
-                    tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0)
+                    tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0,
+                    rbt_curve=True)   # roundabout KPI window = the curve only (curve_window)
     raise SystemExit('unknown profile ' + profile)
+
+
+CURVE_MARGIN = 1.0   # s kept before the first / after the last bent link
+TAIL_GUARD = 0.3     # simulator --tailGuard default: kpiEnd = maxTime - tailGuard
+_CURVE = {}
+
+
+def curve_window(trace, gap=35.0, tol=0.5, members=8):
+    """(kpiStart, maxTime) covering the roundabout curve only: from the first sample where
+    any leader-member link bends (straight distance < arc gap member * gap - tol, i.e. the
+    leader enters the ring) to the last one (the tail leaves the curve), +/- CURVE_MARGIN."""
+    if trace not in _CURVE:
+        first = last = None
+        with gzip.open(trace, 'rt') as f:
+            pos = {}
+            for line in f:
+                if not line[:1].isdigit():
+                    continue
+                t, n, x, y = line.split(',')[:4]
+                n = int(n)
+                if n > members:
+                    continue
+                t = float(t)
+                pos.setdefault(t, {})[n] = (float(x), float(y))
+        for t in sorted(pos):
+            p = pos[t]
+            if len(p) <= members or 0 not in p:
+                continue
+            x0, y0 = p[0]
+            if any(((p[m][0] - x0) ** 2 + (p[m][1] - y0) ** 2) ** .5 < m * gap - tol
+                   for m in range(1, members + 1)):
+                first = t if first is None else first
+                last = t
+        if first is None:
+            raise SystemExit(f'no curve in {trace}')
+        _CURVE[trace] = (round(max(first - CURVE_MARGIN, 3.0), 1),
+                         round(last + CURVE_MARGIN + TAIL_GUARD, 1))
+    return _CURVE[trace]
+
+
+# study scenario -> (trace / tag prefix, simulator --scenario)
+SCEN = {'highway': ('hwy', 'highway'), 'roundabout': ('rbt', 'roundabout'),
+        'roundaboutE': ('rbtE', 'roundabout')}   # rbtE traces: gen_mobility.py --rbt-exit E
 
 
 def parse_seeds(s):
@@ -83,18 +127,21 @@ def plan(profile, seeds_arg=None, only=None):
             for bg in spec['bgs']:
                 for tr in spec['trafs']:
                     for seed in spec['seeds']:
-                        short = 'hwy' if sc == 'highway' else 'rbt'
+                        short, simsc = SCEN[sc]
                         nbg = bgl[bg][0]
                         trace = os.path.join(EVAL, 'traces', f'{short}_ivd30_n{nbg}_s{seed}.csv.gz')
                         tag = f'{short}_ivd30_{tr}_{bg}_s{seed}'
-                        cmd = [BIN, f'--scenario={sc}', f'--mobility={trace}', f'--traffic={tr}',
+                        cmd = [BIN, f'--scenario={simsc}', f'--mobility={trace}', f'--traffic={tr}',
                                f'--seed={seed}', f'--run={seed}', f'--bgFlowsPerCar={bgl[bg][1]}',
                                '--maxNumTx=3'] + run_retx.BASE_FLAGS + aflags + DIAG
                         if tr == 'aperiodic1tb':
                             cmd.append('--aperiodicRri=20')
-                        if sc == 'roundabout':
+                        if simsc == 'roundabout':
                             cmd.append(f'--sumoNet={EVAL}/sumo/roundabout/roundabout.net.xml')
                         t = spec['tmax'](sc, bg)
+                        if simsc == 'roundabout' and spec.get('rbt_curve') and os.path.exists(trace):
+                            k0, t = curve_window(trace)
+                            cmd.append(f'--kpiStart={k0}')
                         if t > 0:
                             cmd.append(f'--maxTime={t}')
                         runs.append(dict(arm=arm, scenario=sc, bg=bg, traffic=tr, seed=seed, tag=tag,

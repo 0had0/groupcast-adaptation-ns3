@@ -67,3 +67,9 @@ New `_run.csv` columns: `reack_decoded, psfch_exact_attr, fb_late, helper_nack_s
 ## Next steps
 1. Remote full run, then the notebook `STUDY_RESULTS_full.ipynb`; copy back `out/full/*_run.csv`, `_member.csv` and the notebook.
 2. Optional: fix F33 (window too short for 3 HARQ transmissions) and F23 properly (remaining PDB measured from packet generation).
+
+## 2026-10-22: roundabout = curve only
+`full` profile roundabout runs use a per-seed KPI window from the trace (`study.curve_window`): first sample where any leader-member link bends (leader enters the ring) to the last one (tail leaves the curve), +/- 1 s; `--kpiStart` and `--maxTime` set accordingly (e.g. n60 s1: 29.2-58.5 s). Straight approach/exit excluded. Restart on the remote: `launch_full.sh --stop`, then `launch_full.sh --no-smoke --seeds ... --jobs ...` (highway runs are skipped as done; roundabout runs re-run since their command changed).
+
+## 2026-10-22: scenario roundaboutE (N -> E exit, 3/4 of the ring)
+`gen_mobility.py --rbt-exit E` (default W unchanged, regenerated W trace is byte-identical). Traces `traces/rbtE_ivd30_n{0,60}_s{1..10}.csv.gz` are generated locally and are git-ignored; launch_full.sh generates the missing ones (needs SUMO) like `gen_mobility.py --scenario roundabout --ivd 30 --nbg N --seed S --rbt-exit E --out traces/rbtE_ivd30_nN_sS.csv.gz`. `full` profile now has highway, roundabout, roundaboutE (240 runs each at 5 seeds); tag prefix `rbtE`, simulator `--scenario=roundabout`, same curve-only KPI window. Check a trace: `render_rbt_trace.py rbtE_ivd30_n60_s1`.

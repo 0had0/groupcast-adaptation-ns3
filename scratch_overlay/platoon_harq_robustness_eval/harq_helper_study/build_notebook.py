@@ -30,7 +30,7 @@ def rd(p):
 
 def cell_of(tag):
     sc, ivd, tr, bg, s = tag.split('_')
-    return dict(scenario={'hwy': 'highway', 'rbt': 'roundabout'}[sc], traffic=tr, bg=bg, seed=int(s[1:]))
+    return dict(scenario={'hwy': 'highway', 'rbt': 'roundabout', 'rbtE': 'roundaboutE'}[sc], traffic=tr, bg=bg, seed=int(s[1:]))
 
 def reserved_subch_slots(gr, k0, k1):
     """Leader reservations announced in SCI-1A over the KPI window [k0, k1) (s): every created grant
@@ -99,7 +99,8 @@ print(f'{len(R)} runs, seeds per cell: {R.groupby(CELLS + ["arm"]).seed.nunique(
 
 DIST = r'''
 def dist_plot(arms, title, metric='prr'):
-    scen, trafs, bgs = ['highway', 'roundabout'], ['periodic1tb', 'aperiodic1tb'], ['none', 'moderate']
+    scen = [s for s in ['highway', 'roundabout', 'roundaboutE'] if s in set(M.scenario)]
+    trafs, bgs = ['periodic1tb', 'aperiodic1tb'], ['none', 'moderate']
     fig, axes = plt.subplots(len(scen) * len(trafs), len(bgs), figsize=(12, 13), sharey=True)
     for i, (sc, tr) in enumerate([(s, t) for s in scen for t in trafs]):
         for j, bg in enumerate(bgs):
