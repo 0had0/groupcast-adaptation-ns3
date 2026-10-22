@@ -19,8 +19,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVAL = os.path.dirname(HERE)                       # scratch_overlay/platoon_harq_robustness_eval
 REPO = os.path.abspath(os.path.join(EVAL, '..', '..'))
-BIN = os.path.join(REPO, 'ns-3-dev', 'build', 'scratch', 'platoon_harq_robustness_eval',
-                   'ns3.42-platoon_harq_robustness_eval-default')
+_BDIR = os.path.join(REPO, 'ns-3-dev', 'build', 'scratch', 'platoon_harq_robustness_eval')
+# STUDY_BIN overrides; otherwise the optimized build if present, else the default build
+BIN = os.environ.get('STUDY_BIN') or next(
+    (os.path.join(_BDIR, f'ns3.42-platoon_harq_robustness_eval-{p}') for p in ('optimized', 'default')
+     if os.path.exists(os.path.join(_BDIR, f'ns3.42-platoon_harq_robustness_eval-{p}'))),
+    os.path.join(_BDIR, 'ns3.42-platoon_harq_robustness_eval-default'))
 sys.path.insert(0, EVAL)
 import run_retx  # noqa: E402  (BASE_FLAGS and background levels of the campaign)
 
@@ -69,7 +73,8 @@ def parse_seeds(s):
     return [int(x) for x in s.split(',')]
 
 
-def plan(profile, seeds_arg=None):
+def plan(profile, seeds_arg=None, only=None):
+    import re
     spec = profile_spec(profile, seeds_arg)
     bgl = run_retx.get_bg_levels()
     runs = []
@@ -94,6 +99,8 @@ def plan(profile, seeds_arg=None):
                             cmd.append(f'--maxTime={t}')
                         runs.append(dict(arm=arm, scenario=sc, bg=bg, traffic=tr, seed=seed, tag=tag,
                                          trace=trace, cmd=cmd))
+    if only:
+        runs = [r for r in runs if re.search(only, f"{r['arm']}/{r['tag']}")]
     return runs
 
 
@@ -138,8 +145,8 @@ def cmd_run(a):
     os.makedirs(outdir, exist_ok=True)
     if not os.path.exists(BIN):
         raise SystemExit('simulator not built: ' + BIN)
-    runs = plan(a.profile, a.seeds)
-    print(f'[{a.profile}] {len(runs)} runs -> {outdir} (jobs {a.jobs})', flush=True)
+    runs = plan(a.profile, a.seeds, a.only)
+    print(f'[{a.profile}] {len(runs)} runs -> {outdir} (jobs {a.jobs}) bin {os.path.basename(BIN)}', flush=True)
     t0 = time.time()
     rows, n = [], 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
@@ -176,7 +183,7 @@ def cmd_check(a):
         if not cond:
             fails.append(msg)
 
-    for r in plan(a.profile, a.seeds):
+    for r in plan(a.profile, a.seeds, a.only):
         pre = os.path.join(outdir, r['arm'], r['tag'])
         name = f"{r['arm']}/{r['tag']}"
         if not (os.path.exists(pre + '_run.csv') or os.path.exists(pre + '_run.csv.gz')):
@@ -230,9 +237,15 @@ def main():
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--only', default=None,
+                    help='regex on "arm/tag", e.g. "^R6/hwy_ivd30_periodic1tb_moderate_s1$"')
+    ap.add_argument('--bin', default=None, help='simulator binary (default: optimized build if present)')
     a = ap.parse_args()
+    if a.bin:
+        global BIN
+        BIN = a.bin
     if a.action == 'list':
-        for r in plan(a.profile, a.seeds):
+        for r in plan(a.profile, a.seeds, a.only):
             print(r['arm'], r['tag'])
         return 0
     return cmd_run(a) if a.action == 'run' else cmd_check(a)

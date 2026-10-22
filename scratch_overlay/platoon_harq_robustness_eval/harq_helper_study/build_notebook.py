@@ -74,6 +74,7 @@ for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
         m = m[m.member != 'all'].copy()
         m['member'] = m.member.astype(int)
         row['prr_pdb'] = m.prr_pdb.mean()
+        row['prr_pdb_worst'] = m.prr_pdb.min()
         for _, x in m.iterrows():
             members.append(dict(arm=arm, **c, member=x.member, dist=x.mean_dist_m, prr=x.prr, prr_pdb=x.prr_pdb))
         # member-packets first delivered by a leader retransmission in a handed slot it took back
@@ -120,7 +121,7 @@ def dist_plot(arms, title, metric='prr'):
 
 SUMMARY = r'''
 agg = R.groupby(CELLS + ['arm']).agg(seeds=('seed', 'nunique'), prr=('prr', 'mean'), prr_worst=('prr_worst', 'mean'),
-        prr_pdb=('prr_pdb', 'mean'), tx_per_pkt=('tx_per_pkt', 'mean'), resv_per_pkt=('resv_per_pkt', 'mean'),
+        prr_pdb=('prr_pdb', 'mean'), prr_pdb_worst=('prr_pdb_worst', 'mean'), tx_per_pkt=('tx_per_pkt', 'mean'), resv_per_pkt=('resv_per_pkt', 'mean'),
         cbr_platoon=('cbr_platoon', 'mean'), cbr_total=('cbr_total', 'mean'), psfch_per_tb=('psfch_per_tb', 'mean')).reset_index()
 main = agg[agg.arm.isin(ORDER)].copy()
 main['arm'] = pd.Categorical(main.arm, ORDER)
@@ -265,8 +266,9 @@ def spectrum_plot(cols, title, ylabel, scale=1.0, prr=False):
             q = agg[(agg.scenario == sc) & (agg.traffic == tr) & (agg.bg == bg)].set_index('arm').reindex(d.index)
             ax2 = ax.twinx()
             x = np.arange(len(d))
-            ax2.plot(x, q.prr, 'k-o', ms=4, lw=1.2, label='PRR group (mean)')
-            ax2.plot(x, q.prr_worst, 'k--^', ms=4, lw=1.2, mfc='white', label='PRR worst member')
+            pm, pw, tag = (q.prr_pdb, q.prr_pdb_worst, 'PRR within PDB') if prr == 'pdb' else (q.prr, q.prr_worst, 'PRR')
+            ax2.plot(x, pm, 'k-o', ms=4, lw=1.2, label=f'{tag} group (mean)')
+            ax2.plot(x, pw, 'k--^', ms=4, lw=1.2, mfc='white', label=f'{tag} worst member')
             ax2.set_ylim(0, 1.05)
             ax2.tick_params(labelsize=8)
             if (sc, tr, bg) == tuple(cells[-1]) or ax in axes[:, -1]:
@@ -282,6 +284,146 @@ def spectrum_plot(cols, title, ylabel, scale=1.0, prr=False):
     fig.legend(h, l, loc='upper center', ncol=min(len(h), 9), fontsize=8, bbox_to_anchor=(0.5, 1.02))
     fig.suptitle(title, y=1.06); fig.tight_layout(); plt.show()
 '''
+
+
+LATENCY = r'''
+# Latency and PIR per member, from _pkt.csv (one row per packet x member, KPI window).
+#  latency = first reception at the member - application send time (includes the wait for the
+#            reservation, every failed attempt, HARQ / helper / takeover round trips).
+#  attempt = n_att_fail + 1 of a delivered packet: the transmission that delivered it, counting the
+#            leader's initial, its retransmissions, helper copies and takeovers (>= 4 possible with a helper).
+#  PIR     = gap between consecutive receptions at a member, receptions sorted by time; a lost packet
+#            widens the gap, a retransmission-delivered packet arrives later (and may overtake none:
+#            receptions are sorted, so out-of-order delivery is handled).
+PDB_MS = {'periodic1tb': 100.0, 'aperiodic1tb': 50.0}
+lat_rows, att_rows = [], []
+for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
+    arm = os.path.basename(armdir.rstrip('/'))
+    for p in sorted(glob.glob(armdir + '*_pkt.csv*')):
+        tag = os.path.basename(p).split('_pkt.csv')[0]
+        cc = cell_of(tag)
+        d = rd(os.path.join(armdir, tag) + '_pkt.csv')
+        rx = d[d.rx == 1].copy()
+        rx['t_rx'] = rx.t_tx + rx.delay_ms / 1e3
+        rx['attempt'] = (rx.n_att_fail + 1).clip(upper=4)
+        per = []
+        for m, g in rx.groupby('member'):
+            g = g.sort_values('t_rx')
+            pir = np.diff(g.t_rx.values) * 1e3
+            per.append(dict(member=m, lat_mean=g.delay_ms.mean(), lat_p95=g.delay_ms.quantile(.95),
+                            pir_mean=pir.mean() if len(pir) else np.nan,
+                            pir_p95=np.quantile(pir, .95) if len(pir) else np.nan,
+                            pir_max=pir.max() if len(pir) else np.nan))
+        per = pd.DataFrame(per)
+        lat_rows.append(dict(arm=arm, **cc,
+            lat_group=rx.delay_ms.mean(), lat_p95_group=rx.delay_ms.quantile(.95),
+            lat_worst=per.lat_mean.max(), lat_p95_worst=per.lat_p95.max(),
+            late_share=(rx.delay_ms > PDB_MS.get(cc['traffic'], 1e9)).mean(),
+            pir_group=per.pir_mean.mean(), pir_worst=per.pir_mean.max(),
+            pir_p95_worst=per.pir_p95.max(), pir_max=per.pir_max.max()))
+        for k, n in rx.attempt.value_counts().items():
+            att_rows.append(dict(arm=arm, **cc, attempt=int(k), share=n / len(rx)))
+LAT = pd.DataFrame(lat_rows).groupby(CELLS + ['arm']).mean(numeric_only=True).drop(columns='seed').reset_index()
+ATT = pd.DataFrame(att_rows).groupby(CELLS + ['arm', 'attempt']).share.mean().unstack(fill_value=0).reset_index()
+
+def cell_grid(fn, title):
+    cells = LAT[CELLS].drop_duplicates().sort_values(CELLS).values.tolist()
+    fig, axes = plt.subplots(2, 4, figsize=(17, 8))
+    for ax, (sc, tr, bg) in zip(axes.flat, cells):
+        fn(ax, sc, tr, bg)
+        ax.set_title(f'{sc} / {tr} / bg {bg}', fontsize=9)
+        ax.tick_params(axis='x', rotation=45, labelsize=8); ax.grid(axis='y', alpha=.3)
+    h, l = axes.flat[0].get_legend_handles_labels()
+    eh, el = getattr(axes.flat[0], '_extra', ([], []))
+    fig.legend(h + eh, l + el, loc='upper center', ncol=len(h) + len(eh), fontsize=8, bbox_to_anchor=(0.5, 1.02))
+    fig.suptitle(title, y=1.06); fig.tight_layout(); plt.show()
+
+def pick(df, sc, tr, bg):
+    return df[(df.scenario == sc) & (df.traffic == tr) & (df.bg == bg)].set_index('arm').reindex(
+        [a for a in ORDER if a in set(df.arm)])
+
+def lat_panel(ax, sc, tr, bg):
+    d = pick(LAT, sc, tr, bg); x = np.arange(len(d)); w = .38
+    ax.bar(x - w / 2, d.lat_group, w, color='#4c72b0', label='latency, group mean')
+    ax.bar(x + w / 2, d.lat_worst, w, color='#c44e52', label='latency, worst receiver (mean)')
+    ax.plot(x + w / 2, d.lat_p95_worst, 'k_', ms=12, mew=2, label='worst receiver p95')
+    ax.set_xticks(x); ax.set_xticklabels(d.index); ax.set_ylabel('ms')
+    ax2 = ax.twinx(); ax2.plot(x, d.pir_group, 'g-o', ms=4, label='PIR, group mean')
+    ax2.plot(x, d.pir_worst, 'g--^', ms=4, mfc='white', label='PIR, worst receiver')
+    ax2.set_ylabel('PIR (ms)', color='g')
+    ax._extra = ax2.get_legend_handles_labels()
+
+def att_panel(ax, sc, tr, bg):
+    d = pick(ATT, sc, tr, bg); bottom = np.zeros(len(d))
+    for k, col in zip([1, 2, 3, 4], ['#4c72b0', '#55a868', '#dd8452', '#c44e52']):
+        if k in d:
+            ax.bar(d.index, d[k], bottom=bottom, color=col, label=f'delivered at attempt {k}' + ('+' if k == 4 else ''))
+            bottom += d[k].values
+    ax.set_ylim(0, 1); ax.set_ylabel('share of delivered packets')
+'''
+
+AOI = r"""
+# Latency CDF with the PRR as ceiling, and age of information (AoI), per member, KPI window.
+#  CDF: F(t) = P(a sent (packet, member) is received within t ms) over ALL sent pairs: lost packets never
+#       arrive, so the curve saturates at the PRR; F(PDB) is the PRR within the PDB.
+#  AoI: at time tau a member's age = tau - (send time of the freshest packet it has received); an older
+#       packet arriving late does not lower it, a loss lets it grow until the next reception.
+#       Time-average over [first reception, end of the KPI window]; peak AoI = age just before each update.
+TGRID = np.linspace(0, 100, 401)
+cdf_rows, aoi_rows = [], []
+for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
+    arm = os.path.basename(armdir.rstrip('/'))
+    if arm not in ORDER:
+        continue
+    for p in sorted(glob.glob(armdir + '*_pkt.csv*')):
+        tag = os.path.basename(p).split('_pkt.csv')[0]
+        cc = cell_of(tag)
+        pre = os.path.join(armdir, tag)
+        k1 = rd(pre + '_run.csv').iloc[0].kpi_end
+        d = rd(pre + '_pkt.csv')
+        dl = np.where(d.rx == 1, d.delay_ms, np.inf)
+        cdf_all = (dl[:, None] <= TGRID[None, :]).mean(axis=0)
+        worst_m = d.groupby('member').rx.mean().idxmin()
+        w = d.member == worst_m
+        cdf_w = (dl[w.values][:, None] <= TGRID[None, :]).mean(axis=0)
+        cdf_rows.append(dict(arm=arm, **cc, cdf=cdf_all, cdf_worst=cdf_w))
+        per = []
+        for m, g in d[d.rx == 1].groupby('member'):
+            t_rx = (g.t_tx + g.delay_ms / 1e3).values
+            o = np.argsort(t_rx); t_rx, t_gen = t_rx[o], g.t_tx.values[o]
+            fresh = np.maximum.accumulate(t_gen)
+            ts = np.append(t_rx, k1)
+            area = peak = 0.0; peaks = []
+            for i in range(len(t_rx)):
+                a0, a1 = t_rx[i] - fresh[i], ts[i + 1] - fresh[i]
+                area += (a0 + a1) / 2 * (ts[i + 1] - t_rx[i])
+                peaks.append(a1)
+            span = k1 - t_rx[0]
+            per.append(dict(member=m, aoi=1e3 * area / span if span > 0 else np.nan, peak=1e3 * np.mean(peaks)))
+        per = pd.DataFrame(per)
+        aoi_rows.append(dict(arm=arm, **cc, aoi_group=per.aoi.mean(), aoi_worst=per.aoi.max(),
+                             paoi_group=per.peak.mean(), paoi_worst=per.peak.max()))
+CDF = pd.DataFrame(cdf_rows); AOIT = pd.DataFrame(aoi_rows).groupby(CELLS + ['arm']).mean(numeric_only=True).drop(columns='seed').reset_index()
+
+def cdf_panel(which):
+    def f(ax, sc, tr, bg):
+        d = CDF[(CDF.scenario == sc) & (CDF.traffic == tr) & (CDF.bg == bg)]
+        for arm in ORDER:
+            g = d[d.arm == arm]
+            if len(g):
+                col, ls = STYLE[arm]
+                ax.plot(TGRID, np.mean(np.stack(g[which].values), axis=0), ls, color=col, label=LABEL[arm])
+        ax.axvline(PDB_MS[tr], color='k', lw=.8, ls=':')
+        ax.set_xlabel('latency t (ms)'); ax.set_ylabel('P(received within t)'); ax.set_ylim(0, 1.01)
+    return f
+
+def aoi_panel(ax, sc, tr, bg):
+    d = pick(AOIT, sc, tr, bg); x = np.arange(len(d)); w = .38
+    ax.bar(x - w / 2, d.aoi_group, w, color='#4c72b0', label='AoI, group mean')
+    ax.bar(x + w / 2, d.aoi_worst, w, color='#c44e52', label='AoI, worst receiver')
+    ax.plot(x + w / 2, d.paoi_worst, 'k_', ms=12, mew=2, label='peak AoI, worst receiver')
+    ax.set_xticks(x); ax.set_xticklabels(d.index); ax.set_ylabel('ms')
+"""
 
 MD = {
     'intro': """# HARQ x Kuo helper study — results
@@ -307,6 +449,24 @@ Unit: PRB x symbols (PSSCH+PSCCH of a transmission = its PRBs x 9 symbols; one P
 Feedback: Option 1 counts one shared NACK resource per transmission with >= 1 member NACK (the R5 helper NACKs on a dedicated
 resource); Option 2 counts one resource per ACK / NACK (re-ACKs included; Option-2 ACKs are whole-run counts scaled to the KPI window).
 In R4.1 / R4.2 the helper is a plain member, so its feedback is in *members feedback*.""",
+    'lat': """## Latency, PIR and how packets are delivered
+* **Latency**: first reception at a member minus the application send time. It includes the wait for the reserved resource,
+  every failed attempt, and the HARQ / helper / takeover round trips. *Group*: mean over all delivered (packet, member);
+  *worst receiver*: the member with the highest mean latency (its p95 also shown).
+* **PIR** (packet inter-reception): gap between consecutive receptions at a member, receptions sorted by time (a packet
+  delivered by a retransmission can arrive after a later packet's first copy; sorting handles that). A lost packet widens
+  the gap. *Group*: mean over members of each member's mean PIR; *worst*: largest member mean PIR (`pir_max`: longest gap).
+* **Delivered at attempt k**: share of delivered packets decoded at the k-th transmission they received (leader initial,
+  leader retransmissions, helper copies, takeovers; 4+ is possible with a helper).
+* **Gains** below are against the blind counterpart (leader arms vs R1, helper arms vs R4): negative latency change = faster.""",
+    'aoi': """## Latency CDF with the PRR as ceiling, and age of information
+* **Latency CDF**: P(a sent packet reaches a member within t ms), over **all** sent (packet, member) pairs, so dropped packets
+  count (they never arrive): the curve saturates at the PRR, and its value at the PDB (dotted line) is the PRR within the PDB.
+  Second figure: the worst receiver only (lowest PRR member).
+* **Age of information (AoI)**: at each instant, the age of the freshest packet a member holds (now minus its send time).
+  It grows linearly between receptions and drops at each fresher reception; a loss lets it keep growing, a late
+  retransmission adds its latency. Time-averaged per member; *group* = mean over members, *worst* = largest; peak AoI =
+  mean of the age just before each update. Lower is better; it combines latency and loss in one number.""",
     'ir': "## HARQ-IR (soft-combining) gain\nArm with soft combining minus the same arm with every copy decoded independently, on the arms without helper takeover.",
     'take': """## Helper takeover (R5 / R6): helper NACKs, leader fallback, PRR gain
 * `helper_nack`: NACKs of the named helper received by the leader (each lets it retake a handed slot; `helper_reclaim`).
@@ -351,8 +511,36 @@ def build(out, path, profile='local1'):
                                   "'PRB x symbols per packet', prr=True)"))
     c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet in subchannel-slots (bars, left) and PRR (lines, right)', "
                                   "'subchannel-slots per packet', scale=SUBCH_SLOT, prr=True)"))
+    c.append(nbf.v4.new_markdown_cell("Same two figures with **PRR within the PDB** (packets delivered after the PDB count as lost)."))
+    c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet (bars, left) and PRR within PDB (lines, right)', "
+                                  "'PRB x symbols per packet', prr='pdb')"))
+    c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet in subchannel-slots (bars, left) and PRR within PDB (lines, right)', "
+                                  "'subchannel-slots per packet', scale=SUBCH_SLOT, prr='pdb')"))
     c.append(nbf.v4.new_code_cell("SP.assign(total=SP[COMP].sum(axis=1)).round(1)"))
     c.append(nbf.v4.new_code_cell("(SP.set_index(CELLS + ['arm'])[COMP] / SUBCH_SLOT).assign(total=lambda x: x.sum(axis=1)).round(3)"))
+    c.append(nbf.v4.new_markdown_cell(MD['lat']))
+    c.append(nbf.v4.new_code_cell(LATENCY))
+    c.append(nbf.v4.new_code_cell("cell_grid(lat_panel, 'Latency (bars, left) and PIR (lines, right) per method')"))
+    c.append(nbf.v4.new_code_cell("cell_grid(att_panel, 'Which transmission delivered the packet')"))
+    c.append(nbf.v4.new_code_cell(
+        "ref = {'R1': 'R1', 'R2': 'R1', 'R3': 'R1', 'R4': 'R4', 'R4.1': 'R4', 'R4.2': 'R4', 'R5': 'R4', 'R6': 'R4'}\n"
+        "L = LAT[LAT.arm.isin(ORDER)].set_index(CELLS + ['arm'])\n"
+        "G = []\n"
+        "for (sc, tr, bg, arm), r in L.iterrows():\n"
+        "    b = L.loc[(sc, tr, bg, ref[arm])]\n"
+        "    G.append(dict(scenario=sc, traffic=tr, bg=bg, arm=arm, vs=ref[arm],\n"
+        "        d_lat_group_ms=r.lat_group - b.lat_group, d_lat_worst_ms=r.lat_worst - b.lat_worst,\n"
+        "        d_lat_p95_worst_ms=r.lat_p95_worst - b.lat_p95_worst,\n"
+        "        d_pir_group_ms=r.pir_group - b.pir_group, d_pir_worst_ms=r.pir_worst - b.pir_worst))\n"
+        "LG = pd.DataFrame(G)\n"
+        "display(LAT[LAT.arm.isin(ORDER)].round(2))\n"
+        "LG.round(2)"))
+    c.append(nbf.v4.new_markdown_cell(MD['aoi']))
+    c.append(nbf.v4.new_code_cell(AOI))
+    c.append(nbf.v4.new_code_cell("cell_grid(cdf_panel('cdf'), 'Latency CDF over all sent (packet, member): saturates at the group PRR (dotted: PDB)')"))
+    c.append(nbf.v4.new_code_cell("cell_grid(cdf_panel('cdf_worst'), 'Latency CDF of the worst receiver: saturates at its PRR (dotted: PDB)')"))
+    c.append(nbf.v4.new_code_cell("cell_grid(aoi_panel, 'Age of information per method')"))
+    c.append(nbf.v4.new_code_cell("AOIT[AOIT.arm.isin(ORDER)].round(1)"))
     c.append(nbf.v4.new_markdown_cell(MD['ir']))
     c.append(nbf.v4.new_code_cell(IR))
     c.append(nbf.v4.new_markdown_cell(MD['take']))
