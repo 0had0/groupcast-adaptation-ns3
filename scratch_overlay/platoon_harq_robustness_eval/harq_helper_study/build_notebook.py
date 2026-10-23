@@ -18,9 +18,24 @@ ORDER = ['R1', 'R2', 'R3', 'R4', 'R4.1', 'R4.2', 'R5', 'R6']
 LABEL = {'R1': 'R1 leader blind', 'R2': 'R2 leader Opt1', 'R3': 'R3 leader Opt2',
          'R4': 'R4 Kuo blind', 'R4.1': 'R4.1 Kuo+Opt1', 'R4.2': 'R4.2 Kuo+Opt2',
          'R5': 'R5 Kuo+Opt1+takeover', 'R6': 'R6 Kuo+Opt2+takeover'}
-STYLE = {'R1': ('tab:gray', ':'), 'R2': ('tab:blue', ':'), 'R3': ('tab:green', ':'),
-         'R4': ('tab:gray', '--'), 'R4.1': ('tab:blue', '--'), 'R4.2': ('tab:green', '--'),
-         'R5': ('tab:blue', '-'), 'R6': ('tab:green', '-')}
+# one distinct hue per arm (8-slot categorical palette, colour-blind checked), line style + marker
+# per family as secondary encoding: dotted / circle leader only, dashed / square Kuo helper,
+# solid / triangle Kuo helper + takeover
+STYLE = {'R1': ('#2a78d6', ':'), 'R2': ('#eb6834', ':'), 'R3': ('#1baf7a', ':'),
+         'R4': ('#eda100', '--'), 'R4.1': ('#e87ba4', '--'), 'R4.2': ('#008300', '--'),
+         'R5': ('#4a3aa7', '-'), 'R6': ('#e34948', '-')}
+MARK = {':': 'o', '--': 's', '-': '^'}
+
+from scipy import stats
+def ci95(x):
+    """half-width of the 95 %% confidence interval of the mean across seeds (Student t, n-1 dof)"""
+    x = np.asarray(x, float); x = x[~np.isnan(x)]
+    return stats.t.ppf(0.975, len(x) - 1) * x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else np.nan
+
+def mean_ci(df, cols, by):
+    """per group: <col> = mean over seeds, <col>_ci = 95 %% CI half-width"""
+    g = df.groupby(by)[cols]
+    return g.mean().join(g.agg(ci95).add_suffix('_ci')).reset_index()
 
 def rd(p):
     p = p if os.path.exists(p) else p + '.gz'
@@ -108,23 +123,28 @@ def dist_plot(arms, title, metric='prr'):
             ax = axes[i, j]
             d = M[(M.scenario == sc) & (M.traffic == tr) & (M.bg == bg)]
             for arm in arms:
-                g = d[d.arm == arm].groupby('member')[['dist', metric]].mean().sort_values('dist')
+                g = mean_ci(d[d.arm == arm], ['dist', metric], 'member').sort_values('dist')
                 if len(g):
                     col, ls = STYLE[arm.replace('_noIR', '')]
-                    ax.plot(g.dist, g[metric], ls if '_noIR' not in arm else '-.', color=col, marker='o', ms=3,
+                    ax.plot(g.dist, g[metric], ls if '_noIR' not in arm else '-.', color=col, lw=1.6,
+                            marker=MARK[ls], ms=4, mfc='white' if '_noIR' in arm else col,
                             label=LABEL.get(arm, arm))
+                    ax.fill_between(g.dist, g[metric] - g[metric + '_ci'], g[metric] + g[metric + '_ci'],
+                                    color=col, alpha=.12, lw=0)
             ax.set_title(f'{sc} / {tr} / bg {bg}', fontsize=9)
             ax.grid(alpha=.3)
             if j == 0: ax.set_ylabel(metric.upper())
             if i == len(scen) * len(trafs) - 1: ax.set_xlabel('mean distance from the leader (m)')
-    axes[0, 0].legend(fontsize=7, loc='lower left')
-    fig.suptitle(title); fig.tight_layout(); plt.show()
+    h, l = axes[0, 0].get_legend_handles_labels()
+    fig.legend(h, l, loc='upper center', ncol=min(len(h), 4), fontsize=8, bbox_to_anchor=(0.5, 1.0))
+    fig.suptitle(title + '  (shaded: 95 % CI over seeds)', y=1.03); fig.tight_layout(rect=(0, 0, 1, 0.96)); plt.show()
 '''
 
 SUMMARY = r'''
 agg = R.groupby(CELLS + ['arm']).agg(seeds=('seed', 'nunique'), prr=('prr', 'mean'), prr_worst=('prr_worst', 'mean'),
         prr_pdb=('prr_pdb', 'mean'), prr_pdb_worst=('prr_pdb_worst', 'mean'), tx_per_pkt=('tx_per_pkt', 'mean'), resv_per_pkt=('resv_per_pkt', 'mean'),
         cbr_platoon=('cbr_platoon', 'mean'), cbr_total=('cbr_total', 'mean'), psfch_per_tb=('psfch_per_tb', 'mean')).reset_index()
+AGGCI = mean_ci(R, ['prr', 'prr_worst', 'prr_pdb', 'prr_pdb_worst', 'cbr_platoon'], CELLS + ['arm'])
 main = agg[agg.arm.isin(ORDER)].copy()
 main['arm'] = pd.Categorical(main.arm, ORDER)
 main.sort_values(CELLS + ['arm']).round(3)
@@ -161,8 +181,17 @@ for (sc, tr, bg), g in agg.groupby(CELLS):
 IRG = pd.DataFrame(rows)
 display(IRG.round(4))
 if len(IRG):
-    p = IRG.pivot_table(index=['scenario', 'traffic', 'bg'], columns='arm', values='gain_prr')
-    p.plot.bar(figsize=(10, 4), title='HARQ-IR (soft combining) PRR gain: arm minus arm_noIR'); plt.grid(alpha=.3); plt.show()
+    # paired per seed: arm minus arm_noIR in the same seed, mean and 95 % CI over seeds
+    Rp = R.set_index(CELLS + ['seed', 'arm']).prr
+    gr = [dict(scenario=sc, traffic=tr, bg=bg, arm=a, g=v - Rp.get((sc, tr, bg, sd, a + '_noIR'), np.nan))
+          for (sc, tr, bg, sd, a), v in Rp.items() if a in ('R2', 'R3', 'R4.1', 'R4.2')]
+    gc = mean_ci(pd.DataFrame(gr), ['g'], CELLS + ['arm'])
+    arms = [a for a in ['R2', 'R3', 'R4.1', 'R4.2'] if a in set(gc.arm)]
+    p = gc.pivot_table(index=CELLS, columns='arm', values='g')[arms]
+    e = gc.pivot_table(index=CELLS, columns='arm', values='g_ci')[arms]
+    p.plot.bar(yerr=e, capsize=2, figsize=(11, 4), color=[STYLE[a][0] for a in arms], error_kw=dict(lw=.8),
+               title='HARQ-IR (soft combining) PRR gain: arm minus arm_noIR, 95 % CI over seeds (paired)')
+    plt.grid(alpha=.3); plt.show()
 '''
 
 TAKE = r'''
@@ -179,7 +208,11 @@ tk['d_prr_worst_vs_no_takeover'] = [a.prr_worst.get((r.scenario, r.traffic, r.bg
                                     a.prr_worst.get((r.scenario, r.traffic, r.bg, base[r.arm]), np.nan) for r in tk.itertuples()]
 display(tk.round(4))
 x = tk.set_index(CELLS + ['arm'])[['recovered_nack', 'recovered_fallback']]
-x.plot.bar(stacked=True, figsize=(11, 4), title='PRR recovered by the leader takeover (member-packets / packets x members)')
+ax = x.plot.bar(stacked=True, figsize=(11, 4), color=['#2a78d6', '#eb6834'],
+                title='PRR recovered by the leader takeover (member-packets / packets x members), 95 % CI of the total')
+tc = mean_ci(R[R.arm.isin(['R5', 'R6'])].assign(t=lambda r: r.recovered_nack + r.recovered_fallback), ['t'],
+             CELLS + ['arm']).set_index(CELLS + ['arm']).reindex(x.index)
+ax.errorbar(np.arange(len(x)), x.sum(axis=1).values, yerr=tc.t_ci.values, fmt='none', ecolor='k', elinewidth=.8, capsize=2)
 plt.grid(alpha=.3); plt.show()
 '''
 
@@ -245,6 +278,7 @@ for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
         cc = cell_of(tag)
         comp_rows.append(dict(arm=arm, **cc, **{k: v / r.pkts for k, v in c.items()}))
 SP = pd.DataFrame(comp_rows).groupby(CELLS + ['arm'])[COMP].mean().reset_index()
+SPT = mean_ci(pd.DataFrame(comp_rows).assign(total=lambda x: x[COMP].sum(axis=1)), ['total'], CELLS + ['arm'])
 
 SUBCH_SLOT = 10 * PSSCH_SYM  # one subchannel (10 PRB) over the PSSCH symbols of a slot
 
@@ -262,6 +296,10 @@ def spectrum_plot(cols, title, ylabel, scale=1.0, prr=False):
             if comp in cols:
                 ax.bar(d.index, d[comp].fillna(0), bottom=bottom, color=col, label=comp, edgecolor='white', lw=.5)
                 bottom += d[comp].fillna(0).values
+        if set(cols) == set(COMP):   # 95 % CI of the stacked total (all components)
+            e = SPT[(SPT.scenario == sc) & (SPT.traffic == tr) & (SPT.bg == bg)].set_index('arm').reindex(d.index)
+            ax.errorbar(np.arange(len(d)), bottom, yerr=e.total_ci.values / scale, fmt='none', ecolor='k',
+                        elinewidth=.8, capsize=2)
         for i, tot in enumerate(bottom):
             ax.text(i, tot, f'{tot:.0f}' if tot >= 100 else (f'{tot:.1f}' if tot >= 1 else f'{tot:.3f}'),
                     ha='center', va='bottom', fontsize=7)
@@ -270,8 +308,11 @@ def spectrum_plot(cols, title, ylabel, scale=1.0, prr=False):
             ax2 = ax.twinx()
             x = np.arange(len(d))
             pm, pw, tag = (q.prr_pdb, q.prr_pdb_worst, 'PRR within PDB') if prr == 'pdb' else (q.prr, q.prr_worst, 'PRR')
-            ax2.plot(x, pm, 'k-o', ms=4, lw=1.2, label=f'{tag} group (mean)')
-            ax2.plot(x, pw, 'k--^', ms=4, lw=1.2, mfc='white', label=f'{tag} worst member')
+            qc = AGGCI[(AGGCI.scenario == sc) & (AGGCI.traffic == tr) & (AGGCI.bg == bg)].set_index('arm').reindex(d.index)
+            em, ew = (qc.prr_pdb_ci, qc.prr_pdb_worst_ci) if prr == 'pdb' else (qc.prr_ci, qc.prr_worst_ci)
+            ax2.errorbar(x, pm, yerr=em, fmt='k-o', ms=4, lw=1.2, capsize=2, elinewidth=.8, label=f'{tag} group (mean)')
+            ax2.errorbar(x, pw, yerr=ew, fmt='k--^', ms=4, lw=1.2, mfc='white', capsize=2, elinewidth=.8,
+                         label=f'{tag} worst member')
             ax2.set_ylim(0, 1.05)
             ax2.tick_params(labelsize=8)
             if (sc, tr, bg) == tuple(cells[-1]) or ax in axes[:, -1]:
@@ -327,6 +368,7 @@ for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
         for k, n in rx.attempt.value_counts().items():
             att_rows.append(dict(arm=arm, **cc, attempt=int(k), share=n / len(rx)))
 LAT = pd.DataFrame(lat_rows).groupby(CELLS + ['arm']).mean(numeric_only=True).drop(columns='seed').reset_index()
+LATCI = mean_ci(pd.DataFrame(lat_rows), ['lat_group', 'lat_worst', 'pir_group', 'pir_worst'], CELLS + ['arm'])
 ATT = pd.DataFrame(att_rows).groupby(CELLS + ['arm', 'attempt']).share.mean().unstack(fill_value=0).reset_index()
 
 def cell_grid(fn, title):
@@ -348,12 +390,16 @@ def pick(df, sc, tr, bg):
 
 def lat_panel(ax, sc, tr, bg):
     d = pick(LAT, sc, tr, bg); x = np.arange(len(d)); w = .38
-    ax.bar(x - w / 2, d.lat_group, w, color='#4c72b0', label='latency, group mean')
-    ax.bar(x + w / 2, d.lat_worst, w, color='#c44e52', label='latency, worst receiver (mean)')
+    c = pick(LATCI, sc, tr, bg)
+    ek = dict(capsize=2, error_kw=dict(lw=.8))
+    ax.bar(x - w / 2, d.lat_group, w, yerr=c.lat_group_ci, color='#4c72b0', label='latency, group mean', **ek)
+    ax.bar(x + w / 2, d.lat_worst, w, yerr=c.lat_worst_ci, color='#c44e52', label='latency, worst receiver (mean)', **ek)
     ax.plot(x + w / 2, d.lat_p95_worst, 'k_', ms=12, mew=2, label='worst receiver p95')
     ax.set_xticks(x); ax.set_xticklabels(d.index); ax.set_ylabel('ms')
-    ax2 = ax.twinx(); ax2.plot(x, d.pir_group, 'g-o', ms=4, label='PIR, group mean')
-    ax2.plot(x, d.pir_worst, 'g--^', ms=4, mfc='white', label='PIR, worst receiver')
+    ax2 = ax.twinx()
+    ax2.errorbar(x, d.pir_group, yerr=c.pir_group_ci, fmt='g-o', ms=4, capsize=2, elinewidth=.8, label='PIR, group mean')
+    ax2.errorbar(x, d.pir_worst, yerr=c.pir_worst_ci, fmt='g--^', ms=4, mfc='white', capsize=2, elinewidth=.8,
+                 label='PIR, worst receiver')
     ax2.set_ylabel('PIR (ms)', color='g')
     ax._extra = ax2.get_legend_handles_labels()
 
@@ -408,6 +454,7 @@ for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
         aoi_rows.append(dict(arm=arm, **cc, aoi_group=per.aoi.mean(), aoi_worst=per.aoi.max(),
                              paoi_group=per.peak.mean(), paoi_worst=per.peak.max()))
 CDF = pd.DataFrame(cdf_rows); AOIT = pd.DataFrame(aoi_rows).groupby(CELLS + ['arm']).mean(numeric_only=True).drop(columns='seed').reset_index()
+AOICI = mean_ci(pd.DataFrame(aoi_rows), ['aoi_group', 'aoi_worst'], CELLS + ['arm'])
 
 def cdf_panel(which):
     def f(ax, sc, tr, bg):
@@ -416,15 +463,22 @@ def cdf_panel(which):
             g = d[d.arm == arm]
             if len(g):
                 col, ls = STYLE[arm]
-                ax.plot(TGRID, np.mean(np.stack(g[which].values), axis=0), ls, color=col, label=LABEL[arm])
+                st = np.stack(g[which].values)
+                mu = st.mean(axis=0)
+                ax.plot(TGRID, mu, ls, color=col, lw=1.6, label=LABEL[arm])
+                if len(st) > 1:   # 95 % CI over seeds
+                    h = stats.t.ppf(0.975, len(st) - 1) * st.std(axis=0, ddof=1) / np.sqrt(len(st))
+                    ax.fill_between(TGRID, mu - h, mu + h, color=col, alpha=.12, lw=0)
         ax.axvline(PDB_MS[tr], color='k', lw=.8, ls=':')
         ax.set_xlabel('latency t (ms)'); ax.set_ylabel('P(received within t)'); ax.set_ylim(0, 1.01)
     return f
 
 def aoi_panel(ax, sc, tr, bg):
     d = pick(AOIT, sc, tr, bg); x = np.arange(len(d)); w = .38
-    ax.bar(x - w / 2, d.aoi_group, w, color='#4c72b0', label='AoI, group mean')
-    ax.bar(x + w / 2, d.aoi_worst, w, color='#c44e52', label='AoI, worst receiver')
+    c = pick(AOICI, sc, tr, bg)
+    ek = dict(capsize=2, error_kw=dict(lw=.8))
+    ax.bar(x - w / 2, d.aoi_group, w, yerr=c.aoi_group_ci, color='#4c72b0', label='AoI, group mean', **ek)
+    ax.bar(x + w / 2, d.aoi_worst, w, yerr=c.aoi_worst_ci, color='#c44e52', label='AoI, worst receiver', **ek)
     ax.plot(x + w / 2, d.paoi_worst, 'k_', ms=12, mew=2, label='peak AoI, worst receiver')
     ax.set_xticks(x); ax.set_xticklabels(d.index); ax.set_ylabel('ms')
 """
@@ -497,8 +551,17 @@ def build(out, path, profile='local1'):
     c.append(nbf.v4.new_markdown_cell(MD['cbr']))
     c.append(nbf.v4.new_code_cell(CBR))
     c.append(nbf.v4.new_code_cell(
-        "p = CB.pivot_table(index=['scenario','traffic','bg'], columns='arm', values='cbr_saving_pct')[[a for a in ORDER if a not in ('R1','R4')]]\n"
-        "p.plot.bar(figsize=(11,4), title='Platoon CBR saving vs blind counterpart (%)'); plt.grid(alpha=.3); plt.show()"))
+        "# paired per seed: saving of the arm vs its blind counterpart in the same seed\n"
+        "Rs = R[R.arm.isin(ORDER)].set_index(CELLS + ['seed', 'arm']).cbr_platoon\n"
+        "pr = [dict(scenario=sc, traffic=tr, bg=bg, seed=sd, arm=a, s=100 * (1 - v / Rs.get((sc, tr, bg, sd, ref[a]), np.nan)))\n"
+        "      for (sc, tr, bg, sd, a), v in Rs.items() if a not in ('R1', 'R4')]\n"
+        "pc = mean_ci(pd.DataFrame(pr), ['s'], CELLS + ['arm'])\n"
+        "arms = [a for a in ORDER if a not in ('R1', 'R4')]\n"
+        "p = pc.pivot_table(index=CELLS, columns='arm', values='s')[arms]\n"
+        "e = pc.pivot_table(index=CELLS, columns='arm', values='s_ci')[arms]\n"
+        "p.plot.bar(yerr=e, capsize=2, figsize=(12, 4), color=[STYLE[a][0] for a in arms], error_kw=dict(lw=.8),\n"
+        "           title='Platoon CBR saving vs blind counterpart (%), 95 % CI over seeds (paired)')\n"
+        "plt.grid(alpha=.3); plt.show()"))
     c.append(nbf.v4.new_markdown_cell(MD['spectrum']))
     c.append(nbf.v4.new_code_cell(SPECTRUM))
     c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet by component (all)', 'PRB x symbols per packet')"))
