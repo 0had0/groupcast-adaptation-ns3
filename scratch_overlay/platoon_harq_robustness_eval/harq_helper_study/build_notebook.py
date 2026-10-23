@@ -101,7 +101,8 @@ DIST = r'''
 def dist_plot(arms, title, metric='prr'):
     scen = [s for s in ['highway', 'roundabout', 'roundaboutE'] if s in set(M.scenario)]
     trafs, bgs = ['periodic1tb', 'aperiodic1tb'], ['none', 'moderate']
-    fig, axes = plt.subplots(len(scen) * len(trafs), len(bgs), figsize=(12, 13), sharey=True)
+    fig, axes = plt.subplots(len(scen) * len(trafs), len(bgs), figsize=(12, 3.3 * len(scen) * len(trafs)),
+                             sharey=True, squeeze=False)
     for i, (sc, tr) in enumerate([(s, t) for s in scen for t in trafs]):
         for j, bg in enumerate(bgs):
             ax = axes[i, j]
@@ -250,7 +251,8 @@ SUBCH_SLOT = 10 * PSSCH_SYM  # one subchannel (10 PRB) over the PSSCH symbols of
 def spectrum_plot(cols, title, ylabel, scale=1.0, prr=False):
     prr_handles = ([], [])
     cells = SP[CELLS].drop_duplicates().sort_values(CELLS).values.tolist()
-    fig, axes = plt.subplots(2, 4, figsize=(17, 8.5), sharey=False)
+    nr = -(-len(cells) // 4)   # one row per scenario (4 cells: traffic x bg)
+    fig, axes = plt.subplots(nr, 4, figsize=(17, 4.25 * nr), sharey=False, squeeze=False)
     for ax, (sc, tr, bg) in zip(axes.flat, cells):
         d = SP[(SP.scenario == sc) & (SP.traffic == tr) & (SP.bg == bg)].set_index('arm').reindex(
             [a for a in ORDER if a in set(SP.arm)])
@@ -329,7 +331,8 @@ ATT = pd.DataFrame(att_rows).groupby(CELLS + ['arm', 'attempt']).share.mean().un
 
 def cell_grid(fn, title):
     cells = LAT[CELLS].drop_duplicates().sort_values(CELLS).values.tolist()
-    fig, axes = plt.subplots(2, 4, figsize=(17, 8))
+    nr = -(-len(cells) // 4)   # one row per scenario (4 cells: traffic x bg)
+    fig, axes = plt.subplots(nr, 4, figsize=(17, 4 * nr), squeeze=False)
     for ax, (sc, tr, bg) in zip(axes.flat, cells):
         fn(ax, sc, tr, bg)
         ax.set_title(f'{sc} / {tr} / bg {bg}', fontsize=9)
@@ -438,7 +441,7 @@ Arms (all 3 transmissions per TB; helper arms use Kuo's selection, S1 = helper r
 | Kuo helper + takeover | **R5** Option 1, **R6** Option 2 — helper NACK lets the leader retake the next handed slot (Option 1 via a dedicated helper NACK resource; Option 2 helper silent on success), plus the **leader fallback**: if the leader decodes no SCI of the helper in a handed slot where a relay was expected, it retransmits in the next handed slot |
 | HARQ-IR ablation | **R2/R3/R4.1/R4.2 _noIR**: same, receivers do not soft-combine |
 
-Cells: highway / roundabout (IVD 30 m) x periodic1tb / aperiodic1tb x background none / moderate (60 cars, 1.67 flows each).
+Cells: highway / roundabout (N -> W exit, 1/4 of the ring) / roundaboutE (N -> E exit, 3/4 of the ring) (IVD 30 m; roundabout KPIs over the curve only) x periodic1tb / aperiodic1tb x background none / moderate (60 cars, 1.67 flows each).
 Metrics: PRR = delivered / sent per member (mean over members; *worst* = worst member); tx/pkt and reserved/pkt in subchannel-slots per packet
 (transmitted PSSCH of the platoon, and leader SCI-1A reservations); platoon CBR = platoon subchannel-slots / available; PSFCH/TB = feedback received by the leader per TB.""",
     'dist': "## PRR versus distance from the leader\nOne curve per arm, one point per member (x = its mean distance). Dotted: leader only; dashed: Kuo helper without takeover; solid: Kuo helper with takeover.",

@@ -24,7 +24,9 @@ prof_r = sys.argv[2] if len(sys.argv) > 2 else 'full'
 
 
 def load(prof, scen, traf):
-    fs = sorted(glob.glob(f'{HERE}/out/{prof}/R1/{scen}_ivd30_{traf}_moderate_s*_pkt.csv'))
+    # one file per run: plain _pkt.csv preferred (study.py gzips big ones)
+    pre = {f.split('_pkt.csv')[0] for f in glob.glob(f'{HERE}/out/{prof}/R1/{scen}_ivd30_{traf}_moderate_s*_pkt.csv*')}
+    fs = [p + '_pkt.csv' if os.path.exists(p + '_pkt.csv') else p + '_pkt.csv.gz' for p in sorted(pre)]
     if not fs:
         return None, 0
     return pd.concat(pd.read_csv(f) for f in fs), len(fs)
