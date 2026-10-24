@@ -73,9 +73,18 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=seeds,
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
                     arms=['R1', 'R3', 'R6'], bglevels={k: (n, flows) for k, n in DENSITY.items()})
+    if profile == 'density_smoke':
+        # launcher check (launch_density.sh --smoke): R6, 15 cars, seed 1, every scenario x traffic, short runs
+        # (highway 8 s; roundabout: the first SMOKE_RBT_S s of the curve window)
+        flows = run_retx.get_bg_levels()['moderate'][1]
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=['n15'],
+                    trafs=['periodic1tb', 'aperiodic1tb'], seeds=[1],
+                    tmax=lambda sc, bg: 8.0 if sc == 'highway' else 0.0, rbt_curve=True, rbt_smoke=SMOKE_RBT_S,
+                    arms=['R6'], bglevels={'n15': (15, flows)})
     raise SystemExit('unknown profile ' + profile)
 
 
+SMOKE_RBT_S = 6.0   # density_smoke: roundabout run length after the curve-window start (s)
 DENSITY = {'n15': 15, 'n30': 30, 'n45': 45}   # density profile: bg name -> cars in the area
 CURVE_MARGIN = 1.0   # s kept before the first / after the last bent link
 TAIL_GUARD = 0.3     # simulator --tailGuard default: kpiEnd = maxTime - tailGuard
@@ -153,6 +162,8 @@ def plan(profile, seeds_arg=None, only=None):
                         t = spec['tmax'](sc, bg)
                         if simsc == 'roundabout' and spec.get('rbt_curve') and os.path.exists(trace):
                             k0, t = curve_window(trace)
+                            if spec.get('rbt_smoke'):
+                                t = round(k0 + spec['rbt_smoke'], 1)
                             cmd.append(f'--kpiStart={k0}')
                         if t > 0:
                             cmd.append(f'--maxTime={t}')
@@ -292,7 +303,7 @@ def cmd_check(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('action', choices=['run', 'check', 'list'])
-    ap.add_argument('--profile', default='smoke', choices=['smoke', 'local1', 'full', 'density'])
+    ap.add_argument('--profile', default='smoke', choices=['smoke', 'local1', 'full', 'density', 'density_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)
