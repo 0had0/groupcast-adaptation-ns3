@@ -7,13 +7,15 @@
 #   3. generate the missing ivd30 n15 / n30 / n45 traces (hwy, rbt, rbtE; needs SUMO)
 #   4. study.py run --profile density in the background (nohup, resumable), then the notebook
 # Usage: launch_density.sh [--pull BRANCH] [--jobs N] [--seeds 1-10] [--setup] [--gen-jobs N]
+#        (--jobs / --gen-jobs default: every core, nproc)
 #        launch_density.sh --stop
 # Progress: ./monitor_study.sh density
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 EVAL="$HERE/.."
-JOBS=8; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; GENJOBS=4
+NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; GENJOBS=$NCPU
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -65,7 +67,7 @@ for N in 15 30 45; do
     done
   done
 done
-echo "traces to generate: ${#TODO[@]}"
+echo "traces to generate: ${#TODO[@]} ($GENJOBS in parallel)"
 if [ ${#TODO[@]} -gt 0 ]; then
   printf '%s\n' "${TODO[@]}" | xargs -P "$GENJOBS" -I{} sh -c '{} > /dev/null 2>&1 || echo "FAILED: {}"' \
     | tee "$HERE/out/density_traces.log"
@@ -75,7 +77,7 @@ fi
 cd "$HERE" || exit 2
 mkdir -p out
 unset MAGIC_HELPER_ID NUM_MEMBERS
-echo "planned runs: $(python3 study.py list --profile density --seeds "$SEEDS" | wc -l)"
+echo "planned runs: $(python3 study.py list --profile density --seeds "$SEEDS" | wc -l), $JOBS in parallel"
 nohup bash -c "python3 study.py run --profile density --seeds $SEEDS --jobs $JOBS && \
                python3 build_density_notebook.py --full-dir out/full --density-dir out/density" \
       >> out/density_run.log 2>&1 &
