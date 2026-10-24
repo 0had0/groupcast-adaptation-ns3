@@ -493,11 +493,51 @@ def run_roundabout(a):
                 if platoon_footprint[0] - 40.0 <= lp <= platoon_footprint[1] + 40.0:
                     traci.vehicle.remove(vid)
                     gone.add(vid)
-        for i, pid in enumerate(platoon_ids):
-            traci.vehicle.add(pid, RBT_ROUTE, "platoon", depart="now", departLane=str(RBT_LANE),
-                              departPos=f"{pos0 - i * spacing:.2f}",
-                              departSpeed=("13.89" if i == 0 else "0"))
-        step_sim()
+
+        def clear_footprint_fresh():
+            """retry path: current positions (not last step's subscription results, which miss
+            a vehicle that departed in the last step) plus vehicles still waiting for insertion
+            on the entry edge"""
+            for vid in traci.vehicle.getIDList():
+                if vid in pset:
+                    continue
+                if traci.vehicle.getRoadID(vid) == RBT_ENTRY_EDGE and \
+                        traci.vehicle.getLaneIndex(vid) == RBT_LANE and \
+                        platoon_footprint[0] - 40.0 <= traci.vehicle.getLanePosition(vid) <= platoon_footprint[1] + 40.0:
+                    traci.vehicle.remove(vid)
+                    gone.add(vid)
+            for vid in traci.simulation.getPendingVehicles():
+                if vid not in pset and traci.vehicle.getRoute(vid)[:1] == (RBT_ENTRY_EDGE,):
+                    traci.vehicle.remove(vid)
+                    gone.add(vid)
+
+        # attempt 0 is the original insertion (traces that inserted at once are unchanged); if
+        # SUMO cannot insert every member (a blocker the clearing missed), the whole platoon is
+        # removed, the footprint cleared again from current positions and the insertion repeated
+        for attempt in range(6):
+            if attempt > 0:
+                for pid in platoon_ids:
+                    try:
+                        traci.vehicle.remove(pid)
+                    except traci.TraCIException:
+                        pass
+                clear_footprint_fresh()
+                step_sim()
+                for pid in platoon_ids:
+                    gone.discard(pid)
+            for i, pid in enumerate(platoon_ids):
+                traci.vehicle.add(pid, RBT_ROUTE, "platoon", depart="now", departLane=str(RBT_LANE),
+                                  departPos=f"{pos0 - i * spacing:.2f}",
+                                  departSpeed=("13.89" if i == 0 else "0"))
+            step_sim()
+            missing = [p for p in platoon_ids if p not in traci.vehicle.getIDList()]
+            if not missing:
+                break
+            print(f"platoon insertion attempt {attempt + 1}: SUMO could not insert {missing}, retrying",
+                  file=sys.stderr)
+        if missing:
+            raise SystemExit(f"platoon insertion failed for {missing}")
+        insert_attempts = attempt + 1
         t_ins = traci.simulation.getTime()
         missing = [p for p in platoon_ids if p not in traci.vehicle.getIDList()]
         if missing:
@@ -612,6 +652,7 @@ def run_roundabout(a):
         "area": f"circle r={R} m around the roundabout centre",
         "bg_platoon_overlap_samples": overlaps,
         "cold_start_s": t_cold,
+        "platoon_insert_attempts": insert_attempts,
     }
     tw.write(meta)
     return meta, seats
