@@ -73,3 +73,11 @@ New `_run.csv` columns: `reack_decoded, psfch_exact_attr, fb_late, helper_nack_s
 
 ## 2026-10-22: scenario roundaboutE (N -> E exit, 3/4 of the ring)
 `gen_mobility.py --rbt-exit E` (default W unchanged, regenerated W trace is byte-identical). Traces `traces/rbtE_ivd30_n{0,60}_s{1..10}.csv.gz` are generated locally and are git-ignored; launch_full.sh generates the missing ones (needs SUMO) like `gen_mobility.py --scenario roundabout --ivd 30 --nbg N --seed S --rbt-exit E --out traces/rbtE_ivd30_nN_sS.csv.gz`. `full` profile now has highway, roundabout, roundaboutE (240 runs each at 5 seeds); tag prefix `rbtE`, simulator `--scenario=roundabout`, same curve-only KPI window. Check a trace: `render_rbt_trace.py rbtE_ivd30_n60_s1`.
+
+## 2026-10-24: density sensitivity sweep (R1 / R3 / R6)
+`study.py --profile density`: background 15 / 30 / 45 cars at 1.67 flows per car (moderate per-car load),
+highway + rbt + rbtE (curve window), periodic + aperiodic, seeds 1-10 = 540 runs into `out/density`; 0 and 60
+cars are the full profile's none / moderate cells. Remote: `./launch_density.sh --pull coop-arms --jobs 8`
+(builds, generates the missing ivd30 n15/n30/n45 traces with SUMO, runs under nohup, then builds
+`DENSITY_RESULTS.ipynb` with `build_density_notebook.py`); `./monitor_study.sh density [--watch 60]`;
+`./launch_density.sh --stop`.

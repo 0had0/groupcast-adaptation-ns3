@@ -64,9 +64,19 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=seeds,
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0,
                     rbt_curve=True)   # roundabout KPI window = the curve only (curve_window)
+    if profile == 'density':
+        # sensitivity: background density at the moderate per-car load (1.67 flows / car), arms
+        # R1 / R3 / R6. 0 and 60 cars are the full profile's none / moderate cells (not re-run).
+        seeds = parse_seeds(seeds_arg or '1-10')
+        flows = run_retx.get_bg_levels()['moderate'][1]
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=list(DENSITY),
+                    trafs=['periodic1tb', 'aperiodic1tb'], seeds=seeds,
+                    tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
+                    arms=['R1', 'R3', 'R6'], bglevels={k: (n, flows) for k, n in DENSITY.items()})
     raise SystemExit('unknown profile ' + profile)
 
 
+DENSITY = {'n15': 15, 'n30': 30, 'n45': 45}   # density profile: bg name -> cars in the area
 CURVE_MARGIN = 1.0   # s kept before the first / after the last bent link
 TAIL_GUARD = 0.3     # simulator --tailGuard default: kpiEnd = maxTime - tailGuard
 _CURVE = {}
@@ -120,9 +130,11 @@ def parse_seeds(s):
 def plan(profile, seeds_arg=None, only=None):
     import re
     spec = profile_spec(profile, seeds_arg)
-    bgl = run_retx.get_bg_levels()
+    bgl = spec.get('bglevels') or run_retx.get_bg_levels()
     runs = []
     for arm, aflags in ARMS.items():
+        if 'arms' in spec and arm not in spec['arms']:
+            continue
         for sc in spec['scen']:
             for bg in spec['bgs']:
                 for tr in spec['trafs']:
@@ -280,9 +292,9 @@ def cmd_check(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('action', choices=['run', 'check', 'list'])
-    ap.add_argument('--profile', default='smoke', choices=['smoke', 'local1', 'full'])
+    ap.add_argument('--profile', default='smoke', choices=['smoke', 'local1', 'full', 'density'])
     ap.add_argument('--jobs', type=int, default=8)
-    ap.add_argument('--seeds', default=None, help='full profile seeds, e.g. 1-5 or 1,2,3')
+    ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)
     ap.add_argument('--only', default=None,
                     help='regex on "arm/tag", e.g. "^R6/hwy_ivd30_periodic1tb_moderate_s1$"')
