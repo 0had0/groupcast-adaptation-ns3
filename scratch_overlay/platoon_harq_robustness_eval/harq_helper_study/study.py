@@ -6,6 +6,8 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
   R4   Kuo helper, blind (Kuo's scheme)                  R4.1 / R4.2  Kuo helper, HARQ Opt 1 / 2, no takeover
   R5 / R6  Kuo helper, HARQ Opt 1 / 2, helper NACK takeover + leader fallback (G08)
   *_noIR   R2, R3, R4.1, R4.2 with --softCombining=false (HARQ-IR ablation)
+  *_bsc    R1, R4 with --blindSoftCombining=true (receivers combine the blind copies of a TB, 3GPP-allowed;
+           R4_bsc: leader and helper copies, HARQ owner = SCI-2A relayedFromRnti)
 Cells: {highway, roundabout (N->W, 1/4 ring), roundaboutE (N->E, 3/4 ring; full profile)} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
 
 Usage:
@@ -42,9 +44,11 @@ ARMS = {
     'R3_noIR': ['--retx=R3', '--softCombining=false'],
     'R4.1_noIR': ['--retx=R4.1', '--softCombining=false'] + KUO,
     'R4.2_noIR': ['--retx=R4.2', '--softCombining=false'] + KUO,
+    'R1_bsc': ['--retx=R1', '--blindSoftCombining=true'],
+    'R4_bsc': ['--retx=R4'] + KUO + ['--blindSoftCombining=true'],
 }
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
-          'R5': 'kuo+takeover', 'R6': 'kuo+takeover'}
+          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo'}
 DIAG = ['--writeAtt=true', '--writeAllTx=true', '--writeGrants=true']
 
 
@@ -66,13 +70,15 @@ def profile_spec(profile, seeds_arg=None):
                     rbt_curve=True)   # roundabout KPI window = the curve only (curve_window)
     if profile == 'density':
         # sensitivity: background density at the moderate per-car load (1.67 flows / car), arms
-        # R1 / R3 / R6. 0 and 60 cars are the full profile's none / moderate cells (not re-run).
+        # R1 / R3 / R6, then R4 / R4.2 / R1_bsc. 0 and 60 cars are the full profile's none / moderate
+        # cells (not re-run).
         seeds = parse_seeds(seeds_arg or '1-10')
         flows = run_retx.get_bg_levels()['moderate'][1]
         return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=list(DENSITY),
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=seeds,
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
-                    arms=['R1', 'R3', 'R6'], bglevels={k: (n, flows) for k, n in DENSITY.items()})
+                    arms=['R1', 'R3', 'R6', 'R4', 'R4.2', 'R1_bsc'],
+                    bglevels={k: (n, flows) for k, n in DENSITY.items()})
     if profile == 'density_smoke':
         # launcher check (launch_density.sh --smoke): R6, 15 cars, seed 1, every scenario x traffic, short runs
         # (highway 8 s; roundabout: the first SMOKE_RBT_S s of the curve window)
@@ -261,10 +267,10 @@ def cmd_check(a):
             continue
         x = read_csv(pre + '_run.csv')[0]
         arm = r['arm']
-        base = arm.replace('_noIR', '')
+        base = arm.replace('_noIR', '').replace('_bsc', '')
         f = lambda k: float(x[k])
         chk(0.0 <= f('prr_mean') <= 1.0 and 0.0 <= f('prr_min') <= f('prr_mean') + 1e-9, name + ': PRR range')
-        chk(x['blind_soft_combining'] == '0', name + ': blind copies must not be combined')
+        chk(x['blind_soft_combining'] == ('1' if arm.endswith('_bsc') else '0'), name + ': blind_soft_combining flag')
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
         takeover = base in ('R5', 'R6')

@@ -1,15 +1,22 @@
 #!/bin/bash
 # Progress of a study.py profile run: done / total, failures, throughput, ETA, running simulations.
-# Usage: monitor_study.sh [profile=density] [--watch [seconds=60]]
-#   reads out/<profile>_run.log (density) or out/full_run.log (full)
+# Usage: monitor_study.sh [profile=density] [--log FILE] [--watch [seconds=60]]
+#   reads out/<profile>_run.log (density) or out/full_run.log (full), or FILE (relative to this folder)
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROFILE="${1:-density}"
-WATCH=0; EVERY=60
-[ "${2:-}" = "--watch" ] && { WATCH=1; EVERY="${3:-60}"; }
+PROFILE="${1:-density}"; [ $# -gt 0 ] && shift
+WATCH=0; EVERY=60; LOGARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --log) LOGARG="$2"; shift 2;;
+    --watch) WATCH=1; shift; case "${1:-}" in [0-9]*) EVERY="$1"; shift;; esac;;
+    *) echo "unknown option $1"; exit 2;;
+  esac
+done
 
 report() {
   local LOG="$HERE/out/${PROFILE}_run.log"
   [ "$PROFILE" = "full" ] && LOG="$HERE/out/full_run.log"
+  [ -n "$LOGARG" ] && { case "$LOGARG" in /*) LOG="$LOGARG";; *) LOG="$HERE/$LOGARG";; esac; }
   echo "=== $PROFILE  $(date '+%F %T')  host $(hostname)"
   if [ ! -f "$LOG" ]; then echo "no log yet: $LOG"; return; fi
   python3 - "$LOG" <<'EOF'
