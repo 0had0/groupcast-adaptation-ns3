@@ -217,7 +217,8 @@ def run_one(r, outdir):
 
 
 def cmd_run(a):
-    outdir = a.out or os.path.join(HERE, 'out', a.profile)
+    # absolute: every simulation runs with its arm folder as working directory
+    outdir = os.path.abspath(a.out) if a.out else os.path.join(HERE, 'out', a.profile)
     os.makedirs(outdir, exist_ok=True)
     if not os.path.exists(BIN):
         raise SystemExit('simulator not built: ' + BIN)
@@ -252,7 +253,7 @@ def read_csv(p):
 
 def cmd_check(a):
     """Smoke-test invariants of every finished run of the profile."""
-    outdir = a.out or os.path.join(HERE, 'out', a.profile)
+    outdir = os.path.abspath(a.out) if a.out else os.path.join(HERE, 'out', a.profile)
     fails = []
 
     def chk(cond, msg):

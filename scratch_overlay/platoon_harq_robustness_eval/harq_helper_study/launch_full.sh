@@ -6,13 +6,17 @@
 #   4. full profile in the background (nohup, resumable: re-run this script to continue)
 #   5. when it ends: build and execute STUDY_RESULTS_full.ipynb
 # Usage: launch_full.sh [--pull BRANCH] [--jobs N] [--seeds 1-5] [--no-setup] [--no-smoke]
-#        launch_full.sh --stop     # kill a running full study (study.py + simulator processes) and exit
+#                       [--out DIR] [--only REGEX]
+#          --out DIR     output folder (default out/full), log out/<basename DIR>_run.log; the commit
+#                        launched is written to DIR/COMMIT
+#          --only REGEX  passed to study.py (regex on "arm/tag", e.g. '^(R1|R3|R6)/')
+#        launch_full.sh [--out DIR] --stop     # kill the full study writing to DIR and exit
 # Restarting is resumable: finished runs whose command is unchanged are skipped; the
 # roundabout runs are re-done (their KPI window is now the curve only, see study.curve_window).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-JOBS=8; SEEDS=1-5; PULL=""; SETUP=1; SMOKE=1; STOP=0
+JOBS=8; SEEDS=1-5; PULL=""; SETUP=1; SMOKE=1; STOP=0; OUT=out/full; ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -21,19 +25,28 @@ while [ $# -gt 0 ]; do
     --no-setup) SETUP=0; shift;;
     --no-smoke) SMOKE=0; shift;;
     --stop) STOP=1; shift;;
+    --out) OUT="$2"; shift 2;;
+    --only) ONLY="$2"; shift 2;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
+case "$OUT" in /*) OUTABS="$OUT";; *) OUTABS="$HERE/$OUT";; esac
+OUTABS="${OUTABS%/}"
+LOG="out/$(basename "$OUTABS")_run.log"
+ONLYARG=(); [ -n "$ONLY" ] && ONLYARG=(--only "$ONLY")
+# processes of this output folder only (study.py and the simulators get its absolute path)
+STUDY_PAT="study.py run --profile full .*--out $OUTABS( |\$)"
+SIM_PAT="ns3.42-platoon_harq_robustness_eval-.*--out=$OUTABS/"
 stop_study() {
-  pkill -f "study.py run --profile full" && echo "stopped study.py"
-  pkill -f "build_notebook.py --profile full"
-  pkill -f "ns3.42-platoon_harq_robustness_eval-" && echo "stopped simulator processes"
+  pkill -f "$STUDY_PAT" && echo "stopped study.py ($OUTABS)"
+  pkill -f "build_notebook.py --profile full --out $OUTABS"
+  pkill -f "$SIM_PAT" && echo "stopped simulator processes"
   sleep 2
-  pgrep -fl "ns3.42-platoon_harq_robustness_eval-|study.py run --profile full" || echo "nothing running"
+  pgrep -fl "$STUDY_PAT|$SIM_PAT" || echo "nothing running for $OUTABS"
 }
 if [ "$STOP" = 1 ]; then stop_study; exit 0; fi
-if pgrep -f "study.py run --profile full" > /dev/null; then
-  echo "a full study is already running: launch_full.sh --stop first"; exit 7
+if pgrep -f "$STUDY_PAT" > /dev/null; then
+  echo "a full study is already running into $OUTABS: launch_full.sh --out $OUT --stop first"; exit 7
 fi
 cd "$REPO" || exit 2
 if [ -n "$PULL" ]; then
@@ -66,8 +79,11 @@ if [ "$SMOKE" = 1 ]; then
   fi
   echo "smoke test passed"
 fi
-echo "starting the full profile (seeds $SEEDS, $JOBS jobs)"
-nohup bash -c "python3 study.py run --profile full --seeds $SEEDS --jobs $JOBS && \
-               python3 build_notebook.py --profile full" >> out/full_run.log 2>&1 &
-echo "running in background (pid $!). Progress: tail -f $HERE/out/full_run.log"
-echo "planned runs: $(python3 study.py list --profile full --seeds "$SEEDS" | wc -l)"
+mkdir -p "$OUTABS"
+git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
+echo "starting the full profile (seeds $SEEDS, $JOBS jobs) -> $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT"))"
+ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
+nohup bash -c "python3 study.py run --profile full --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
+               python3 build_notebook.py --profile full --out $OUTABS" >> "$LOG" 2>&1 &
+echo "running in background (pid $!). Progress: tail -f $HERE/$LOG  or  ./monitor_study.sh full --log $LOG"
+echo "planned runs: $(python3 study.py list --profile full --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"

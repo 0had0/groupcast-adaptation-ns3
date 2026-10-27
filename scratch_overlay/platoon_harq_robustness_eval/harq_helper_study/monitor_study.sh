@@ -1,7 +1,9 @@
 #!/bin/bash
 # Progress of a study.py profile run: done / total, failures, throughput, ETA, running simulations.
 # Usage: monitor_study.sh [profile=density] [--log FILE] [--watch [seconds=60]]
-#   reads out/<profile>_run.log (density) or out/full_run.log (full), or FILE (relative to this folder)
+#   reads out/<profile>_run.log (density) or out/full_run.log (full), or FILE (relative to this folder);
+#   the running simulations are those writing to out/<name>/ for a log out/<name>_run.log
+#   (e.g. --log out/full_v2_run.log -> out/full_v2/)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="${1:-density}"; [ $# -gt 0 ] && shift
 WATCH=0; EVERY=60; LOGARG=""
@@ -17,6 +19,8 @@ report() {
   local LOG="$HERE/out/${PROFILE}_run.log"
   [ "$PROFILE" = "full" ] && LOG="$HERE/out/full_run.log"
   [ -n "$LOGARG" ] && { case "$LOGARG" in /*) LOG="$LOGARG";; *) LOG="$HERE/$LOGARG";; esac; }
+  local RUNDIR
+  RUNDIR="$(basename "$LOG" _run.log)"
   echo "=== $PROFILE  $(date '+%F %T')  host $(hostname)"
   if [ ! -f "$LOG" ]; then echo "no log yet: $LOG"; return; fi
   python3 - "$LOG" <<'EOF'
@@ -50,11 +54,17 @@ for l in tail[-3:]:
 print(f'log age   {(time.time() - os.path.getmtime(log)) / 60:.1f} min since the last line')
 EOF
   local N
-  N=$(pgrep -f "ns3.42-platoon_harq_robustness_eval-.*out/$PROFILE/" | wc -l)
+  N=$(pgrep -f "ns3.42-platoon_harq_robustness_eval-.*out/$RUNDIR/" | wc -l)
   echo "running   $N simulations   load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || uptime | sed 's/.*load averages*: //')"
-  pgrep -af "ns3.42-platoon_harq_robustness_eval-.*out/$PROFILE/" 2>/dev/null \
-    | grep -o "out/$PROFILE/[^ ]*" | sed "s|out/$PROFILE/|          |" | head -12
-  pgrep -f "study.py run --profile $PROFILE" > /dev/null && echo "study.py  alive" || echo "study.py  NOT running"
+  pgrep -af "ns3.42-platoon_harq_robustness_eval-.*out/$RUNDIR/" 2>/dev/null \
+    | grep -o "out/$RUNDIR/[^ ]*" | sed "s|out/$RUNDIR/|          |" | head -12
+  # study.py of this run folder (launched with --out .../out/<name>, or without --out for the default one)
+  if pgrep -af "study.py run --profile $PROFILE" 2>/dev/null |
+       grep -qE "out/$RUNDIR( |\$)|^[0-9]+ [^-]*study.py run --profile $PROFILE( --seeds [^ ]+)? --jobs [0-9]+\$"; then
+    echo "study.py  alive"
+  else
+    echo "study.py  NOT running"
+  fi
   free -h 2>/dev/null | awk '/Mem:/ {print "memory    used " $3 " / " $2 ", available " $7}'
   df -h "$HERE/out" | awk 'NR == 2 {print "disk      " $4 " free on " $NF}'
 }

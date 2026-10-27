@@ -7,11 +7,16 @@
 #   3. generate the missing ivd30 n15 / n30 / n45 traces (hwy, rbt, rbtE; needs SUMO)
 #   4. study.py run --profile density in the background (nohup, resumable), then the notebook
 # Usage: launch_density.sh [--pull BRANCH] [--jobs N] [--seeds 1-10] [--setup] [--gen-jobs N]
+#                          [--out DIR] [--only REGEX] [--full-dir DIR]
 #        (--jobs / --gen-jobs default: every core, nproc)
+#          --out DIR       output folder (default out/density), log out/<basename DIR>_run.log; the
+#                          commit launched is written to DIR/COMMIT
+#          --only REGEX    passed to study.py (regex on "arm/tag")
+#          --full-dir DIR  full campaign whose 0 / 60-car cells the notebook adds (default out/full)
 #        launch_density.sh --smoke [--jobs N]   # check the whole chain first (foreground, ~minutes):
 #            traces for seed 1 / 15 cars, R6 on every scenario x traffic with short runs, consistency
 #            checks, notebook; output out/density_smoke, nothing of the real sweep is touched
-#        launch_density.sh --stop
+#        launch_density.sh [--out DIR] --stop
 # Progress: ./monitor_study.sh density
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -19,6 +24,7 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 EVAL="$HERE/.."
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; GENJOBS=$NCPU; SMOKE=0
+OUT=out/density; ONLY=""; FULLDIR_ARG=out/full
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -28,21 +34,31 @@ while [ $# -gt 0 ]; do
     --gen-jobs) GENJOBS="$2"; shift 2;;
     --stop) STOP=1; shift;;
     --smoke) SMOKE=1; shift;;
+    --out) OUT="$2"; shift 2;;
+    --only) ONLY="$2"; shift 2;;
+    --full-dir) FULLDIR_ARG="$2"; shift 2;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
+case "$OUT" in /*) OUTABS="$OUT";; *) OUTABS="$HERE/$OUT";; esac
+OUTABS="${OUTABS%/}"
+LOG="out/$(basename "$OUTABS")_run.log"
+ONLYARG=(); [ -n "$ONLY" ] && ONLYARG=(--only "$ONLY")
+# processes of this output folder only (study.py and the simulators get its absolute path)
+STUDY_PAT="study.py run --profile density .*--out $OUTABS( |\$)"
+SIM_PAT="ns3.42-platoon_harq_robustness_eval-.*--out=$OUTABS/"
 if [ "$STOP" = 1 ]; then
-  pkill -f "study.py run --profile density" && echo "stopped study.py"
-  pkill -f "build_density_notebook.py"
-  pkill -f "ns3.42-platoon_harq_robustness_eval-.*out/density/" && echo "stopped simulator processes"
+  pkill -f "$STUDY_PAT" && echo "stopped study.py ($OUTABS)"
+  pkill -f "build_density_notebook.py .*--density-dir $OUTABS"
+  pkill -f "$SIM_PAT" && echo "stopped simulator processes"
   sleep 2
-  pgrep -fl "study.py run --profile density" || echo "nothing running"
+  pgrep -fl "$STUDY_PAT|$SIM_PAT" || echo "nothing running for $OUTABS"
   exit 0
 fi
 PROFILE=density; DENS="15 30 45"
 if [ "$SMOKE" = 1 ]; then PROFILE=density_smoke; DENS="15"; SEEDS=1; fi
-if [ "$SMOKE" = 0 ] && pgrep -f "study.py run --profile density " > /dev/null; then
-  echo "a density sweep is already running: launch_density.sh --stop first"; exit 7
+if [ "$SMOKE" = 0 ] && pgrep -f "$STUDY_PAT" > /dev/null; then
+  echo "a density sweep is already running into $OUTABS: launch_density.sh --out $OUT --stop first"; exit 7
 fi
 
 cd "$REPO" || exit 2
@@ -146,8 +162,12 @@ PYEOF
   echo "SMOKE PASSED"
   exit 0
 fi
-echo "planned runs: $(python3 study.py list --profile density --seeds "$SEEDS" | wc -l), $JOBS in parallel"
-nohup bash -c "python3 study.py run --profile density --seeds $SEEDS --jobs $JOBS && \
-               python3 build_density_notebook.py --full-dir out/full --density-dir out/density" \
-      >> out/density_run.log 2>&1 &
-echo "running in background (pid $!). Progress: ./monitor_study.sh density"
+echo "planned runs: $(python3 study.py list --profile density --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l), $JOBS in parallel"
+mkdir -p "$OUTABS"
+git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
+echo "output $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT")), notebook with the full cells of $FULLDIR_ARG"
+ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
+nohup bash -c "python3 study.py run --profile density --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
+               python3 build_density_notebook.py --full-dir $FULLDIR_ARG --density-dir $OUTABS" \
+      >> "$LOG" 2>&1 &
+echo "running in background (pid $!). Progress: ./monitor_study.sh density --log $LOG"
