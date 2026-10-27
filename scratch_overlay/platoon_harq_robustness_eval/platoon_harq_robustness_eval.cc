@@ -376,6 +376,21 @@ struct Global
 
 Global g;
 
+/// one HARQ soft-buffer event of a member's PHY (--writeHarqTrace, _harq.csv)
+struct HarqTraceRow
+{
+    uint32_t member;
+    SlHarqCombineTraceParams p;
+};
+
+std::vector<HarqTraceRow> g_harqRows;
+
+void
+OnMemberHarqEvent(uint32_t member, const SlHarqCombineTraceParams& p)
+{
+    g_harqRows.push_back({member, p});
+}
+
 // ---------------------------------------------------------------------------
 // Hidden-node instrumentation (--hiddenNode, README "Hidden-node test"): the
 // leader's MAC evaluates the helper's sensing data at each of its selections
@@ -1436,6 +1451,8 @@ main(int argc, char* argv[])
     bool writeAtt = false;          // _att.csv: platoon transmission x member, with geometry
     bool writeAllTx = false;        // _alltx.csv: every PSSCH transmission of every UE
     bool writeGrants = false;       // _grants.csv: every grant created / kept / misfit
+    bool writeHarqTrace = false;    // _harq.csv: members' HARQ soft-buffer events (validation)
+    std::string testFixedSinr;      // validation hook: fixed PSSCH SINR "rx:tx=dB;..." (node ids)
     // per-TB helper selection (Kuo et al. 2021), on top of a cooperative arm:
     //   off     the static --helper for every TB (default)
     //   static  the static --helper through the selector (tests the selector path)
@@ -1587,6 +1604,14 @@ main(int argc, char* argv[])
     cmd.AddValue("writeGrants",
                  "write <out>_grants.csv: every grant created, SPS resource kept, SPS misfit",
                  writeGrants);
+    cmd.AddValue("writeHarqTrace",
+                 "write <out>_harq.csv: every HARQ soft-buffer event of the members' PHY "
+                 "(decoding with the number of copies combined, buffer resets)",
+                 writeHarqTrace);
+    cmd.AddValue("testFixedSinr",
+                 "validation only: fix the PSSCH SINR of links, \"rxNode:txNode=dB;...\" "
+                 "(NrSpectrumPhy::SlTestFixedSinr); empty = off",
+                 testFixedSinr);
     cmd.AddValue("collCond",
                  "log the link condition leader / helper -> interferer of collided attempts "
                  "(extra channel-condition queries can change the random draws: step-2 runs)",
@@ -1708,6 +1733,10 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSpectrumPhy::SlBlindSoftCombining",
                        BooleanValue(blindSoftCombining));
     Config::SetDefault("ns3::NrSpectrumPhy::SlSoftCombining", BooleanValue(softCombining));
+    if (!testFixedSinr.empty())
+    {
+        Config::SetDefault("ns3::NrSpectrumPhy::SlTestFixedSinr", StringValue(testFixedSinr));
+    }
     // the leader's flow is on SPS only for periodic traffic or aperiodic with aperiodicRri (TrafficFlowKeys)
     const bool leaderSpsCfg = leaderSps && (BaseTraffic(traffic).rfind("periodic", 0) == 0 ||
                                             (BaseTraffic(traffic) == "aperiodic1" && aperiodicRri > 0));
@@ -2262,6 +2291,12 @@ main(int argc, char* argv[])
         memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
             "RxPsschTraceUe",
             MakeBoundCallback(&OnMemberPsschRx, m));
+        if (writeHarqTrace)
+        {
+            memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+                "SlHarqCombine",
+                MakeBoundCallback(&OnMemberHarqEvent, m));
+        }
     }
     for (uint32_t i = 0; i < numNodes; ++i)
     {
@@ -3453,6 +3488,27 @@ main(int argc, char* argv[])
                        << (i < S.geoToTail.size() ? +S.geoToTail[i][m] : -1) << '\n';
                 }
             }
+        }
+    }
+    if (writeHarqTrace)
+    {
+        std::ofstream hq(out + "_harq.csv");
+        hq << "t_ms,member,rx_rnti,tx_node,tx_rnti,harq_rnti,relayed_from_rnti,harq_id,ndi,rv,"
+              "harq_fb,mcs,src_l2,tb_size,n_rb,event,hist_before,sinr_db,sinr_eff_db,tbler,"
+              "corrupt\n";
+        auto db = [](double lin) { return lin > 0.0 ? 10.0 * std::log10(lin) : -99.0; };
+        for (const HarqTraceRow& r : g_harqRows)
+        {
+            const SlHarqCombineTraceParams& p = r.p;
+            auto tn = g.nodeOfRnti.find(p.m_txRnti);
+            hq << std::fixed << std::setprecision(3) << p.m_timeMs << ',' << r.member << ','
+               << p.m_rxRnti << ',' << (tn != g.nodeOfRnti.end() ? static_cast<int>(tn->second) : -1)
+               << ',' << p.m_txRnti << ',' << p.m_harqRnti << ',' << p.m_relayedFromRnti << ','
+               << +p.m_harqId << ',' << +p.m_ndi << ',' << +p.m_rv << ',' << +p.m_harqFb << ','
+               << +p.m_mcs << ',' << p.m_srcL2Id << ',' << p.m_tbSize << ',' << p.m_numRb << ','
+               << +p.m_event << ',' << p.m_histBefore << ',' << db(p.m_sinrAvg) << ','
+               << (p.m_event == SlHarqCombineTraceParams::DECODE ? db(p.m_sinrEff) : -99.0)
+               << ',' << std::setprecision(6) << p.m_tbler << ',' << p.m_corrupt << '\n';
         }
     }
     if (writeAllTx)

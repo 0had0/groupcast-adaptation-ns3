@@ -22,7 +22,7 @@ Questions the test suite must answer, each with evidence:
 | Q2 | Is every ACK/NACK bound to the right TB / HARQ process and sent in the right PSFCH occasion? | A02, B04, B05 |
 | Q3 | Do PRR, PIR and spectrum usage vary logically per traffic class, per RX (channel / distance) and with background interference? | E01–E06, G06 |
 | Q4 | Do SB-SPS and dynamic scheduling behave as specified, and how do they compare? | F01–F04 |
-| Q5 | Does the cooperative helper work as designed (signalling, per-TB selection, relay gating, feedback, Option-2 silent helper with NACK-reclaim)? | C01–C04, D01–D03, G04 |
+| Q5 | Does the cooperative helper work as designed (signalling, per-TB selection, relay gating, feedback, Option-2 silent helper with NACK-reclaim, cross-source soft combining)? | C01–C06, D01–D03, G04 |
 | Q6 | Are the patched NR module and the wrappers wired correctly (no hidden behaviour changes, deterministic, debug hooks off)? | A01, A03–A06 |
 | Q7 | **Study question.** How many blind retransmissions of the Kuo method actually help, especially for the worst (far) receivers? The ineffective ones bound what HARQ with a per-TB helper can save. | G01, G02 |
 | Q8 | **Study question.** Are the HARQ spectrum gains (Option 1, Option 2) real and correctly measured, and is the same PRR reachable? | G02, G03 |
@@ -291,6 +291,7 @@ Severity: H = can bias study results; M = wrong in some configurations; L = hygi
 | F27 | L | Blind arms keep psfchPeriod=1 (PSFCH symbols reserved but unused); coop arms abort with psfchPeriod=0 | main.cc:1683 | INFO in G03 |
 | F28 | M | `relay_needed` = SCHEDULED + NO_NACK (opportunities, not needs); `helper_drop_rate` divides a selection count by a decode count | main.cc:3980-3981 | G05 (recompute) |
 | F29 | M | Stock MAC feedback binding has no NDI/slot check (DV4) | NR mac 2877-2905 | B04 micro |
+| F35 | M | (added 2026-10-26) NrEesmIr HARQ-IR is an EESM **average** of all copies of the TB (SINR_eff = −β ln(mean over every copy's RBs of e^(−SINR/β)), BLER curve of the lowest MCS of the same modulation): a weak earlier copy pulls a strong copy below its own threshold, so combining can make a copy that decodes alone fail (335 B, MCS 14: 10 dB alone TBLER 0, after a 0 dB copy TBLER 1, effective 5.9 dB). Real IR never does worse than the best copy. Hits cooperative HARQ most (strong helper copy after a weak leader copy) | nr-eesm-ir.cc ComputeSINR / GetMcsEq (stock 5G-LENA) | C06 |
 
 ### 6.2 Facts the executor needs (verified file locations)
 
@@ -423,6 +424,7 @@ Test status = worst of its checks (FAIL > XFAIL > PASS > INFO > SKIP). XFAIL is 
 | SYN_MCR | members 1..7 at 10 m; member 8 at 650 m (> MCR 500 m, still decodable sometimes) | Option-1 range gating vs Option 2 | R2,R3 |
 | SYN_DIST | spacing ∈ {10,20,30,45,60,80} m | PRR/SINR vs distance curves | R1,R2,R3,R4H2,R5H2,R6H2 |
 | SYN_SPS | as SYN_MARGINAL, `--leaderSps` true vs false, periodic1tb and aperiodic1tb | SPS vs dynamic exact behaviour | R2,R6H1 |
+| SYN_COMB | 3 nodes: L, H 10 m behind, J beside H; PSSCH SINR fixed per link (`--testFixedSinr`), `--writeHarqTrace` | C06 cross-source combining | R3,R4,R4.2,R6 (11 cases, see C06) |
 | DET | real trace hwy_ivd30_n60_s1 moderate, periodic1tb | determinism and diagnostic neutrality | R2,R6H2 |
 
 Synthetic traffic: periodic1tb and aperiodic1tb for all; add periodic2tb for SYN_NEAR and SYN_MARGINAL (PDB 10 ms stress). Seeds 1..3.
@@ -568,6 +570,42 @@ Each test lists: **type** (U = unit in-process, M = in-process micro NR scenario
 * Members that failed the leader initial transmission (status 2) and succeed on a copy: success counted once at the app level (`_pkt.rx` = 1, no duplicates: sum rx ≤ sent per member).
 * The leader never logs reception of its own relayed copy. A copy is never counted as a leader transmission in `_ltx`.
 * Soft-combining evidence: P(success on copy | failed initial) > P(success on initial | same SINR bin) → INFO (directional).
+
+**C06_cross_source_combining** (U + W: SYN_COMB) — added 2026-10-26
+
+Question: does a member soft-combine the helper's relayed copy with the leader's copy of the same TB, or is the small
+`_noIR` difference of the helper arms (R4.1 / R4.2 ±0.02 PRR vs +0.02..0.07 for R2 / R3) physical?
+
+* Hooks (flag-gated, regression byte-identical when off, checked 2026-10-26 on the 12 smoke-profile arms + 10 moderate-background
+  cells: all CSVs identical, `_run.csv` differs only in the timing columns `wall_s`, `sel_cpu_us_mean`; A03 unchanged):
+  * `ns3::NrSpectrumPhy::SlTestFixedSinr` (platoon `--testFixedSinr="rx:tx=dB;..."`, node ids, default empty): the PSSCH SINR
+    of those links is set to dB on every RB before SCI-2A and data decoding (PSCCH, PSFCH and sensing keep the real channel).
+  * trace `ns3::NrSpectrumPhy::SlHarqCombine` (`SlHarqCombineTraceParams`; platoon `--writeHarqTrace` → `<out>_harq.csv`,
+    members only): every data decoding (`event` 0, `hist_before` = copies already in the buffer, effective SINR, TBLER,
+    outcome, the copy's SCI-2A HARQ id / NDI / RV / source / relayedFromRnti, HARQ owner) and every buffer event:
+    1 RemovePrevDecoded on NDI, 2 copy of an already decoded TB skipped, 3 reset because combining is off
+    (`SlSoftCombining` false or a blind copy with `SlBlindSoftCombining` false), 4 reset on NDI, 5 reset after decoding,
+    6 SCI-2A failure. No sink: nothing is computed.
+* Run-set SYN_COMB (`campaign/runsets.py` `COMB_CASES`, 11 cases × seeds 1–2, 12 s, `--numPlatoon=3`, MCS 14, periodic1fx = 335 B
+  on 20 RB): L = node 0, H = node 1 (`--helperSelect=static --helper=1`, S1), J = node 2 (beside H, 10 m from L). L→H 30 dB.
+  `main`: J←L 7.8 dB, J←H 8.2 dB (each alone TBLER 1.0, combined TBLER 0, `C06 --calibrate 335 20`); `weak`: J←L 0 dB,
+  J←H 10 dB; `reuse` (periodic2fx, SPS leader on one HARQ id): J←L = J←H = 0 dB so every handed slot is used.
+  Cases: R6 / R4.2 with `--softCombining` true / false, R4 with `--blindSoftCombining` false / true, R3 (same-source control)
+  true / false, R6 weak true / false, R6 reuse.
+* U checks (NrEesmIrT1 called directly): each copy alone fails and the two combined decode (design check, FAIL otherwise);
+  F35 (XFAIL): TBLER(0 dB → 10 dB combined) > TBLER(10 dB alone); INFO: share of a (weak, strong) grid where combining raises the TBLER.
+* W checks per case (J unless stated, KPI window): L→H decodes every copy (0 failures); PHY SINR of each copy = the fixed value
+  (±0.01 dB) with its TBLER; the leader's NDI = 1 copy fails; the next decode attempt is the helper's copy (helper arms); the
+  relayed copy's SCI-2A = the leader's HARQ id and source L2 id, NDI 0, RV 2, same TB size / MCS / RBs, relayedFromRnti =
+  HARQ owner = leader (0 mismatches); combining on: no buffer event 1/3/4/5 on the process between the two copies and
+  `hist_before` = 1 at the second (buffer length 2), the TB decodes on it (≥ 99 %); weak + combining: the 10 dB copy decodes
+  combined as it does alone → XFAIL(F35); combining off: every decode starts from an empty buffer and the second copy fails
+  (≤ 1 %; weak: the 10 dB copy decodes alone ≥ 99 %); reuse: no copy of TB k reaches J after the leader's NDI = 1 of a newer
+  TB on the same HARQ id (0).
+* Artefact `results/C06_copies.csv` (per case: SINRs, TBLER ranges, buffer lengths, outcomes, PRR of J).
+* Campaign evidence (read-only, `harq_helper_study/combining_evidence.py` on `out/remote_full`): next-copy success vs SINR after a
+  corrupt first copy (R3 vs R3_noIR, R4.2 vs R4.2_noIR), split by the first copy's SINR; SCI miss vs corrupt among failed first
+  attempts; HARQ-id reuse before a helper copy.
 
 ### Group D — Helper selection
 

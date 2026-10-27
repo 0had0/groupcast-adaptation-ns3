@@ -58,7 +58,7 @@ SynthGeometries()
 {
     return {"SYN_NEAR", "SYN_MARGINAL", "SYN_DTX",     "SYN_MCR",     "SYN_DIST_10",
             "SYN_DIST_20", "SYN_DIST_30", "SYN_DIST_45", "SYN_DIST_60", "SYN_DIST_80",
-            "SYN_SPS"};
+            "SYN_SPS", "SYN_COMB"};
 }
 
 std::vector<std::pair<double, double>>
@@ -81,6 +81,10 @@ SynthMembers(const std::string& g)
     if (g.rfind("SYN_DIST_", 0) == 0)
     {
         return Line(std::stod(g.substr(9)));
+    }
+    if (g == "SYN_COMB")
+    {
+        return {{-10.0, 0.0}, {-10.0, 3.7}}; // C06: helper 10 m behind the leader, receiver beside the helper
     }
     return {};
 }

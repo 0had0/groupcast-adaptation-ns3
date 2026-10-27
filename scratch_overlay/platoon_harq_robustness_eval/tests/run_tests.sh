@@ -42,7 +42,7 @@ mkdir -p "$HERE/out/logs" "$HERE/results"
 has_stage() { [[ ",$STAGES," == *",$1,"* ]]; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 TESTS_UNIT="A01_rrc_sci_compliance A02_psfch_timing D01_kuo_objective"
-TESTS_CHECK="A03_nr_examples_regression A04_patch_gating A05_env_guard A06_determinism B01_blind_workflow B02_option1_workflow B03_option2_workflow B04_feedback_binding B05_harq_process_management B06_sps_harq_interaction C01_helper_signalling C02_relay_gating C03_option2_helper_silence C04_relay_combining C05_option1_helper_nack D02_selection_invariants D03_selection_accounting E01_kpi_recompute E02_pir E03_channel_variation_per_rx E04_background_interference E05_traffic_classes E06_spectrum_usage_nodes F01_sbsps_behaviour F02_dynamic_behaviour F03_sps_vs_dynamic F04_retx_resource_constraints G01_blind_effectiveness G02_harq_upper_bound G03_spectrum_gain_prr_parity G04_option2_helper_protocol_scale G05_helper_reliability_worst_rx G06_distance_link_conditions G07_harq_tradeoffs G08_silent_helper_gap"
+TESTS_CHECK="A03_nr_examples_regression A04_patch_gating A05_env_guard A06_determinism B01_blind_workflow B02_option1_workflow B03_option2_workflow B04_feedback_binding B05_harq_process_management B06_sps_harq_interaction C01_helper_signalling C02_relay_gating C03_option2_helper_silence C04_relay_combining C05_option1_helper_nack C06_cross_source_combining D02_selection_invariants D03_selection_accounting E01_kpi_recompute E02_pir E03_channel_variation_per_rx E04_background_interference E05_traffic_classes E06_spectrum_usage_nodes F01_sbsps_behaviour F02_dynamic_behaviour F03_sps_vs_dynamic F04_retx_resource_constraints G01_blind_effectiveness G02_harq_upper_bound G03_spectrum_gain_prr_parity G04_option2_helper_protocol_scale G05_helper_reliability_worst_rx G06_distance_link_conditions G07_harq_tradeoffs G08_silent_helper_gap"
 
 run_test() {
   local t="$1"
@@ -85,7 +85,7 @@ if has_stage synth; then
   python3 "$HERE/campaign/run_matrix.py" --runset DET --jobs "$JOBS" >> "$HERE/out/logs/synth.log" 2>&1
   run_test A06_determinism >> "$HERE/out/logs/synth.log" 2>&1
   grep -E "campaign_needs_diag_off_duplicates" "$HERE/results/A06_determinism.json" | head -1 | tee -a "$HERE/out/logs/synth.log"
-  python3 "$HERE/campaign/run_matrix.py" --runset SYN_NEAR,SYN_MARGINAL,SYN_DTX,SYN_MCR,SYN_SPS,SYN_P2,SYN_HM,MAGIC,SYN_DIST --jobs "$JOBS" >> "$HERE/out/logs/synth.log" 2>&1
+  python3 "$HERE/campaign/run_matrix.py" --runset SYN_NEAR,SYN_MARGINAL,SYN_DTX,SYN_MCR,SYN_SPS,SYN_P2,SYN_HM,MAGIC,SYN_DIST,SYN_COMB --jobs "$JOBS" >> "$HERE/out/logs/synth.log" 2>&1
   tail -3 "$HERE/out/logs/synth.log"
 fi
 

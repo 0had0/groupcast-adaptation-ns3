@@ -119,6 +119,10 @@ for _s in (10, 20, 30, 45, 60, 80):
     GEOMS[f"SYN_DIST_{_s}"] = {"members": _line(_s)}
 # SYN_SPS uses the SYN_MARGINAL geometry
 GEOMS["SYN_SPS"] = GEOMS["SYN_MARGINAL"]
+# C06 (cross-source combining): leader L, helper H 10 m behind, receiver J beside H on the adjacent lane (LOS from L and
+# H, no vehicle on either segment); only 3 platoon nodes (--numPlatoon=3); the PSSCH SINR of every link is fixed by
+# --testFixedSinr, so the geometry only matters for PSCCH / PSFCH / sensing (strong at 10 m)
+GEOMS["SYN_COMB"] = {"members": [(-10.0, 0.0), (-10.0, 3.7)]}
 
 SYN_TEND = 20.0
 SYN_KPI_START = 3.0
@@ -222,6 +226,52 @@ def build_synth():
     # A05: one deliberate run with the MAGIC_HELPER_ID hook live.  DEVIATION: SYN_MARGINAL instead of SYN_NEAR (the hook
     # forces decode success of node id 3 = member 3; on the lossless SYN_NEAR ring nothing could differ).
     runs["MAGIC"] = [_syn_run("MAGIC", "SYN_MARGINAL", "R6_S1_H2", "periodic1tb", 1, 60, env_set={"MAGIC_HELPER_ID": "4"})]
+    runs["SYN_COMB"] = build_comb()
+    return runs
+
+
+# --- C06 (cross-source combining): 3 platoon nodes L = 0, H = 1, J = 2; the PSSCH SINR of every link is fixed
+# (--testFixedSinr "rx:tx=dB", node ids), so decoding is deterministic up to the TBLER of the chosen points.
+# NrEesmIrT1, MCS 14, periodic1fx TB = 335 B on 20 RB (C06 --calibrate 335 20): one copy alone TBLER 1.0 up to
+# 8.5 dB, 0 from 10 dB; two copies combined TBLER 0.001 at 7.0 dB, 0 from 7.5 dB.
+COMB_SEEDS = [1, 2]
+COMB_TEND = 12.0
+COMB_HELPER = ["--helperSched=S1", "--helperSelect=static", "--helper=1"]
+COMB_SINR = {
+    # J <- L 7.8 dB, J <- H 8.2 dB: each copy alone fails, leader + helper combined decodes
+    "main": "1:0=30;2:0=7.8;2:1=8.2;0:1=30;0:2=30;1:2=30",
+    # J <- L 0 dB (SCI-2A still decoded), J <- H 10 dB: the helper copy alone decodes, combined with the weak
+    # leader copy it does not (EESM-IR averages the copies)
+    "weak": "1:0=30;2:0=0;2:1=10;0:1=30;0:2=30;1:2=30",
+    # HARQ-id reuse (periodic2fx: the SPS leader keeps one HARQ id, RRI 10 ms): J decodes no copy, so the helper
+    # relays in every handed slot (the latest copies of a TB); does a copy of TB k reach J after TB k+1's NDI = 1?
+    "reuse": "1:0=30;2:0=0;2:1=0;0:1=30;0:2=30;1:2=30",
+}
+COMB_CASES = {
+    # name: (retx flags, SINR key, extra flags, traffic)
+    "R6_sc1": (["--retx=R6"] + COMB_HELPER, "main", [], "periodic1fx"),
+    "R6_sc0": (["--retx=R6"] + COMB_HELPER, "main", ["--softCombining=false"], "periodic1fx"),
+    "R4.2_sc1": (["--retx=R4.2"] + COMB_HELPER, "main", [], "periodic1fx"),
+    "R4.2_sc0": (["--retx=R4.2"] + COMB_HELPER, "main", ["--softCombining=false"], "periodic1fx"),
+    "R4_bsc0": (["--retx=R4"] + COMB_HELPER, "main", ["--blindSoftCombining=false"], "periodic1fx"),
+    "R4_bsc1": (["--retx=R4"] + COMB_HELPER, "main", ["--blindSoftCombining=true"], "periodic1fx"),
+    "R3_sc1": (["--retx=R3"], "main", [], "periodic1fx"),
+    "R3_sc0": (["--retx=R3"], "main", ["--softCombining=false"], "periodic1fx"),
+    "R6_weak_sc1": (["--retx=R6"] + COMB_HELPER, "weak", [], "periodic1fx"),
+    "R6_weak_sc0": (["--retx=R6"] + COMB_HELPER, "weak", ["--softCombining=false"], "periodic1fx"),
+    "R6_reuse": (["--retx=R6"] + COMB_HELPER, "reuse", [], "periodic2fx"),
+}
+
+
+def build_comb():
+    runs = []
+    for name, (flags, key, extra, traffic) in COMB_CASES.items():
+        for seed in COMB_SEEDS:
+            runs.append(Run(runset="SYN_COMB", arm=name, scenario="highway", ivd="10", bg="none", traffic=traffic,
+                            seed=seed, leader_sps=True, trace=syn_trace_path("SYN_COMB"), flags=list(flags),
+                            extra=["--numPlatoon=3", "--mcs=14", "--writeHarqTrace=true",
+                                   f"--testFixedSinr={COMB_SINR[key]}"] + list(extra),
+                            bg_flows=1.0, max_time=COMB_TEND))
     return runs
 
 
@@ -329,7 +379,8 @@ def build_rbt_ring():
             for arm in ARM_ORDER]
 
 
-SYNTH_NAMES = ["SYN_NEAR", "SYN_MARGINAL", "SYN_DTX", "SYN_MCR", "SYN_DIST", "SYN_SPS", "SYN_P2", "SYN_HM", "DET", "MAGIC"]
+SYNTH_NAMES = ["SYN_NEAR", "SYN_MARGINAL", "SYN_DTX", "SYN_MCR", "SYN_DIST", "SYN_SPS", "SYN_P2", "SYN_HM", "DET", "MAGIC",
+               "SYN_COMB"]
 CAMPAIGN_NAMES = ["CORE", "SPSDYN", "RBT_RING"]
 
 
