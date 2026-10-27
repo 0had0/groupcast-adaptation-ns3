@@ -8,6 +8,7 @@ BASE_FLAGS, the background levels and the arm flags are copied from run_retx.py;
 run_retx and compares (deviation would abort the launch script).
 """
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,9 @@ REPO = EVAL.parents[1]
 sys.path.insert(0, str(EVAL))
 sys.path.insert(0, str(HERE))
 
-BIN = REPO / "ns-3-dev/build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-default"
+# PTEST_BIN overrides the simulator (e.g. a saved build of an earlier commit for a before / after comparison)
+BIN = Path(os.environ.get("PTEST_BIN") or
+           REPO / "ns-3-dev/build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-default")
 OUT = TESTS / "out"
 TRACES_REAL = EVAL / "traces"
 TRACES_SYN = OUT / "traces"
@@ -227,6 +230,7 @@ def build_synth():
     # forces decode success of node id 3 = member 3; on the lossless SYN_NEAR ring nothing could differ).
     runs["MAGIC"] = [_syn_run("MAGIC", "SYN_MARGINAL", "R6_S1_H2", "periodic1tb", 1, 60, env_set={"MAGIC_HELPER_ID": "4"})]
     runs["SYN_COMB"] = build_comb()
+    runs["SYN_STALE"] = build_stale()
     return runs
 
 
@@ -272,6 +276,58 @@ def build_comb():
                             extra=["--numPlatoon=3", "--mcs=14", "--writeHarqTrace=true",
                                    f"--testFixedSinr={COMB_SINR[key]}"] + list(extra),
                             bg_flows=1.0, max_time=COMB_TEND))
+    return runs
+
+
+# --- C07 (stale HARQ state after a missed new-data SCI): the SYN_COMB geometry and run setup; --testDropSci
+# "rx:tx:k,..." makes J (node 2) ignore its k-th expected PSSCH reception from tx (both SCI stages unread; the
+# SCI-1A reservation of the later copies is kept, as in 3GPP where every copy carries its own SCI-1A). The leader
+# (SPS, one HARQ id) sends one TB per 100 ms; the k values below are the receptions of the unfixed binary at
+# seed 1 (C07 checks that each drop hits the intended copy).
+STALE_SEEDS = [1, 2]
+STALE_TEND = 4.0
+STALE_SINR = {
+    # J needs 2 copies of a TB (7.8 dB: alone TBLER 1, two combined 0); H decodes copy 1 (Option 2 arms)
+    "j2": "1:0=30;2:0=7.8;2:1=8.2;0:1=30;0:2=30;1:2=30",
+    # J and H need 2 copies (Option 1: copy 2 is sent only on H's NACK when J's copy 1 is ignored)
+    "jh2": "1:0=7.8;2:0=7.8;2:1=8.2;0:1=30;0:2=30;1:2=30",
+    # J decodes copy 1; H needs copy 2 (J skips and, under Option 2, ACKs copy 2)
+    "jok": "1:0=7.8;2:0=30;2:1=30;0:1=30;0:2=30;1:2=30",
+    # J never decodes (5 dB: TBLER 1 alone and combined): buffer of 1, 2, 3 copies
+    "jfail": "1:0=30;2:0=5;2:1=5;0:1=30;0:2=30;1:2=30",
+}
+STALE_CASES = {
+    # name: (retx flags, SINR key, --testDropSci, extra flags)
+    # (a) TB n decoded on HARQ id h, copy 1 of TB n+1 ignored (Option 1: no ACK of a decoded TB)
+    "a_R2": (["--retx=R2"], "jh2", "2:0:3", []),
+    # (b) as (a) with Option 2 (SlAckPrevDecodedTb)
+    "b_R3": (["--retx=R3"], "j2", "2:0:3", []),
+    # (c) TB n not decoded (its later copies ignored, copy 1 stays in the buffer), copy 1 of TB n+1 ignored
+    "c_R2": (["--retx=R2"], "jh2", "2:0:4,5", []),
+    "c_R3": (["--retx=R3"], "j2", "2:0:4,5,6", []),
+    # (d) cross-source: copy 2 of TB n+1 is the helper's (relayedFromRnti = leader, leader's HARQ id)
+    "d_R6": (["--retx=R6"] + COMB_HELPER, "j2", "2:0:2", []),
+    "d_R6_stale": (["--retx=R6"] + COMB_HELPER, "j2", "2:1:2,3;2:0:3", []),
+    # (e) regression, nothing ignored
+    "e_R3": (["--retx=R3"], "j2", "", []),
+    "e_R3_3copies": (["--retx=R3"], "jfail", "", []),
+    "e_R3_decoded": (["--retx=R3"], "jok", "", []),
+    "e_R1": (["--retx=R1"], "j2", "", []),
+    "e_R1_bsc": (["--retx=R1"], "j2", "", ["--blindSoftCombining=true"]),
+    "e_R6": (["--retx=R6"] + COMB_HELPER, "j2", "", []),
+}
+
+
+def build_stale():
+    runs = []
+    for name, (flags, key, drop, extra) in STALE_CASES.items():
+        for seed in STALE_SEEDS:
+            ex = ["--numPlatoon=3", "--mcs=14", "--writeHarqTrace=true", f"--testFixedSinr={STALE_SINR[key]}"]
+            if drop:
+                ex.append(f"--testDropSci={drop}")
+            runs.append(Run(runset="SYN_STALE", arm=name, scenario="highway", ivd="10", bg="none",
+                            traffic="periodic1fx", seed=seed, leader_sps=True, trace=syn_trace_path("SYN_COMB"),
+                            flags=list(flags), extra=ex + list(extra), bg_flows=1.0, max_time=STALE_TEND))
     return runs
 
 
@@ -380,7 +436,7 @@ def build_rbt_ring():
 
 
 SYNTH_NAMES = ["SYN_NEAR", "SYN_MARGINAL", "SYN_DTX", "SYN_MCR", "SYN_DIST", "SYN_SPS", "SYN_P2", "SYN_HM", "DET", "MAGIC",
-               "SYN_COMB"]
+               "SYN_COMB", "SYN_STALE"]
 CAMPAIGN_NAMES = ["CORE", "SPSDYN", "RBT_RING"]
 
 

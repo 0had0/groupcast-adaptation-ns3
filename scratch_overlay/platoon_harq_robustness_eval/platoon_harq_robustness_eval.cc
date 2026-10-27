@@ -312,6 +312,7 @@ struct DivRow
 struct Global
 {
     double tSlot{0.0005};
+    uint64_t ndiToggleNewTb{0}; // members' receptions whose NDI bit revealed a missed copy 1
     uint32_t slotsPerSubframe{2};
     bool roundabout{false};
     uint32_t totalSubCh{5};
@@ -389,6 +390,13 @@ void
 OnMemberHarqEvent(uint32_t member, const SlHarqCombineTraceParams& p)
 {
     g_harqRows.push_back({member, p});
+}
+
+/// NrSpectrumPhy::SlNdiToggleNewTb of a member (run-level counter ndi_toggle_new_tb)
+void
+OnMemberNdiToggle(uint64_t before, uint64_t after)
+{
+    g.ndiToggleNewTb += after - before;
 }
 
 // ---------------------------------------------------------------------------
@@ -1453,6 +1461,7 @@ main(int argc, char* argv[])
     bool writeGrants = false;       // _grants.csv: every grant created / kept / misfit
     bool writeHarqTrace = false;    // _harq.csv: members' HARQ soft-buffer events (validation)
     std::string testFixedSinr;      // validation hook: fixed PSSCH SINR "rx:tx=dB;..." (node ids)
+    std::string testDropSci;        // validation hook: dropped PSCCH receptions "rx:tx:k,...;..."
     // per-TB helper selection (Kuo et al. 2021), on top of a cooperative arm:
     //   off     the static --helper for every TB (default)
     //   static  the static --helper through the selector (tests the selector path)
@@ -1612,6 +1621,11 @@ main(int argc, char* argv[])
                  "validation only: fix the PSSCH SINR of links, \"rxNode:txNode=dB;...\" "
                  "(NrSpectrumPhy::SlTestFixedSinr); empty = off",
                  testFixedSinr);
+    cmd.AddValue("testDropSci",
+                 "validation only: at rxNode drop the k-th PSCCH reception from txNode (both "
+                 "SCI stages), \"rxNode:txNode:k[,k...];...\" (NrSpectrumPhy::SlTestDropSci); "
+                 "empty = off",
+                 testDropSci);
     cmd.AddValue("collCond",
                  "log the link condition leader / helper -> interferer of collided attempts "
                  "(extra channel-condition queries can change the random draws: step-2 runs)",
@@ -1736,6 +1750,10 @@ main(int argc, char* argv[])
     if (!testFixedSinr.empty())
     {
         Config::SetDefault("ns3::NrSpectrumPhy::SlTestFixedSinr", StringValue(testFixedSinr));
+    }
+    if (!testDropSci.empty())
+    {
+        Config::SetDefault("ns3::NrSpectrumPhy::SlTestDropSci", StringValue(testDropSci));
     }
     // the leader's flow is on SPS only for periodic traffic or aperiodic with aperiodicRri (TrafficFlowKeys)
     const bool leaderSpsCfg = leaderSps && (BaseTraffic(traffic).rfind("periodic", 0) == 0 ||
@@ -2297,6 +2315,9 @@ main(int argc, char* argv[])
                 "SlHarqCombine",
                 MakeBoundCallback(&OnMemberHarqEvent, m));
         }
+        memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+            "SlNdiToggleNewTb",
+            MakeCallback(&OnMemberNdiToggle));
     }
     for (uint32_t i = 0; i < numNodes; ++i)
     {
@@ -3962,7 +3983,8 @@ main(int argc, char* argv[])
               "helper_ack_rx,relay_after_allack,hstat_rule,hstat_tie_m,hstat_cand_max_fail,"
               "kuo_objective,pos_err_m,reack_decoded,psfch_exact_attr,fb_late,helper_nack_stale,"
               "blind_soft_combining,opt1_helper_nack,leader_fixed_size,helper_takeover,leader_fallback,"
-              "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot\n";
+              "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot,"
+              "ndi_toggle_new_tb\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4194,7 +4216,8 @@ main(int argc, char* argv[])
                << (kFixedSize.count(traffic) ? kFixedSize.at(traffic) : 0) << ','
                << helperTakeover << ',' << (leaderFallback && helperTakeover && coop && !helperBlind)
                << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
-               << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << '\n';
+               << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << ','
+               << g.ndiToggleNewTb << '\n';
         }
     }
 

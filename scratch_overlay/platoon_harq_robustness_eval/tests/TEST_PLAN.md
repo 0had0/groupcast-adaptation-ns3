@@ -22,7 +22,7 @@ Questions the test suite must answer, each with evidence:
 | Q2 | Is every ACK/NACK bound to the right TB / HARQ process and sent in the right PSFCH occasion? | A02, B04, B05 |
 | Q3 | Do PRR, PIR and spectrum usage vary logically per traffic class, per RX (channel / distance) and with background interference? | E01–E06, G06 |
 | Q4 | Do SB-SPS and dynamic scheduling behave as specified, and how do they compare? | F01–F04 |
-| Q5 | Does the cooperative helper work as designed (signalling, per-TB selection, relay gating, feedback, Option-2 silent helper with NACK-reclaim, cross-source soft combining)? | C01–C06, D01–D03, G04 |
+| Q5 | Does the cooperative helper work as designed (signalling, per-TB selection, relay gating, feedback, Option-2 silent helper with NACK-reclaim, cross-source soft combining)? | C01–C07, D01–D03, G04 |
 | Q6 | Are the patched NR module and the wrappers wired correctly (no hidden behaviour changes, deterministic, debug hooks off)? | A01, A03–A06 |
 | Q7 | **Study question.** How many blind retransmissions of the Kuo method actually help, especially for the worst (far) receivers? The ineffective ones bound what HARQ with a per-TB helper can save. | G01, G02 |
 | Q8 | **Study question.** Are the HARQ spectrum gains (Option 1, Option 2) real and correctly measured, and is the same PRR reachable? | G02, G03 |
@@ -292,6 +292,7 @@ Severity: H = can bias study results; M = wrong in some configurations; L = hygi
 | F28 | M | `relay_needed` = SCHEDULED + NO_NACK (opportunities, not needs); `helper_drop_rate` divides a selection count by a decode count | main.cc:3980-3981 | G05 (recompute) |
 | F29 | M | Stock MAC feedback binding has no NDI/slot check (DV4) | NR mac 2877-2905 | B04 micro |
 | F35 | M | (added 2026-10-26) NrEesmIr HARQ-IR is an EESM **average** of all copies of the TB (SINR_eff = −β ln(mean over every copy's RBs of e^(−SINR/β)), BLER curve of the lowest MCS of the same modulation): a weak earlier copy pulls a strong copy below its own threshold, so combining can make a copy that decodes alone fail (335 B, MCS 14: 10 dB alone TBLER 0, after a 0 dB copy TBLER 1, effective 5.9 dB). Real IR never does worse than the best copy. Hits cooperative HARQ most (strong helper copy after a weak leader copy) | nr-eesm-ir.cc ComputeSINR / GetMcsEq (stock 5G-LENA) | C06 |
+| F36 | H | (added 2026-10-27, fixed in `stale-ndi-fix`) The SL receiver used NDI as a "new data" flag (1 on copy 1 only) and cleared the "already decoded" mark and the soft buffer of a HARQ process only on NDI = 1. A member that missed the SCI of copy 1 of a new TB (in 5G-LENA: SCI-2A failed, or a helper copy with its own SCI-1A) then skipped copies 2 / 3 as the previous TB when it had decoded it (and ACKed them under Option 2: false ACK that stops the leader or the helper), or combined them with the previous TB's failed copies. Fix: the 3GPP NDI bit (toggled per TB per (destination, HARQ id) at the transmitter, the leader's bit on a helper copy, padding bit 1 of the SCI-2A byte, air size unchanged); the receiver flushes the process when the bit differs from the stored one; run counter `ndi_toggle_new_tb` | nr-spectrum-phy.cc RxSlPssch / SlNdiNewTb, nr-sl-ue-mac.cc DoSlotIndication, nr-sl-sci-f2a-header.cc | C07 |
 
 ### 6.2 Facts the executor needs (verified file locations)
 
@@ -425,6 +426,7 @@ Test status = worst of its checks (FAIL > XFAIL > PASS > INFO > SKIP). XFAIL is 
 | SYN_DIST | spacing ∈ {10,20,30,45,60,80} m | PRR/SINR vs distance curves | R1,R2,R3,R4H2,R5H2,R6H2 |
 | SYN_SPS | as SYN_MARGINAL, `--leaderSps` true vs false, periodic1tb and aperiodic1tb | SPS vs dynamic exact behaviour | R2,R6H1 |
 | SYN_COMB | 3 nodes: L, H 10 m behind, J beside H; PSSCH SINR fixed per link (`--testFixedSinr`), `--writeHarqTrace` | C06 cross-source combining | R3,R4,R4.2,R6 (11 cases, see C06) |
+| SYN_STALE | SYN_COMB geometry, 4 s; selected PSSCH receptions of J ignored (`--testDropSci`) | C07 stale HARQ state | R1,R2,R3,R6 (12 cases, see C07) |
 | DET | real trace hwy_ivd30_n60_s1 moderate, periodic1tb | determinism and diagnostic neutrality | R2,R6H2 |
 
 Synthetic traffic: periodic1tb and aperiodic1tb for all; add periodic2tb for SYN_NEAR and SYN_MARGINAL (PDB 10 ms stress). Seeds 1..3.
@@ -606,6 +608,57 @@ Question: does a member soft-combine the helper's relayed copy with the leader's
 * Campaign evidence (read-only, `harq_helper_study/combining_evidence.py` on `out/remote_full`): next-copy success vs SINR after a
   corrupt first copy (R3 vs R3_noIR, R4.2 vs R4.2_noIR), split by the first copy's SINR; SCI miss vs corrupt among failed first
   attempts; HARQ-id reuse before a helper copy.
+
+**C07_stale_harq_state** (W: SYN_STALE) — added 2026-10-27 (F36)
+
+Question: after a member misses the SCI of copy 1 of a new TB, are the later copies of that TB decoded from a flushed HARQ
+process (3GPP: the NDI bit toggles per TB, TS 38.321 5.22.2.2, TS 38.212 8.4.1.1), or skipped as / combined with the
+previous TB on the same HARQ id?
+
+* Hook (flag-gated, off by default): `ns3::NrSpectrumPhy::SlTestDropSci` (platoon `--testDropSci="rx:tx:k[,k...];..."`,
+  node ids): at rxNode, the k-th **expected PSSCH reception** from txNode (k from 1) is ignored as if neither SCI stage had
+  been decoded (no SCI-2A, no decoding, no HARQ feedback; `_harq.csv` event 7). DEVIATION from the brief (drop at the PSCCH):
+  in 5G-LENA only the first slot of a reservation carries an SCI-1A and the receiver's MAC expects copies 2 / 3 from it, so a
+  dropped PSCCH of copy 1 hides the whole reservation and the stale state is never reached for leader copies. The hook keeps
+  the SCI-1A reservation, as in 3GPP where every copy carries its own SCI-1A. New `_harq.csv` events: 7 reception ignored
+  (hook), 8 ACK of an already decoded TB (`SlAckPrevDecodedTb`), 9 NDI bit toggled while the new-data flag is 0 (flush).
+* Run-set SYN_STALE (`campaign/runsets.py` `STALE_CASES`, 12 cases × seeds 1–2, 4 s, SYN_COMB geometry and setup, periodic1fx,
+  SPS leader on one HARQ id, one TB per 100 ms). SINR sets: `j2` J←L 7.8 / J←H 8.2 dB (J needs 2 copies), `jh2` H too (Option 1
+  sends copy 2 only on a NACK), `jok` J←L 30 dB (H needs copy 2), `jfail` J 5 dB (never decodes). k values = J's receptions at
+  seed 1; the setup check verifies each drop hits the intended copy.
+  * (a) `a_R2`: TB n decoded, copy 1 of TB n+1 ignored, Option 1. (b) `b_R3`: same, Option 2.
+  * (c) `c_R2`, `c_R3`: copies 2 (/ 3) of TB n ignored (its copy 1 stays in the buffer), then copy 1 of TB n+1 ignored.
+  * (d) cross-source, R6: `d_R6` (as b, the next copy is the helper's), `d_R6_stale` (as c, helper copies of TB n ignored).
+  * (e) regression, nothing ignored: `e_R3` (2 copies combined), `e_R3_3copies` (buffer 0, 1, 2), `e_R3_decoded` (copy of a
+    decoded TB skipped and ACKed), `e_R1` (blind, `SlBlindSoftCombining` off: every copy alone), `e_R1_bsc`, `e_R6`.
+* Checks per episode case (a–d): setup (one episode per run, a later copy on the same HARQ id, previous TB decoded / in the
+  buffer); the later copy is not skipped as "already decoded" (a, b, d); J's first decode of the TB has `hist_before` = 0;
+  no ACK of the TB before J decodes it (Option 2 cases); the next decode after a failed first one has `hist_before` = 1; J
+  decodes the TB; every decode of the run combines only earlier failed copies of the same TB; `ndi_toggle_new_tb` ≥ 1 per
+  episode. Regression cases (e): the same buffer invariant, the case's expected combining, `ndi_toggle_new_tb` = 0.
+* Artefact `results/C07_episodes.csv`.
+* Result on the unfixed code (commit adec989 + hook, 2026-10-27): FAIL 35 / PASS 26. Every behaviour check of (a)–(d) FAILS
+  as expected: (a, b, d) the later copy is skipped as the previous TB (b, d: and ACKed), J loses the TB; (c, d_stale) copy 2
+  is combined with the previous TB's copy 1 (`hist_before` 1) and decodes (optimistic). The (e) behaviour checks PASS; their
+  only FAIL is the `ndi_toggle_new_tb` column, which does not exist before the fix. After the fix: PASS 61 / 61.
+* Quick profile before / after the fix (2026-10-27, same profile and run-sets, both binaries run fresh; old = the step-0
+  build adec989 via `PTEST_BIN`): FAIL checks 66 → 50. Improved: B03 FAIL → XFAIL, C01 10 → 6 FAIL, C02 6 → 2, C04 4 → 3,
+  E06 FAIL → PASS, C07 FAIL → PASS. Unchanged: A01–A05, B01, B02, B06, C03, C05, C06, D01, D03, E02–E05, F01–F04, G01–G03,
+  G06. Worse (no expectation changed, OPEN for review):
+  * E01 PASS → FAIL (8 cells, one run: SYN_MARGINAL R6_S1_H2 periodic2tb s2). The run's SPS leader spends ~120 ms on a 20 ms
+    reservation while packets come every 10 ms, so every other packet is not transmitted (cause 3). E01 maps TBs to packets by
+    the cumulative n_seq of the leader's new transmissions and assumes every packet was transmitted: its TB→packet mapping
+    shifts by one packet there (per-TB recount 3 / 1 vs the program's 1 / 3 on neighbouring packets, 6 packets with 0
+    attempts). An E01 attribution limit, exposed because the decode outcomes (and so the leader's reselections) of this run
+    diverged from the old binary; not a decoding or counting error of the simulator.
+  * G04 SPSDYN R6: `helper_ack_suppressed` 711 vs recount 710 (was 710 = 710); CORE R6 already failed before (3216 vs 3213, now
+    3216 vs 3211). The counter counts every ACK the named helper does not send, including its re-ACKs of a TB it already holds
+    (SlAckPrevDecodedTb), the recount counts helper decodes only; pre-existing mismatch class.
+  * A06 PASS → XFAIL: `--collCond` (diagnostic, documented to possibly change the random draws) no longer leaves the KPI
+    outputs identical in the DET runs; the determinism checks themselves still PASS.
+  * B04 +1 XFAIL (1 NACK of an attributed transmission not in its n_nack), B05 / D02 F05 XFAIL (4 of 18058 TBs had their
+    helper choice overwritten before the last copy, was 0), G08 one PASS less (3 → 2 checks evaluated): known findings
+    whose counts move with the changed decode outcomes.
 
 ### Group D — Helper selection
 

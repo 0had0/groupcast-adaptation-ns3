@@ -11,10 +11,10 @@ index d8a1fa3f..d4073e32 100644
      /**
       * \brief Status of the SL Harq: ACKed or NACKed
 diff --git a/model/nr-sl-phy-mac-common.h b/model/nr-sl-phy-mac-common.h
-index 8eab6f1b..265763bc 100644
+index 8eab6f1b..e63fedf5 100644
 --- a/model/nr-sl-phy-mac-common.h
 +++ b/model/nr-sl-phy-mac-common.h
-@@ -429,6 +429,53 @@ struct SlRxDataPacketTraceParams : public RxPacketTraceParams
+@@ -429,6 +429,58 @@ struct SlRxDataPacketTraceParams : public RxPacketTraceParams
      typedef void (*TracedCallback)(const SlRxDataPacketTraceParams params);
  };
  
@@ -36,6 +36,11 @@ index 8eab6f1b..265763bc 100644
 +        RESET_NDI = 4,         //!< NDI = 1 with a non-empty buffer: cleared (new TB)
 +        RESET_DECODED = 5,     //!< buffer cleared after a successful decoding
 +        SCI2_FAIL = 6,         //!< SCI-2A not decoded: nothing stored
++        SCI_DROPPED = 7,       //!< test hook SlTestDropSci: this PSSCH reception ignored, both
++                               //!< SCI stages unread (no HARQ id / NDI / RV / L2 ids set)
++        ACK_PREV_DECODED = 8,  //!< copy of a TB already decoded ACKed (SlAckPrevDecodedTb)
++        NDI_TOGGLE = 9,        //!< NDI bit toggled while the "new data" flag is 0 (copy 1 of
++                               //!< the TB missed): "decoded" mark and buffer flushed
 +    };
 +
 +    double m_timeMs{0.0};          //!< time (ms)
@@ -68,7 +73,7 @@ index 8eab6f1b..265763bc 100644
  /**
   * \ingroup utils
   * \brief The SlCtrlRxPacketTraceParams struct
-@@ -523,6 +570,8 @@ struct SensingData
+@@ -523,6 +575,8 @@ struct SensingData
      uint8_t sbChStartReTx2{
          std::numeric_limits<uint8_t>::max()}; //!< The index of the starting sub-channel allocated
                                                //!< to second retransmission
@@ -78,7 +83,7 @@ index 8eab6f1b..265763bc 100644
  
  /**
 diff --git a/model/nr-sl-sci-f2a-header.cc b/model/nr-sl-sci-f2a-header.cc
-index 78563f37..aa4c40a5 100644
+index 78563f37..e8bc5da1 100644
 --- a/model/nr-sl-sci-f2a-header.cc
 +++ b/model/nr-sl-sci-f2a-header.cc
 @@ -29,7 +29,8 @@ NrSlSciF2aHeader::~NrSlSciF2aHeader()
@@ -91,7 +96,31 @@ index 78563f37..aa4c40a5 100644
  
  TypeId
  NrSlSciF2aHeader::GetTypeId()
-@@ -95,11 +96,26 @@ NrSlSciF2aHeader::Print(std::ostream& os) const
+@@ -84,6 +85,18 @@ NrSlSciF2aHeader::GetCsiReq() const
+     return m_csiReq;
+ }
+ 
++void
++NrSlSciF2aHeader::SetNdiBit(uint8_t ndiBit)
++{
++    m_ndiBit = ndiBit & 0x1;
++}
++
++uint8_t
++NrSlSciF2aHeader::GetNdiBit() const
++{
++    return m_ndiBit;
++}
++
+ void
+ NrSlSciF2aHeader::Print(std::ostream& os) const
+ {
+@@ -91,15 +104,30 @@ NrSlSciF2aHeader::Print(std::ostream& os) const
+     NrSlSciF2Header::Print(os);
+     os << ", HARQ feedback enabled/disabled indicator " << +m_harqFeedbackIndicator
+        << ", Cast type indicator " << +m_castType << ", Channel state information request "
+-       << +m_csiReq;
++       << +m_csiReq << ", NDI bit " << +m_ndiBit;
  }
  
  uint32_t
@@ -119,14 +148,15 @@ index 78563f37..aa4c40a5 100644
  void
  NrSlSciF2aHeader::Serialize(Buffer::Iterator start) const
  {
-@@ -113,10 +129,32 @@ NrSlSciF2aHeader::Serialize(Buffer::Iterator start) const
+@@ -113,10 +141,33 @@ NrSlSciF2aHeader::Serialize(Buffer::Iterator start) const
      scif02a = (m_castType & 0x3) | (scif02a << 2);
      scif02a = (m_csiReq & 0x1) | (scif02a << 1);
  
 -    // now 4 bits of padding
 -    uint8_t padding = 0;
-+    // now 4 bits of padding; the lowest one flags the cooperative side information
-+    uint8_t padding = HasCoopInfo() ? 0x01 : 0x00;
++    // now 4 bits of padding; the lowest one flags the cooperative side information, the
++    // next one carries the 3GPP NDI bit (1 bit of the real SCI-2A: the air size is unchanged)
++    uint8_t padding = (HasCoopInfo() ? 0x01 : 0x00) | ((m_ndiBit & 0x1) << 1);
      scif02a = (padding & 0x0F) | (scif02a << 4);
      i.WriteU8(scif02a);
 +    if (!HasCoopInfo())
@@ -154,10 +184,11 @@ index 78563f37..aa4c40a5 100644
  }
  
  uint32_t
-@@ -131,6 +169,29 @@ NrSlSciF2aHeader::Deserialize(Buffer::Iterator start)
+@@ -131,6 +182,30 @@ NrSlSciF2aHeader::Deserialize(Buffer::Iterator start)
      m_harqFeedbackIndicator = (scif02a >> 7) & 0x1;
      m_castType = (scif02a >> 5) & 0x3;
      m_csiReq = (scif02a >> 4) & 0x1;
++    m_ndiBit = (scif02a >> 1) & 0x1;
 +    m_coop = CoopInfo{};
 +    if (!(scif02a & 0x01))
 +    {
@@ -184,10 +215,14 @@ index 78563f37..aa4c40a5 100644
  
      return GetSerializedSize();
  }
-@@ -143,4 +204,28 @@ NrSlSciF2aHeader::operator==(const NrSlSciF2aHeader& b) const
-            m_harqFeedbackIndicator == b.m_harqFeedbackIndicator;
- }
- 
+@@ -140,7 +215,31 @@ NrSlSciF2aHeader::operator==(const NrSlSciF2aHeader& b) const
+ {
+     return m_harqId == b.m_harqId && m_ndi == b.m_ndi && m_rv == b.m_rv && m_srcId == b.m_srcId &&
+            m_dstId == b.m_dstId && m_csiReq == b.m_csiReq && m_castType == b.m_castType &&
+-           m_harqFeedbackIndicator == b.m_harqFeedbackIndicator;
++           m_harqFeedbackIndicator == b.m_harqFeedbackIndicator && m_ndiBit == b.m_ndiBit;
++}
++
 +void
 +NrSlSciF2aHeader::SetHelperId(uint32_t helperId)
 +{
@@ -210,17 +245,26 @@ index 78563f37..aa4c40a5 100644
 +NrSlSciF2aHeader::GetCoopInfo() const
 +{
 +    return m_coop;
-+}
-+
+ }
+ 
  } // namespace ns3
 diff --git a/model/nr-sl-sci-f2a-header.h b/model/nr-sl-sci-f2a-header.h
-index a90e6a0b..0cd31371 100644
+index a90e6a0b..7fcb7ed8 100644
 --- a/model/nr-sl-sci-f2a-header.h
 +++ b/model/nr-sl-sci-f2a-header.h
-@@ -77,6 +77,50 @@ class NrSlSciF2aHeader : public NrSlSciF2Header
+@@ -76,6 +76,58 @@ class NrSlSciF2aHeader : public NrSlSciF2Header
+      * \param csiReq The channel state information request flag
       */
      void SetCsiReq(uint8_t csiReq);
- 
++    /**
++     * \brief Set the 3GPP new data indicator bit (TS 38.212 8.4.1.1): toggled by the
++     *        transmitter at each new TB of the HARQ process. GetNdi() is the simulator's
++     *        "new data" flag (1 on the first transmission of a TB only).
++     *
++     * \param ndiBit The NDI bit (0 or 1)
++     */
++    void SetNdiBit(uint8_t ndiBit);
++
 +    /**
 +     * Cooperative HARQ (chained reservations) side information.
 +     *
@@ -264,14 +308,27 @@ index a90e6a0b..0cd31371 100644
 +
 +    /// true if helperId or relayedFromRnti is set (side information serialized)
 +    bool HasCoopInfo() const;
-+
+ 
      /**
       * \brief Get the HARQ feedback enabled/disabled indicator field value
-      *
-@@ -119,6 +163,7 @@ class NrSlSciF2aHeader : public NrSlSciF2Header
+@@ -95,6 +147,12 @@ class NrSlSciF2aHeader : public NrSlSciF2Header
+      * \return The channel state information request flag
+      */
+     uint8_t GetCsiReq() const;
++    /**
++     * \brief Get the 3GPP new data indicator bit (toggled per new TB of the HARQ process)
++     *
++     * \return The NDI bit
++     */
++    uint8_t GetNdiBit() const;
+ 
+     /**
+      * \brief Equality operator
+@@ -119,6 +177,8 @@ class NrSlSciF2aHeader : public NrSlSciF2Header
      uint8_t m_harqFeedbackIndicator{Disabled}; //!< Whether HARQ feedback is enabled or disabled
      uint8_t m_castType{Broadcast}; //!< The type of communication this NrSlSciF2aHeader is used for
      uint8_t m_csiReq{0};           //!< The channel state information request flag
++    uint8_t m_ndiBit{0};           //!< 3GPP NDI bit, toggled per new TB of the HARQ process
 +    CoopInfo m_coop;               //!< cooperative HARQ side information (not on the air)
  
      static std::vector<CastTypeIndicator_t>
@@ -702,7 +759,7 @@ index 1c987513..f681df6e 100644
  
  } // namespace ns3
 diff --git a/model/nr-sl-ue-mac.cc b/model/nr-sl-ue-mac.cc
-index 57e4cf29..8637b750 100644
+index 57e4cf29..fdf73d68 100644
 --- a/model/nr-sl-ue-mac.cc
 +++ b/model/nr-sl-ue-mac.cc
 @@ -55,6 +55,68 @@ NrSlUeMac::GetTypeId()
@@ -1177,7 +1234,7 @@ index 57e4cf29..8637b750 100644
      }
  }
  
-@@ -933,6 +1319,201 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
+@@ -933,6 +1319,203 @@ NrSlUeMac::DoReceivePsschPhyPdu(Ptr<PacketBurst> pdu)
          NS_FATAL_ERROR("Received PHY PDU with unknown destination " << sciF2a.GetDstId());
      }
  
@@ -1214,6 +1271,7 @@ index 57e4cf29..8637b750 100644
 +        p.dstL2Id = sciF2a.GetDstId();
 +        p.fromRnti = txTag.GetRnti();
 +        p.harqId = sciF2a.GetHarqId();
++        p.ndiBit = sciF2a.GetNdiBit();
 +        p.srcL2Id = sciF2a.GetSrcId();
 +        p.lcid = txTag.GetLcid();
 +        p.castType = sciF2a.GetCastType();
@@ -1346,6 +1404,7 @@ index 57e4cf29..8637b750 100644
 +                relay.relayedFromRnti = txTag.GetRnti();
 +                relay.relayedSrcL2Id = sciF2a.GetSrcId();
 +                relay.relayedHarqId = sciF2a.GetHarqId();
++                relay.relayedNdiBit = sciF2a.GetNdiBit();
 +                if (coop.deadline != 0)
 +                {
 +                    // split arm: the transmitter keeps a retransmission before
@@ -1379,7 +1438,7 @@ index 57e4cf29..8637b750 100644
      for (auto& pktIt : dataPkts)
      {
          pktIt->RemovePacketTag(tag);
-@@ -985,6 +1566,40 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -985,6 +1568,40 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                           << " slot " << sfn.GetSlot() << " Normalized slot number "
                           << sfn.Normalize());
  
@@ -1420,7 +1479,7 @@ index 57e4cf29..8637b750 100644
      bool atLeastOneTransmissionInSlot = false;
      // If a grant is scheduled for this slot, code below will provide the
      // TTI indication to the PHY (for either PSCCH or PSSCH).  However,
-@@ -1025,29 +1640,88 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1025,29 +1642,88 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
              bool removeGrant = false;
              NrSlGrant currentGrant = *itGrant;
              // Rename use of *itGrant (and currentGrant) below with "nrSlGrant"
@@ -1460,13 +1519,13 @@ index 57e4cf29..8637b750 100644
 +                              "NrUeMac::DoNrSlSlotIndication, rnti: "
 +                                  << GetRnti() << " harqId: " << +itGrant->harqId);
 +                if (currentSlotIt == itGrant->slotAllocations.end())
-                 {
--                    currentSlotIt++;
--                    if (currentSlotIt == itGrant->slotAllocations.end())
++                {
 +                    removeGrant = true;
 +                }
 +                else
-+                {
+                 {
+-                    currentSlotIt++;
+-                    if (currentSlotIt == itGrant->slotAllocations.end())
 +                    // Find the first slot that is either at Now() or in the future
 +                    while (currentSlotIt->sfn < sfn)
                      {
@@ -1520,7 +1579,7 @@ index 57e4cf29..8637b750 100644
              if (!removeGrant && currentGrant.slotAllocations.begin()->sfn == sfn)
              {
                  NS_LOG_INFO("Grant at : Frame = " << currentSlot.sfn.GetFrame()
-@@ -1065,7 +1739,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1065,7 +1741,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                          << currentSlot.dstL2Id
                                          << " harqId: " << +currentGrant.harqId
                                          << " Packet Size: " << itPkt->GetSize());
@@ -1533,7 +1592,7 @@ index 57e4cf29..8637b750 100644
                          }
                      }
                      else
-@@ -1098,13 +1776,33 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1098,13 +1778,33 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                           << currentSlot.dstL2Id
                                           << " harqId: " << +currentGrant.harqId
                                           << " Packet Size: " << itPkt->GetSize());
@@ -1568,7 +1627,7 @@ index 57e4cf29..8637b750 100644
                  }
                  // Remove current slot allocation from this grant
                  if (currentGrant.tbTxCounter == currentGrant.nSelected)
-@@ -1123,169 +1821,254 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1123,169 +1823,269 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                                   << " slot = " << currentSlot.sfn.GetSlot());
                      continue;
                  }
@@ -1620,6 +1679,21 @@ index 57e4cf29..8637b750 100644
 +                    const bool relaying = currentGrant.relayedFromRnti != 0;
 +                    sciF2a.SetHarqId(relaying ? currentGrant.relayedHarqId : currentGrant.harqId);
 +                    sciF2a.SetNdi(currentSlot.ndi);
++                    // 3GPP NDI bit: toggled at each new TB of the HARQ process; a relayed copy
++                    // carries the original transmitter's bit, as it carries its HARQ id
++                    if (relaying)
++                    {
++                        sciF2a.SetNdiBit(currentGrant.relayedNdiBit);
++                    }
++                    else
++                    {
++                        uint8_t& ndiBit = m_slNdiBit[{currentSlot.dstL2Id, currentGrant.harqId}];
++                        if (currentSlot.ndi)
++                        {
++                            ndiBit ^= 1;
++                        }
++                        sciF2a.SetNdiBit(ndiBit);
++                    }
 +                    sciF2a.SetRv(currentSlot.rv);
 +                    sciF2a.SetSrcId(relaying ? currentGrant.relayedSrcL2Id : m_srcL2Id);
 +                    sciF2a.SetDstId(currentSlot.dstL2Id);
@@ -1729,7 +1803,7 @@ index 57e4cf29..8637b750 100644
 -                                          "Incorrect computation of ReTx slot gaps");
 -                            sciF1a.SetIndexStartSbChReTx2(sbChIndex.at(1));
 +                            coop.relayedFromRnti = currentGrant.relayedFromRnti;
-+                        }
+                         }
 +                        else if (currentGrant.helperId != 0)
 +                        {
 +                            // later reserved slots handed to the helper (the current
@@ -1789,7 +1863,7 @@ index 57e4cf29..8637b750 100644
 +                                    coop.deadline = lastOwn->sfn.GetEncoding();
 +                                }
 +                            }
-                         }
++                        }
 +                        sciF2a.SetCoopInfo(coop);
                      }
  
@@ -1972,7 +2046,7 @@ index 57e4cf29..8637b750 100644
                  }
              }
              else
-@@ -1317,6 +2100,140 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
+@@ -1317,6 +2117,141 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
      }
  }
  
@@ -2094,6 +2168,7 @@ index 57e4cf29..8637b750 100644
 +    relay.relayedFromRnti = p.fromRnti;
 +    relay.relayedSrcL2Id = p.srcL2Id;
 +    relay.relayedHarqId = p.harqId;
++    relay.relayedNdiBit = p.ndiBit;
 +    const uint8_t fbMode = (m_helperFbMode > 0) ? m_helperFbMode : (m_helperNackTriggered ? 1 : 0);
 +    relay.relayFbMode = fbMode;
 +    relay.relayNackGated = (fbMode > 0);
@@ -2113,7 +2188,7 @@ index 57e4cf29..8637b750 100644
  std::vector<uint8_t>
  NrSlUeMac::ComputeGaps(const SfnSf& sfn,
                         std::set<SlGrantResource>::const_iterator it,
-@@ -1737,10 +2654,251 @@ NrSlUeMac::EnableSensing(bool enableSensing)
+@@ -1737,10 +2672,251 @@ NrSlUeMac::EnableSensing(bool enableSensing)
      m_enableSensing = enableSensing;
  }
  
@@ -2366,7 +2441,7 @@ index 57e4cf29..8637b750 100644
      {
          // This HARQ is for us.  If this is a HARQ ACK, check whether to cancel
 diff --git a/model/nr-sl-ue-mac.h b/model/nr-sl-ue-mac.h
-index 9562ebd0..bd24adc2 100644
+index 9562ebd0..4a3857eb 100644
 --- a/model/nr-sl-ue-mac.h
 +++ b/model/nr-sl-ue-mac.h
 @@ -8,6 +8,7 @@
@@ -2385,7 +2460,7 @@ index 9562ebd0..bd24adc2 100644
  #include <unordered_set>
  
  // test classes outside of namespace ns3
-@@ -86,8 +88,52 @@ class NrSlUeMac : public NrUeMac
+@@ -86,8 +88,53 @@ class NrSlUeMac : public NrUeMac
          uint32_t tbSize{0}; //!< Size of Transport Block in bytes
          Time rri{0}; //!< The resource reservation interval for the semi-persistent scheduled grant
          SidelinkInfo::CastType castType{SidelinkInfo::CastType::Invalid}; //!< Cast type
@@ -2396,6 +2471,7 @@ index 9562ebd0..bd24adc2 100644
 +        uint16_t relayedFromRnti{0}; //!< helper relay grant: RNTI of the original TX (0 = own)
 +        uint32_t relayedSrcL2Id{0}; //!< helper relay grant: source L2 id of the original TX
 +        uint8_t relayedHarqId{0};   //!< helper relay grant: HARQ id of the original TX
++        uint8_t relayedNdiBit{0};   //!< helper relay grant: SCI-2A NDI bit of the original TX
 +        bool relayNackGated{false}; //!< helper relay grant: send a slot only after a NACK
 +        bool relayNackSeen{false};  //!< helper relay grant: NACK heard for the last transmission
 +        uint8_t relayFbMode{0};     //!< helper relay grant: 0=blind, 1=nack, 2=allAck
@@ -2438,7 +2514,7 @@ index 9562ebd0..bd24adc2 100644
      /**
       * \brief Structure to pass parameters to trigger the selection of candidate
       * resources as per TR 38.214 Section 8.1.4
-@@ -127,6 +173,68 @@ class NrSlUeMac : public NrUeMac
+@@ -127,6 +174,68 @@ class NrSlUeMac : public NrUeMac
          int m_finalRsrpThreshold;                    //!< Final RSRP threshold used in algorithm
      };
  
@@ -2507,7 +2583,7 @@ index 9562ebd0..bd24adc2 100644
      // SCHED API primitive for NR Sidelink
      // From FAPI 2.0.0 Small Cell Forum originated LTE MAC scheduler API
  
-@@ -349,6 +457,107 @@ class NrSlUeMac : public NrUeMac
+@@ -349,6 +458,107 @@ class NrSlUeMac : public NrUeMac
       */
      bool SlotHasPsfch(const SfnSf& sfn) const;
  
@@ -2615,7 +2691,7 @@ index 9562ebd0..bd24adc2 100644
      /**
       * \brief Get the reservation period in slots
       *
-@@ -687,6 +896,80 @@ class NrSlUeMac : public NrUeMac
+@@ -687,6 +897,80 @@ class NrSlUeMac : public NrUeMac
          const std::list<SensingData>& sensingData,
          const std::list<SfnSf>& transmitHistory) const;
  
@@ -2696,7 +2772,7 @@ index 9562ebd0..bd24adc2 100644
      /**
       * \brief Check if subchannels ranges in two resources overlap
       * \param firstStart Starting subchannel index of first resource
-@@ -808,6 +1091,51 @@ class NrSlUeMac : public NrUeMac
+@@ -808,6 +1092,54 @@ class NrSlUeMac : public NrUeMac
      std::unordered_set<uint32_t>
          m_sidelinkRxDestinations; //!< vector holding Sidelink communication destinations for
                                    //!< reception
@@ -2719,6 +2795,7 @@ index 9562ebd0..bd24adc2 100644
 +        uint32_t dstL2Id{0};
 +        uint16_t fromRnti{0};
 +        uint8_t harqId{0};
++        uint8_t ndiBit{0}; //!< SCI-2A NDI bit of the transmitter's TB
 +        uint32_t srcL2Id{0};
 +        uint8_t lcid{0};
 +        uint8_t castType{0};
@@ -2745,10 +2822,12 @@ index 9562ebd0..bd24adc2 100644
 +    uint32_t m_leaderTxCount{1};    //!< kept for compatibility; see LeaderTxCount attribute
 +    SfnSf m_currentSfn;             //!< last slot indicated to the MAC
 +    std::set<uint64_t> m_relaySlots; //!< helper: normalized slots already scheduled for relay
++    std::map<std::pair<uint32_t, uint8_t>, uint8_t>
++        m_slNdiBit; //!< SCI-2A NDI bit per (destination, HARQ id), toggled at each new TB
      bool m_enableSensing{false};  //!< Flag to enable NR Sidelink resource selection based on
                                    //!< sensing; otherwise, use random selection
      uint8_t m_minTimeGapProcessing{
-@@ -870,6 +1198,15 @@ class NrSlUeMac : public NrUeMac
+@@ -870,6 +1202,15 @@ class NrSlUeMac : public NrUeMac
                     const std::list<SensingData>&,
                     const std::list<SfnSf>&>
          m_tracedSensingAlgorithm;
@@ -2765,7 +2844,7 @@ index 9562ebd0..bd24adc2 100644
  
  /**
 diff --git a/model/nr-spectrum-phy.cc b/model/nr-spectrum-phy.cc
-index d5d45551..8fd2cf68 100644
+index d5d45551..500a6ddd 100644
 --- a/model/nr-spectrum-phy.cc
 +++ b/model/nr-spectrum-phy.cc
 @@ -8,6 +8,7 @@
@@ -2788,7 +2867,7 @@ index d5d45551..8fd2cf68 100644
  #include <unordered_set>
  
  namespace ns3
-@@ -183,6 +186,41 @@ NrSpectrumPhy::GetTypeId()
+@@ -183,6 +186,49 @@ NrSpectrumPhy::GetTypeId()
                  BooleanValue(false),
                  MakeBooleanAccessor(&NrSpectrumPhy::DropTbOnRbOnCollision),
                  MakeBooleanChecker())
@@ -2821,6 +2900,14 @@ index d5d45551..8fd2cf68 100644
 +                          StringValue(""),
 +                          MakeStringAccessor(&NrSpectrumPhy::m_slTestFixedSinr),
 +                          MakeStringChecker())
++            .AddAttribute("SlTestDropSci",
++                          "Test hook (validation only): \"rxNode:txNode:k[,k...];...\" ignores, "
++                          "at rxNode, the k-th expected PSSCH reception from txNode (node ids, k "
++                          "counted from 1) as if neither SCI stage had been decoded: no SCI-2A, "
++                          "no decoding, no HARQ feedback. Empty (default): off.",
++                          StringValue(""),
++                          MakeStringAccessor(&NrSpectrumPhy::m_slTestDropSci),
++                          MakeStringChecker())
 +            .AddTraceSource("SlHarqCombine",
 +                            "Sidelink HARQ soft-buffer events of this receiver: every data "
 +                            "decoding with the number of copies combined, and every buffer "
@@ -2830,7 +2917,19 @@ index d5d45551..8fd2cf68 100644
              .AddTraceSource("RxPacketTraceEnb",
                              "The no. of packets received and transmitted by the Base Station",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_rxPacketTraceEnb),
-@@ -2020,6 +2058,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
+@@ -246,6 +292,11 @@ NrSpectrumPhy::GetTypeId()
+                             "The sidelink SCI-2a transmission failed to decode",
+                             MakeTraceSourceAccessor(&NrSpectrumPhy::m_slSci2aDecodeFailures),
+                             "ns3::TracedValueCallback::Uint64")
++            .AddTraceSource("SlNdiToggleNewTb",
++                            "Sidelink receptions whose toggled SCI-2A NDI bit revealed a new TB "
++                            "while the simulator's new-data flag was 0 (first transmission missed)",
++                            MakeTraceSourceAccessor(&NrSpectrumPhy::m_slNdiToggleNewTb),
++                            "ns3::TracedValueCallback::Uint64")
+             .AddTraceSource("SlTbDecodeFailure",
+                             "The sidelink TB transmission failed to decode",
+                             MakeTraceSourceAccessor(&NrSpectrumPhy::m_slTbDecodeFailures),
+@@ -2020,6 +2071,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
  {
      NS_LOG_FUNCTION(this << " state: " << m_state);
  
@@ -2854,7 +2953,7 @@ index d5d45551..8fd2cf68 100644
      switch (m_state)
      {
      case RX_DATA:
-@@ -2387,6 +2442,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2387,6 +2455,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
              DynamicCast<NrSpectrumSignalParametersSlCtrlFrame>(
                  m_slRxSigParamInfo.at(paramIndex).params);
          Ptr<Packet> packet = ctrlParams->packetBurst->GetPackets().front();
@@ -2875,7 +2974,89 @@ index d5d45551..8fd2cf68 100644
          if (!corrupt)
          {
              error = false; // at least one control packet is OK
-@@ -2514,6 +2583,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2460,6 +2542,81 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+     }
+ }
+ 
++bool
++NrSpectrumPhy::SlNdiNewTb(uint16_t harqRnti, const NrSlSciF2aHeader& sci)
++{
++    const std::pair<uint16_t, uint8_t> process{harqRnti, sci.GetHarqId()};
++    auto it = m_slNdiBit.find(process);
++    if (it != m_slNdiBit.end() && it->second == sci.GetNdiBit())
++    {
++        return false;
++    }
++    m_slNdiBit[process] = sci.GetNdiBit();
++    if (!sci.GetNdi())
++    {
++        // the first transmission of this TB was missed: without the flush, this copy would be
++        // skipped as the previous TB of the process or combined with its copies. With the
++        // "new data" flag set, the caller's NDI reset does the same.
++        m_slNdiToggleNewTb++;
++        m_harqPhyModule->RemovePrevDecoded(harqRnti, sci.GetHarqId());
++        m_harqPhyModule->ResetSlDataHarqProcessStatus(harqRnti, sci.GetHarqId());
++    }
++    return true;
++}
++
++bool
++NrSpectrumPhy::TestDropSci(const std::pair<const uint16_t, TransportBlockInfo>& tb)
++{
++    // test hook: the k-th PSSCH reception expected from a transmitter is ignored as if
++    // neither SCI stage had been decoded (no SCI-2A, no decoding, no HARQ feedback). The
++    // SCI-1A reservation of the later slots is kept: in 5G-LENA only the first slot of a
++    // reservation carries an SCI-1A, in 3GPP every copy carries its own.
++    if (!m_slTestDropSciParsed)
++    {
++        m_slTestDropSciParsed = true;
++        std::stringstream ss(m_slTestDropSci);
++        std::string item;
++        while (std::getline(ss, item, ';'))
++        {
++            uint32_t rxNode = 0;
++            uint32_t txNode = 0;
++            char c1 = 0;
++            char c2 = 0;
++            std::stringstream is(item);
++            if (!(is >> rxNode >> c1 >> txNode >> c2) || c1 != ':' || c2 != ':')
++            {
++                NS_ABORT_MSG_IF(!item.empty(), "SlTestDropSci: cannot parse \"" << item << "\"");
++                continue;
++            }
++            std::string k;
++            while (std::getline(is, k, ','))
++            {
++                m_slTestDropSciMap[{rxNode, txNode}].insert(std::stoul(k));
++            }
++        }
++    }
++    auto params = DynamicCast<NrSpectrumSignalParametersSlDataFrame>(
++        m_slRxSigParamInfo.at(tb.second.m_pktIndex).params);
++    const std::pair<uint32_t, uint32_t> link{GetDevice()->GetNode()->GetId(), params->nodeId};
++    auto drop = m_slTestDropSciMap.find(link);
++    if (drop == m_slTestDropSciMap.end() || !drop->second.count(++m_slTestDropSciCount[link]))
++    {
++        return false;
++    }
++    SlHarqCombineTraceParams t;
++    t.m_timeMs = Simulator::Now().GetSeconds() * 1000.0;
++    Ptr<NrUeNetDevice> ueRx = DynamicCast<NrUeNetDevice>(GetDevice());
++    t.m_rxRnti = ueRx ? ueRx->GetPhy(GetBwpId())->GetRnti() : 0;
++    t.m_txRnti = tb.first;
++    t.m_event = SlHarqCombineTraceParams::SCI_DROPPED;
++    t.m_tbSize = tb.second.m_expected.m_tbSize;
++    t.m_mcs = tb.second.m_expected.m_mcs;
++    t.m_numRb = static_cast<uint32_t>(tb.second.m_expected.m_rbBitmap.size());
++    t.m_sinrAvg = tb.second.m_sinrAvg;
++    m_slHarqCombineTrace(t);
++    return true;
++}
++
+ void
+ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+ {
+@@ -2514,6 +2671,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              continue;
          }
          itTb->second.m_sinrPerceived = m_slSinrPerceived.at(pktIndex);
@@ -2920,31 +3101,10 @@ index d5d45551..8fd2cf68 100644
          itTb->second.m_pktIndex = pktIndex;
          NS_LOG_DEBUG("Updating SINR for RNTI " << tag.GetRnti());
          itTb->second.m_sinrUpdated = true;
-@@ -2554,6 +2661,65 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2554,6 +2749,76 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          }
      }
  
-+    // TS 38.321 5.22.2.2: a retransmission of a TB this UE already decoded is
-+    // ACKed when its SCI-2A enables HARQ feedback (off by default: 5G-LENA
-+    // sends no feedback for it)
-+    auto ackPrevDecoded = [this, &ueRx](uint16_t txRnti, const NrSlSciF2aHeader& sci) {
-+        if (!m_slAckPrevDecodedTb || !sci.GetHarqFbIndicator() ||
-+            m_phySlHarqFeedbackCallback.IsNull())
-+        {
-+            return;
-+        }
-+        SlHarqInfo slHarqInfo;
-+        slHarqInfo.m_txRnti = txRnti;
-+        slHarqInfo.m_rnti = ueRx->GetPhy(GetBwpId())->GetRnti();
-+        slHarqInfo.m_dstL2Id = sci.GetDstId();
-+        slHarqInfo.m_harqProcessId = sci.GetHarqId();
-+        slHarqInfo.m_bwpIndex = GetBwpId();
-+        slHarqInfo.m_helperRnti =
-+            sci.GetCoopInfo().relayedFromRnti == 0 ? sci.GetCoopInfo().helperId : 0;
-+        slHarqInfo.m_harqStatus = SlHarqInfo::ACK;
-+        m_phySlHarqFeedbackCallback(slHarqInfo);
-+    };
-+
 +    // validation trace of the HARQ soft buffer (no sink: nothing computed)
 +    auto traceHarq = [this, &ueRx](SlHarqCombineTraceParams::Event event,
 +                                   const std::pair<const uint16_t, TransportBlockInfo>& tb,
@@ -2983,10 +3143,49 @@ index d5d45551..8fd2cf68 100644
 +    };
 +    const bool harqTraced = !m_slHarqCombineTrace.IsEmpty();
 +
++    // TS 38.321 5.22.2.2: a retransmission of a TB this UE already decoded is
++    // ACKed when its SCI-2A enables HARQ feedback (off by default: 5G-LENA
++    // sends no feedback for it)
++    auto ackPrevDecoded = [this, &ueRx, &traceHarq, &histOf](
++                              const std::pair<const uint16_t, TransportBlockInfo>& tb,
++                              const NrSlSciF2aHeader& sci,
++                              uint16_t harqRnti) {
++        if (!m_slAckPrevDecodedTb || !sci.GetHarqFbIndicator() ||
++            m_phySlHarqFeedbackCallback.IsNull())
++        {
++            return;
++        }
++        SlHarqInfo slHarqInfo;
++        slHarqInfo.m_txRnti = tb.first;
++        slHarqInfo.m_rnti = ueRx->GetPhy(GetBwpId())->GetRnti();
++        slHarqInfo.m_dstL2Id = sci.GetDstId();
++        slHarqInfo.m_harqProcessId = sci.GetHarqId();
++        slHarqInfo.m_bwpIndex = GetBwpId();
++        slHarqInfo.m_helperRnti =
++            sci.GetCoopInfo().relayedFromRnti == 0 ? sci.GetCoopInfo().helperId : 0;
++        slHarqInfo.m_harqStatus = SlHarqInfo::ACK;
++        m_phySlHarqFeedbackCallback(slHarqInfo);
++        if (!m_slHarqCombineTrace.IsEmpty())
++        {
++            traceHarq(SlHarqCombineTraceParams::ACK_PREV_DECODED,
++                      tb,
++                      sci,
++                      harqRnti,
++                      histOf(harqRnti, sci.GetHarqId()));
++        }
++    };
++
      // Compute the error and check for collision for each expected TB
      for (auto& tbIt : m_slTransportBlocks)
      {
-@@ -2569,6 +2735,21 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2566,9 +2831,28 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+             NS_LOG_WARN("SINR not updated for the expected TB from RNTI " << tbIt.first);
+             continue;
+         }
++        if (!m_slTestDropSci.empty() && ueRx && TestDropSci(tbIt))
++        {
++            continue;
++        }
          Ptr<Packet> sci2Pkt = RetrieveSci2FromPktBurst(tbIt.second.m_pktIndex);
          NrSlSciF2aHeader sciF2a;
          sci2Pkt->PeekHeader(sciF2a);
@@ -3008,7 +3207,7 @@ index d5d45551..8fd2cf68 100644
  
          bool sciF2aCorrupted = false;
          bool rbCollided =
-@@ -2612,7 +2793,7 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2612,7 +2896,7 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              tbIt.second.m_outputEmForSci2 = m_slErrorModel->GetTbDecodificationStats(
                  tbIt.second.m_sinrPerceived,
                  tbIt.second.m_expected.m_rbBitmap,
@@ -3017,7 +3216,7 @@ index d5d45551..8fd2cf68 100644
                  Sci2Mcs,
                  NrErrorModel::NrErrorModelHistory());
              // check the decodification of SCI stage 2 with a random probability
-@@ -2629,6 +2810,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2629,6 +2913,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  m_slSci2aDecodeFailures++;
                  // If SCI stage 2 is corrupted, data is also corrupted.
                  tbIt.second.m_isCorrupted = true;
@@ -3038,7 +3237,25 @@ index d5d45551..8fd2cf68 100644
  
                  // Trace
                  SlRxDataPacketTraceParams traceParams;
-@@ -2671,32 +2866,71 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2666,37 +2964,89 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+                 NS_LOG_DEBUG(this << " PSSCH SCI stage 2 decoding succeeded, errorRate "
+                                   << tbIt.second.m_outputEmForSci2->m_tbler);
+             }
++            {
++                // trace state before the flush (a toggle with the flag 0 is the missed-copy-1 case)
++                const uint32_t histBefore =
++                    harqTraced ? histOf(harqRnti, sciF2a.GetHarqId()) : 0;
++                if (SlNdiNewTb(harqRnti, sciF2a) && !sciF2a.GetNdi() && harqTraced)
++                {
++                    traceHarq(SlHarqCombineTraceParams::NDI_TOGGLE,
++                              tbIt,
++                              sciF2a,
++                              harqRnti,
++                              histBefore);
++                }
++            }
+             if (sciF2a.GetNdi())
+             {
                  NS_LOG_DEBUG("RemovePrevDecoded: " << +sciF2a.GetHarqId()
                                                     << " for the packets received from RNTI "
                                                     << tbIt.first << " rv " << +sciF2a.GetRv());
@@ -3068,7 +3285,7 @@ index d5d45551..8fd2cf68 100644
 +                              harqRnti,
 +                              histOf(harqRnti, sciF2a.GetHarqId()));
 +                }
-+                ackPrevDecoded(tbIt.first, sciF2a);
++                ackPrevDecoded(tbIt, sciF2a, harqRnti);
                  continue;
              }
  
@@ -3115,7 +3332,7 @@ index d5d45551..8fd2cf68 100644
              }
              tbIt.second.m_outputEmForData =
                  m_slErrorModel->GetTbDecodificationStats(tbIt.second.m_sinrPerceived,
-@@ -2728,23 +2962,63 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2728,23 +3078,63 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                                        << tbIt.second.m_outputEmForData->m_tbler << " data corrupt "
                                        << tbIt.second.m_isCorrupted);
                      tbIt.second.m_isCorrupted = false;
@@ -3182,7 +3399,13 @@ index d5d45551..8fd2cf68 100644
                                                                     sciF2a.GetHarqId(),
                                                                     tbIt.second.m_outputEmForData);
                  }
-@@ -2769,12 +3043,13 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2764,17 +3154,19 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+         }
+         else // No error model enabled
+         {
++            SlNdiNewTb(harqRnti, sciF2a);
+             if (sciF2a.GetNdi())
+             {
                  NS_LOG_DEBUG("RemovePrevDecoded: " << +sciF2a.GetHarqId()
                                                     << " for the packets received from RNTI "
                                                     << tbIt.first << " rv " << +sciF2a.GetRv());
@@ -3194,11 +3417,11 @@ index d5d45551..8fd2cf68 100644
 -            if (m_harqPhyModule->IsPrevDecoded(tbIt.first, sciF2a.GetHarqId()))
 +            if (m_harqPhyModule->IsPrevDecoded(harqRnti, sciF2a.GetHarqId()))
              {
-+                ackPrevDecoded(tbIt.first, sciF2a);
++                ackPrevDecoded(tbIt, sciF2a, harqRnti);
                  continue;
              }
  
-@@ -2858,6 +3133,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2858,6 +3250,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              slHarqInfo.m_dstL2Id = sciF2a.GetDstId();
              slHarqInfo.m_harqProcessId = sciF2a.GetHarqId();
              slHarqInfo.m_bwpIndex = GetBwpId();
@@ -3210,19 +3433,50 @@ index d5d45551..8fd2cf68 100644
              {
                  NS_LOG_DEBUG("Sending NACK HARQ feedback to SlHarqFeedback callback");
 diff --git a/model/nr-spectrum-phy.h b/model/nr-spectrum-phy.h
-index aa3abafd..f48a55f9 100644
+index aa3abafd..0e998e1c 100644
 --- a/model/nr-spectrum-phy.h
 +++ b/model/nr-spectrum-phy.h
-@@ -25,6 +25,8 @@
+@@ -25,11 +25,15 @@
  #include <ns3/traced-value.h>
  
  #include <functional>
 +#include <map>
++#include <set>
 +#include <string>
  
  namespace ns3
  {
-@@ -996,6 +998,19 @@ class NrSpectrumPhy : public SpectrumPhy
+ 
+ class UniformPlanarArray;
++class NrSlSciF2aHeader;
+ 
+ /**
+  * \ingroup ue-phy
+@@ -964,6 +968,23 @@ class NrSpectrumPhy : public SpectrumPhy
+      * \param paramIndexes Indexes of received PSSCH signals/messages parameters
+      */
+     void RxSlPssch(std::vector<uint32_t> paramIndexes);
++    /**
++     * \brief 3GPP NDI rule (TS 38.321 5.22.2.2): after a decoded SCI-2A, compare its NDI bit
++     *        with the one stored for the HARQ process; a different (or no) stored bit means a
++     *        new TB and the bit is stored. If the "new data" flag is 0 (the TB's first
++     *        transmission was missed), the process's "decoded" mark and soft buffer are flushed
++     *        here; with the flag 1 the caller's NDI reset does it.
++     * \param harqRnti owner of the HARQ process (relayedFromRnti for a relayed copy)
++     * \param sci the decoded SCI-2A
++     * \return true if the reception starts a new TB of the process
++     */
++    bool SlNdiNewTb(uint16_t harqRnti, const NrSlSciF2aHeader& sci);
++    /**
++     * \brief Test hook SlTestDropSci: whether this expected PSSCH reception is ignored
++     * \param tb the expected TB (transmitter RNTI, TB info)
++     * \return true if the reception must be ignored (SCI_DROPPED traced)
++     */
++    bool TestDropSci(const std::pair<const uint16_t, TransportBlockInfo>& tb);
+     /**
+      * \brief Function to process received PSFCH signals/messages function
+      * \param paramIndexes Indexes of received PSFCH signals/messages parameters
+@@ -996,6 +1017,28 @@ class NrSpectrumPhy : public SpectrumPhy
          m_slRxSigParamInfo; //!< NR Sidelink received signal parameter info
      bool m_dropTbOnRbCollisionEnabled{
          false}; //!< when true, drop all receptions on colliding RBs regardless SINR value.
@@ -3237,11 +3491,29 @@ index aa3abafd..f48a55f9 100644
 +    std::map<std::pair<uint32_t, uint32_t>, double>
 +        m_slTestFixedSinrMap; //!< parsed m_slTestFixedSinr: (rx node, tx node) -> linear SINR
 +    bool m_slTestFixedSinrParsed{false}; //!< m_slTestFixedSinrMap built
++    std::string m_slTestDropSci; //!< test hook "rxNode:txNode:k[,k...];...": the k-th expected
++                                 //!< PSSCH reception from txNode is ignored at rxNode ("" = off)
++    std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>>
++        m_slTestDropSciMap; //!< parsed m_slTestDropSci: (rx node, tx node) -> receptions to drop
++    std::map<std::pair<uint32_t, uint32_t>, uint32_t>
++        m_slTestDropSciCount;           //!< PSSCH receptions so far per (rx node, tx node)
++    bool m_slTestDropSciParsed{false}; //!< m_slTestDropSciMap built
++    std::map<std::pair<uint16_t, uint8_t>, uint8_t>
++        m_slNdiBit; //!< last SCI-2A NDI bit per HARQ process (HARQ owner RNTI, HARQ id)
 +    TracedCallback<const SlHarqCombineTraceParams&>
 +        m_slHarqCombineTrace; //!< HARQ soft-buffer events (validation; no sink = no cost)
      bool m_slDataErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink DATA is
                                            //!< enabled, by default is enabled
      bool m_slCtrlErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink CTRL is
+@@ -1023,6 +1066,8 @@ class NrSpectrumPhy : public SpectrumPhy
+         m_rxPsschTraceUe;                          //!< trace source for PSSCH reception
+     TracedValue<uint64_t> m_slPscchDecodeFailures; //!< Count of observed PSCCH decode failures
+     TracedValue<uint64_t> m_slSci2aDecodeFailures; //!< Count of observed SCI 2a decode failures
++    TracedValue<uint64_t> m_slNdiToggleNewTb; //!< receptions whose toggled NDI bit revealed a
++                                              //!< new TB while the "new data" flag was 0
+     TracedValue<uint64_t> m_slTbDecodeFailures;    //!< Count of observed TB decode failures
+ };
+ 
 diff --git a/model/nr-ue-phy.cc b/model/nr-ue-phy.cc
 index f52d7df8..ce7cd1ee 100644
 --- a/model/nr-ue-phy.cc

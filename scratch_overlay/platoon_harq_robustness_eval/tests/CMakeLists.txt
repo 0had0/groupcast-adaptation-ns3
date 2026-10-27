@@ -45,6 +45,7 @@ set(PTEST_LIST
   "workflow|C04_relay_combining|PURE"
   "workflow|C05_option1_helper_nack|PURE"
   "workflow|C06_cross_source_combining|NS3"
+  "workflow|C07_stale_harq_state|PURE"
   "unit|D01_kuo_objective|HSEL"
   "campaign_checks|D02_selection_invariants|PURE"
   "campaign_checks|D03_selection_accounting|PURE"
