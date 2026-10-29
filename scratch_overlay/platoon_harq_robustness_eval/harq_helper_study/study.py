@@ -50,6 +50,7 @@ ARMS = {
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
           'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo'}
 DIAG = ['--writeAtt=true', '--writeAllTx=true', '--writeGrants=true']
+EXTRA = []   # --extra: flags appended to every simulator command
 
 
 def profile_spec(profile, seeds_arg=None):
@@ -177,6 +178,8 @@ def plan(profile, seeds_arg=None, only=None):
                                          trace=trace, cmd=cmd))
     if only:
         runs = [r for r in runs if re.search(only, f"{r['arm']}/{r['tag']}")]
+    for r in runs:
+        r['cmd'] += EXTRA
     return runs
 
 
@@ -203,7 +206,7 @@ def run_one(r, outdir):
     wall = time.time() - t0
     if rc == 0:
         for suf in ('_pkt.csv', '_att.csv', '_alltx.csv', '_coll.csv', '_ltx.csv', '_htx.csv', '_nack.csv',
-                    '_grants.csv', '_hsel.csv'):
+                    '_grants.csv', '_hsel.csv', '_harq.csv'):
             p = prefix + suf
             if os.path.exists(p) and os.path.getsize(p) > 1 << 20:
                 with open(p, 'rb') as fi, gzip.open(p + '.gz', 'wb') as fo:
@@ -317,10 +320,16 @@ def main():
     ap.add_argument('--only', default=None,
                     help='regex on "arm/tag", e.g. "^R6/hwy_ivd30_periodic1tb_moderate_s1$"')
     ap.add_argument('--bin', default=None, help='simulator binary (default: optimized build if present)')
+    ap.add_argument('--extra', action='append', default=[],
+                    help='simulator flag appended to every command (repeatable), e.g. --extra=--writeHarqTrace=true; '
+                         'the commands differ from the plain profile, so use a separate --out')
     a = ap.parse_args()
     if a.bin:
         global BIN
         BIN = a.bin
+    if a.extra:
+        global EXTRA
+        EXTRA = list(a.extra)
     if a.action == 'list':
         for r in plan(a.profile, a.seeds, a.only):
             print(r['arm'], r['tag'])
