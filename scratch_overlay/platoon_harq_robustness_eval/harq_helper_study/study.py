@@ -8,10 +8,12 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
   *_noIR   R2, R3, R4.1, R4.2 with --softCombining=false (HARQ-IR ablation)
   *_bsc    R1, R4 with --blindSoftCombining=true (receivers combine the blind copies of a TB, 3GPP-allowed;
            R4_bsc: leader and helper copies, HARQ owner = SCI-2A relayedFromRnti)
+  *_map    R4, R4.1, R4.2, R5, R6 with --helperSelect=map (Kuo's objective + building map and CAM positions,
+           H3); only in the map / map_smoke profiles
 Cells: {highway, roundabout (N->W, 1/4 ring), roundaboutE (N->E, 3/4 ring; full profile)} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
 
 Usage:
-  study.py run   --profile smoke|local1|full [--jobs N] [--seeds 1-5] [--out DIR]
+  study.py run   --profile smoke|local1|full|density|map|map_fill [--jobs N] [--seeds 1-5] [--out DIR]
   study.py check --profile smoke [--out DIR]      # invariants of finished runs (smoke tests)
   study.py list  --profile ...                    # print the planned runs
 """
@@ -47,8 +49,14 @@ ARMS = {
     'R1_bsc': ['--retx=R1', '--blindSoftCombining=true'],
     'R4_bsc': ['--retx=R4'] + KUO + ['--blindSoftCombining=true'],
 }
+# the helper arms with the map selector: same flags as the Kuo arm, only --helperSelect differs
+MAP_ARMS = [a + '_map' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6')]
+for _a in MAP_ARMS:
+    ARMS[_a] = [f if f != '--helperSelect=kuo' else '--helperSelect=map' for f in ARMS[_a[:-len('_map')]]]
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
-          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo'}
+          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo',
+          'R4_map': 'map', 'R4.1_map': 'map', 'R4.2_map': 'map', 'R5_map': 'map+takeover',
+          'R6_map': 'map+takeover'}
 DIAG = ['--writeAtt=true', '--writeAllTx=true', '--writeGrants=true']
 EXTRA = []   # --extra: flags appended to every simulator command
 
@@ -88,6 +96,25 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=[1],
                     tmax=lambda sc, bg: 8.0 if sc == 'highway' else 0.0, rbt_curve=True, rbt_smoke=SMOKE_RBT_S,
                     arms=['R6'], bglevels={'n15': (15, flows)})
+    if profile in ('map', 'map_fill', 'map_smoke'):
+        # map: the five helper arms with --helperSelect=map over the whole load sweep (0, 15, 30, 45, 60 cars at
+        # the moderate per-car load), the same cells, seeds and commands as full_v2 / density_v2 except the selector.
+        # map_fill: the Kuo-selected arms that full_v2 has at 0 / 60 cars only (R2, R4.1, R5), at 15 / 30 / 45.
+        # map_smoke: launcher check, every map arm x scenario x traffic at 15 cars, seed 1, short runs.
+        lv = run_retx.get_bg_levels()
+        flows = lv['moderate'][1]
+        bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
+        if profile == 'map_smoke':
+            return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=['n15'],
+                        trafs=['periodic1tb', 'aperiodic1tb'], seeds=[1],
+                        tmax=lambda sc, bg: 8.0 if sc == 'highway' else 0.0, rbt_curve=True,
+                        rbt_smoke=SMOKE_RBT_S, arms=MAP_ARMS, bglevels=bgl)
+        fill = profile == 'map_fill'
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'],
+                    bgs=list(DENSITY) if fill else ['none'] + list(DENSITY) + ['moderate'],
+                    trafs=['periodic1tb', 'aperiodic1tb'], seeds=parse_seeds(seeds_arg or '1-10'),
+                    tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
+                    arms=['R2', 'R4.1', 'R5'] if fill else MAP_ARMS, bglevels=bgl)
     raise SystemExit('unknown profile ' + profile)
 
 
@@ -149,7 +176,7 @@ def plan(profile, seeds_arg=None, only=None):
     bgl = spec.get('bglevels') or run_retx.get_bg_levels()
     runs = []
     for arm, aflags in ARMS.items():
-        if 'arms' in spec and arm not in spec['arms']:
+        if arm not in spec['arms'] if 'arms' in spec else arm in MAP_ARMS:
             continue
         for sc in spec['scen']:
             for bg in spec['bgs']:
@@ -271,7 +298,7 @@ def cmd_check(a):
             continue
         x = read_csv(pre + '_run.csv')[0]
         arm = r['arm']
-        base = arm.replace('_noIR', '').replace('_bsc', '')
+        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '')
         f = lambda k: float(x[k])
         chk(0.0 <= f('prr_mean') <= 1.0 and 0.0 <= f('prr_min') <= f('prr_mean') + 1e-9, name + ': PRR range')
         chk(x['blind_soft_combining'] == ('1' if arm.endswith('_bsc') else '0'), name + ': blind_soft_combining flag')
@@ -285,6 +312,7 @@ def cmd_check(a):
         if base in ('R4', 'R4.1', 'R4.2'):
             chk(f('helper_reclaim') == 0 and f('fallback_tx') == 0, name + ': no takeover expected')
         if base in ('R4', 'R4.1', 'R4.2', 'R5', 'R6'):
+            chk(x['helper_select'] == ('map' if arm.endswith('_map') else 'kuo'), name + ': helper_select')
             chk(f('relay_by_unchosen') == 0, name + ': relay by a non-selected member')
             chk(f('relay_without_decode') == 0, name + ': relay without decode')
         if base in ('R2', 'R4.1', 'R5'):
@@ -313,7 +341,8 @@ def cmd_check(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('action', choices=['run', 'check', 'list'])
-    ap.add_argument('--profile', default='smoke', choices=['smoke', 'local1', 'full', 'density', 'density_smoke'])
+    ap.add_argument('--profile', default='smoke',
+                    choices=['smoke', 'local1', 'full', 'density', 'density_smoke', 'map', 'map_fill', 'map_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)
