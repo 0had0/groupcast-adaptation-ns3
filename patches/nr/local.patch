@@ -411,10 +411,25 @@ index 19f6c903..475d0ca6 100644
       * Stop and restart the timer protecting the deallocation of the
       * HARQ process ID.  If the HARQ ID is not allocated, this method
 diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-index 18b4e5a3..9dcfd61b 100644
+index 18b4e5a3..a722a684 100644
 --- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
 +++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.cc
-@@ -556,6 +556,15 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
+@@ -60,6 +60,14 @@ NrSlUeMacSchedulerFixedMcs::GetTypeId(void)
+                           BooleanValue(false),
+                           MakeBooleanAccessor(
+                               &NrSlUeMacSchedulerFixedMcs::m_allowMultipleDestinationsPerSlot),
++                          MakeBooleanChecker())
++            .AddAttribute("SciOnEveryTx",
++                          "Send SCI 1-A with every PSSCH of a TB, each indicating the TB's "
++                          "remaining reserved slots (TS 38.212 sec. 8.3.1.1, TS 38.214 sec. "
++                          "8.1.5). false (CTTC default): SCI 1-A only every sl-MaxNumPerReserve "
++                          "slots, the other retransmissions go without PSCCH",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&NrSlUeMacSchedulerFixedMcs::m_sciOnEveryTx),
+                           MakeBooleanChecker());
+     return tid;
+ }
+@@ -556,6 +564,15 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
                  {
                      NS_LOG_DEBUG("slResoReselCounter != 0");
                  }
@@ -430,7 +445,7 @@ index 18b4e5a3..9dcfd61b 100644
              }
          }
      }
-@@ -567,6 +576,131 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
+@@ -567,6 +584,131 @@ NrSlUeMacSchedulerFixedMcs::TxResourceReselectionCheck(const SfnSf& sfn,
      return pass;
  }
  
@@ -562,7 +577,7 @@ index 18b4e5a3..9dcfd61b 100644
  uint32_t
  NrSlUeMacSchedulerFixedMcs::LogicalChannelPrioritization(
      const SfnSf& sfn,
-@@ -1423,7 +1557,12 @@ NrSlUeMacSchedulerFixedMcs::CheckForGrantsToPublish(const SfnSf& sfn)
+@@ -1423,7 +1565,12 @@ NrSlUeMacSchedulerFixedMcs::CheckForGrantsToPublish(const SfnSf& sfn)
              NS_LOG_INFO("Publishing grant with " << grant.slotAllocations.size()
                                                   << " slots to destination " << currentSlot.dstL2Id
                                                   << " HARQ ID " << +grant.harqId);
@@ -576,7 +591,7 @@ index 18b4e5a3..9dcfd61b 100644
              {
                  itGrantVector = itGrantInfo->second.erase(itGrantVector);
              }
-@@ -1687,8 +1826,10 @@ NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(
+@@ -1687,8 +1834,10 @@ NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(
                    "Scheduler received an empty resource list from UE MAC");
  
      std::list<SlResourceInfo> selectedTxOpps;
@@ -589,8 +604,26 @@ index 18b4e5a3..9dcfd61b 100644
      {
          // Select up to N_PSSCH_maxTx resources without regard MinTimeGapPsfch
          // i.e., for blind retransmissions
+@@ -1721,7 +1870,16 @@ NrSlUeMacSchedulerFixedMcs::DoNrSlAllocation(
+         slotAlloc.maxNumPerReserve = itTxOpps->slMaxNumPerReserve;
+         slotAlloc.ndi = slotAllocList.empty() == true ? 1 : 0;
+         slotAlloc.rv = GetRv(static_cast<uint8_t>(slotAllocList.size()));
+-        if (static_cast<uint16_t>(slotAllocList.size()) % itTxOpps->slMaxNumPerReserve == 0)
++        if (m_sciOnEveryTx)
++        {
++            // every transmission carries SCI 1-A and indicates itself plus the remaining
++            // slots of the TB, up to sl-MaxNumPerReserve
++            slotAlloc.txSci1A = true;
++            slotAlloc.slotNumInd = static_cast<uint8_t>(
++                std::min<std::size_t>(itTxOpps->slMaxNumPerReserve,
++                                      selectedTxOpps.size() - slotAllocList.size()));
++        }
++        else if (static_cast<uint16_t>(slotAllocList.size()) % itTxOpps->slMaxNumPerReserve == 0)
+         {
+             slotAlloc.txSci1A = true;
+             if (slotAllocList.size() + itTxOpps->slMaxNumPerReserve <= selectedTxOpps.size())
 diff --git a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h b/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
-index 80a0473c..b2ba8d91 100644
+index 80a0473c..f3dbbb0f 100644
 --- a/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
 +++ b/model/nr-sl-ue-mac-scheduler-fixed-mcs.h
 @@ -82,6 +82,47 @@ class NrSlUeMacSchedulerFixedMcs : public NrSlUeMacScheduler
@@ -641,6 +674,14 @@ index 80a0473c..b2ba8d91 100644
      /**
       * \brief Select the destinations and logical channels that need scheduling
       *
+@@ -543,6 +584,7 @@ class NrSlUeMacSchedulerFixedMcs : public NrSlUeMacScheduler
+ 
+     bool m_prioToSps{true}; //!< Flag to give scheduling priority to logical channels that are
+                             //!< configured with SPS in case of priority tie
++    bool m_sciOnEveryTx{false}; //!< SCI 1-A with every PSSCH of a TB (3GPP); false: CTTC default
+     bool m_wholeSlotExclusion{false}; //!< Flag to exclude scheduling in a slot for which
+                                       //!< reception on at least one resource is sensed
+     bool m_allowMultipleDestinationsPerSlot{
 diff --git a/model/nr-sl-ue-mac-scheduler.cc b/model/nr-sl-ue-mac-scheduler.cc
 index 724a3150..aa6ec9e4 100644
 --- a/model/nr-sl-ue-mac-scheduler.cc
@@ -3515,7 +3556,7 @@ index aa3abafd..0e998e1c 100644
  };
  
 diff --git a/model/nr-ue-phy.cc b/model/nr-ue-phy.cc
-index f52d7df8..ce7cd1ee 100644
+index f52d7df8..974f29f1 100644
 --- a/model/nr-ue-phy.cc
 +++ b/model/nr-ue-phy.cc
 @@ -2091,6 +2091,7 @@ NrUePhy::PhyPscchPduReceived(const Ptr<Packet>& p, const SpectrumValue& psd)
@@ -3526,3 +3567,33 @@ index f52d7df8..ce7cd1ee 100644
  
      m_nrSlUePhySapUser->ReceiveSensingData(sensingData);
  
+@@ -2193,12 +2194,25 @@ void
+ NrUePhy::SendSlExpectedTbInfo(const SfnSf& s)
+ {
+     NS_LOG_FUNCTION(this);
+-    if (!m_slRxGrants.empty())
++    // Every announced slot due now is registered and every past one is dropped. A slot can be
++    // announced by several SCIs of the same TB (SCI 1-A on every transmission) and by several
++    // transmitters, so the list is neither unique nor in time order: checking only its head
++    // could leave a stale entry there and block every later one.
++    for (auto it = m_slRxGrants.begin(); it != m_slRxGrants.end();)
+     {
+-        auto expectedTbInfo = m_slRxGrants.front();
+-        if (expectedTbInfo.sfn == s)
++        if (it->sfn.Normalize() < s.Normalize())
++        {
++            it = m_slRxGrants.erase(it);
++            continue;
++        }
++        if (it->sfn != s)
++        {
++            ++it;
++            continue;
++        }
++        auto expectedTbInfo = *it;
++        it = m_slRxGrants.erase(it);
+         {
+-            m_slRxGrants.pop_front();
+             m_spectrumPhy->AddSlExpectedTb({UINT8_MAX,
+                                             expectedTbInfo.tbSize,
+                                             expectedTbInfo.mcs,

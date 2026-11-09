@@ -39,6 +39,13 @@ NrSlCoopScheduler::GetTypeId(void)
             .AddConstructor<NrSlCoopScheduler>()
             .SetGroupName("nr")
             
+        .AddAttribute("SciOnEveryTx",
+                      "Send SCI 1-A with every PSSCH of a TB, each indicating the TB's remaining "
+                      "reserved slots (TS 38.212 sec. 8.3.1.1, TS 38.214 sec. 8.1.5). false (CTTC "
+                      "default): SCI 1-A only every sl-MaxNumPerReserve slots",
+                      BooleanValue(false),
+                      MakeBooleanAccessor(&NrSlCoopScheduler::m_sciOnEveryTx),
+                      MakeBooleanChecker())
         .AddAttribute("HelperId",
                       "Designated Helper ID.",
                       UintegerValue(0),
@@ -2014,7 +2021,16 @@ NrSlCoopScheduler::DoNrSlAllocation(
         slotAlloc.maxNumPerReserve = itTxOpps->slMaxNumPerReserve;
         slotAlloc.ndi = slotAllocList.empty() == true ? 1 : 0;
         slotAlloc.rv = GetRv(static_cast<uint8_t>(slotAllocList.size()));
-        if (static_cast<uint16_t>(slotAllocList.size()) % itTxOpps->slMaxNumPerReserve == 0)
+        if (m_sciOnEveryTx)
+        {
+            // every transmission carries SCI 1-A and indicates itself plus the remaining
+            // slots of the TB, up to sl-MaxNumPerReserve
+            slotAlloc.txSci1A = true;
+            slotAlloc.slotNumInd = static_cast<uint8_t>(
+                std::min<std::size_t>(itTxOpps->slMaxNumPerReserve,
+                                      selectedTxOpps.size() - slotAllocList.size()));
+        }
+        else if (static_cast<uint16_t>(slotAllocList.size()) % itTxOpps->slMaxNumPerReserve == 0)
         {
             slotAlloc.txSci1A = true;
             if (slotAllocList.size() + itTxOpps->slMaxNumPerReserve <= selectedTxOpps.size())

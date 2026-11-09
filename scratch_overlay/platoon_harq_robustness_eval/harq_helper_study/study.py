@@ -115,25 +115,26 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=parse_seeds(seeds_arg or '1-10'),
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
                     arms=['R2', 'R4.1', 'R5'] if fill else MAP_ARMS, bglevels=bgl)
-    if profile in ('dynaper', 'dynaper_smoke'):
-        # dynaper: aperiodic1tb with the leader on a dynamic grant per packet (no --aperiodicRri: the simulator
-        # keeps SPS for periodic traffic only), every Kuo arm, 0 / 15 / 30 / 45 / 60 cars at the moderate per-car
-        # load, 10 seeds; otherwise the same commands as full_v2 / density_v2 / map_fill_v2.
-        # Second part: R4_bsc with periodic1tb at 15 / 30 / 45 cars, which full_v2 has at 0 / 60 cars only (SB-SPS
-        # as before, same commands as the density_v2 runs of the other arms).
-        # dynaper_smoke: launcher check, every arm x scenario at 15 cars (+ R4_bsc periodic), seed 1, short runs.
+    if profile in ('v3', 'v3_smoke', 'v3_map', 'v3_map_smoke'):
+        # v3: the campaign re-run with SCI 1-A on every PSSCH (--sciOnEveryTx=true, every UE) and the leader's
+        # aperiodic traffic on dynamic grants (no --aperiodicRri: the simulator keeps SB-SPS for periodic traffic
+        # only). Every Kuo arm incl. R1_bsc / R4_bsc, periodic1tb + aperiodic1tb, 0 / 15 / 30 / 45 / 60 cars at
+        # the moderate per-car load, 10 seeds (3000 runs). v3_map: the five map-selection arms, same cells (1500).
+        # *_smoke: launcher check, every arm x scenario x traffic at 15 cars, seed 1, short runs.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]
         bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
-        arms = ['R1', 'R1_bsc', 'R2', 'R3', 'R4', 'R4_bsc', 'R4.1', 'R4.2', 'R5', 'R6']
-        smoke = profile == 'dynaper_smoke'
-        bgs = ['n15'] if smoke else ['none'] + list(DENSITY) + ['moderate']
-        return dict(scen=['highway', 'roundabout', 'roundaboutE'], seeds=[1] if smoke else parse_seeds(seeds_arg or '1-10'),
+        smoke = profile.endswith('_smoke')
+        arms = MAP_ARMS if profile.startswith('v3_map') else ['R1', 'R1_bsc', 'R2', 'R3', 'R4', 'R4_bsc', 'R4.1',
+                                                              'R4.2', 'R5', 'R6']
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'],
+                    bgs=['n15'] if smoke else ['none'] + list(DENSITY) + ['moderate'],
+                    trafs=['periodic1tb', 'aperiodic1tb'], arms=arms,
+                    seeds=[1] if smoke else parse_seeds(seeds_arg or '1-10'),
                     tmax=(lambda sc, bg: 8.0 if sc == 'highway' else 0.0) if smoke else
                          (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
                     rbt_curve=True, rbt_smoke=SMOKE_RBT_S if smoke else None, bglevels=bgl, dyn=True,
-                    parts=[dict(arms=arms, bgs=bgs, trafs=['aperiodic1tb']),
-                           dict(arms=['R4_bsc'], bgs=['n15'] if smoke else list(DENSITY), trafs=['periodic1tb'])])
+                    flags=['--sciOnEveryTx=true'])
     raise SystemExit('unknown profile ' + profile)
 
 
@@ -209,7 +210,7 @@ def plan(profile, seeds_arg=None, only=None):
                         tag = f'{short}_ivd30_{tr}_{bg}_s{seed}'
                         cmd = [BIN, f'--scenario={simsc}', f'--mobility={trace}', f'--traffic={tr}',
                                f'--seed={seed}', f'--run={seed}', f'--bgFlowsPerCar={bgl[bg][1]}',
-                               '--maxNumTx=3'] + run_retx.BASE_FLAGS + aflags + DIAG
+                               '--maxNumTx=3'] + run_retx.BASE_FLAGS + aflags + DIAG + spec.get('flags', [])
                         if tr == 'aperiodic1tb' and not spec.get('dyn'):
                             cmd.append('--aperiodicRri=20')
                         if simsc == 'roundabout':
@@ -325,8 +326,10 @@ def cmd_check(a):
         chk(x['blind_soft_combining'] == ('1' if arm.endswith('_bsc') else '0'), name + ': blind_soft_combining flag')
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
-        if a.profile.startswith('dynaper') and r['traffic'] == 'aperiodic1tb':
-            chk(f('leader_grants_sps') == 0 and f('leader_grants_dyn') > 0, name + ': leader not on dynamic grants')
+        if a.profile.startswith('v3'):
+            chk(x['sci_on_every_tx'] == '1', name + ': SCI 1-A not on every PSSCH')
+            if r['traffic'] == 'aperiodic1tb':
+                chk(f('leader_grants_sps') == 0 and f('leader_grants_dyn') > 0, name + ': leader not on dynamic grants')
         takeover = base in ('R5', 'R6')
         chk(x['leader_fallback'] == ('1' if takeover else '0'), name + ': leader_fallback flag')
         chk(x['opt1_helper_nack'] == ('1' if base == 'R5' else '0'), name + ': opt1_helper_nack flag')
@@ -366,7 +369,7 @@ def main():
     ap.add_argument('action', choices=['run', 'check', 'list'])
     ap.add_argument('--profile', default='smoke',
                     choices=['smoke', 'local1', 'full', 'density', 'density_smoke', 'map', 'map_fill', 'map_smoke',
-                             'dynaper', 'dynaper_smoke'])
+                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)

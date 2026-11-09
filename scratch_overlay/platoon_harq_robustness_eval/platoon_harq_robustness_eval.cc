@@ -1476,6 +1476,7 @@ main(int argc, char* argv[])
     bool helperTakeover = true;      // R5 / R6: helper NACK / silence lets the leader take over
     bool leaderFallback = true;      // R5 / R6: leader retransmits if the helper stays silent
     bool softCombining = true;       // HARQ-IR at the receivers (false: ablation)
+    bool sciOnEveryTx = false;       // SCI 1-A with every PSSCH (3GPP); false: CTTC default
     double camPeriodMs = 100.0;     // CAM period: positions known to the leader
     double helperDecisionMs = 0.0;  // positions usable only this long after sampling
     bool helperSelectShadow = false;// compute + log the choice, signal --helper instead
@@ -1592,6 +1593,11 @@ main(int argc, char* argv[])
                  "receivers soft-combine (HARQ-IR) retransmissions; false: every copy is an "
                  "independent attempt (ablation of the HARQ-IR gain)",
                  softCombining);
+    cmd.AddValue("sciOnEveryTx",
+                 "every PSSCH carries its own PSCCH (SCI 1-A indicating the TB's remaining reserved "
+                 "slots), every UE; false: CTTC default, SCI 1-A only on the first slot of a "
+                 "reservation, so a receiver that missed it cannot decode the later copies",
+                 sciOnEveryTx);
     cmd.AddValue("camPeriodMs", "CAM period (ms): member positions known to the leader",
                  camPeriodMs);
     cmd.AddValue("helperDecisionMs",
@@ -1747,6 +1753,8 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSpectrumPhy::SlBlindSoftCombining",
                        BooleanValue(blindSoftCombining));
     Config::SetDefault("ns3::NrSpectrumPhy::SlSoftCombining", BooleanValue(softCombining));
+    Config::SetDefault("ns3::NrSlUeMacSchedulerFixedMcs::SciOnEveryTx", BooleanValue(sciOnEveryTx));
+    Config::SetDefault("ns3::NrSlCoopScheduler::SciOnEveryTx", BooleanValue(sciOnEveryTx));
     if (!testFixedSinr.empty())
     {
         Config::SetDefault("ns3::NrSpectrumPhy::SlTestFixedSinr", StringValue(testFixedSinr));
@@ -3984,7 +3992,7 @@ main(int argc, char* argv[])
               "kuo_objective,pos_err_m,reack_decoded,psfch_exact_attr,fb_late,helper_nack_stale,"
               "blind_soft_combining,opt1_helper_nack,leader_fixed_size,helper_takeover,leader_fallback,"
               "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot,"
-              "ndi_toggle_new_tb\n";
+              "ndi_toggle_new_tb,sci_on_every_tx\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4217,7 +4225,7 @@ main(int argc, char* argv[])
                << helperTakeover << ',' << (leaderFallback && helperTakeover && coop && !helperBlind)
                << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
                << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << ','
-               << g.ndiToggleNewTb << '\n';
+               << g.ndiToggleNewTb << ',' << sciOnEveryTx << '\n';
         }
     }
 

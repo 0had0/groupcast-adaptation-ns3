@@ -1311,6 +1311,28 @@ subchannels; aperiodic1 dynamic, no retransmission; aperiodic-periodic collision
 aperiodic vehicles choosing the same fresh resource (nothing to sense) and periodic pairs
 beyond 600 m.
 
+## SCI 1-A on every PSSCH (2026-11-09, `--sciOnEveryTx`, campaign v3)
+
+**Why.** CTTC sends SCI 1-A only on the first slot of a reservation (every `sl-MaxNumPerReserve`
+slots); the later copies of a TB go without PSCCH. A receiver that decoded the first SCI expects
+them (`NrUePhy::SaveFutureSlRxGrants`); one that missed it cannot decode any later copy of the TB.
+In TS 38.212 sec. 8.3.1.1 / TS 38.214 sec. 8.1.5 every PSSCH has its PSCCH, whose SCI 1-A indicates
+the TB's remaining reserved slots. The CTTC behaviour handicaps leader retransmissions and leader
+takeovers against helper relays (which always carried SCI 1-A) for exactly the members a blockage
+hides at the first copy.
+
+**Change.** `SciOnEveryTx` (`NrSlUeMacSchedulerFixedMcs`, every background UE; `NrSlCoopScheduler`,
+leader and helper; default false): every transmission carries SCI 1-A with `slotNumInd` = itself + the
+remaining slots of the TB, up to `sl-MaxNumPerReserve`. Receiver (`NrUePhy::SendSlExpectedTbInfo`,
+always on): every announced slot due now is registered and past ones are dropped, since a slot can now
+be announced by several SCIs and the list is no longer unique or in time order (the head-only check
+could block on a stale duplicate). Run CSV column `sci_on_every_tx`.
+
+**Checks** (local, highway / Roundabout E, 15 cars, seed 1): `--sciOnEveryTx=false` reproduces the
+previous binary byte for byte (`_pkt`, `_member`, `_ltx`, every `_run` column). With true, members that
+missed the leader's first SCI of a TB attempt the later leader copies (R3: 88 of 178 attempted, 17
+decoded; false: 0 of 150).
+
 ## One-TB leader traffic classes (2026-10-14, for the PLAN.md campaign)
 
 **Why.** In the pool of the new campaign (μ 1, dedicated carrier, 5 × 10 PRB, MCS 14,

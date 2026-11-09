@@ -1,27 +1,29 @@
 #!/bin/bash
-# Aperiodic traffic with the leader on dynamic grants, on the remote: every Kuo arm (R1, R1_bsc, R2, R3, R4,
-# R4_bsc, R4.1, R4.2, R5, R6), highway + roundabout (W and E exit, curve window), aperiodic1tb only, 0 / 15 / 30 /
-# 45 / 60 cars at the moderate per-car load, 10 seeds (1500 runs), plus R4_bsc periodic1tb at 15 / 30 / 45 cars (90 runs,
-# SB-SPS as before: full_v2 has R4_bsc at 0 / 60 cars only). Every command equals the full_v2 / density_v2 /
-# map_fill_v2 run of the same cell and seed except that --aperiodicRri=20 is dropped: the leader then selects one
-# dynamic grant per packet (periodic traffic keeps SB-SPS; it is not re-run).
+# Campaign v3 on the remote: the whole study re-run with SCI 1-A on every PSSCH (--sciOnEveryTx=true, every UE,
+# TS 38.212 / 38.214: a member that missed the first SCI of a TB can still decode its later copies) and the leader's
+# aperiodic traffic on dynamic grants (periodic traffic keeps SB-SPS). Every Kuo arm (R1, R1_bsc, R2, R3, R4,
+# R4_bsc, R4.1, R4.2, R5, R6), highway + roundabout (W and E exit, curve window), periodic1tb + aperiodic1tb,
+# 0 / 15 / 30 / 45 / 60 cars at the moderate per-car load, 10 seeds (3000 runs). --map: the five map-selection
+# arms instead (R4, R4.1, R4.2, R5, R6 with --helperSelect=map, 1500 runs).
+# Needs the NR patch of this commit: run with --setup once after pulling (applies patches/nr/local.patch).
 #   1. (optional) update the checkout:   --pull BRANCH
 #   2. (optional) setup.sh --force; build the simulator (always, ninja is a no-op when up to date)
 #   3. check that every trace exists (the earlier campaigns used them: nothing is generated here)
-#   4. smoke: 33 short runs (profile dynaper_smoke) + invariant checks, including "leader on dynamic grants
-#      only"; aborts the launch on any failure
-#   5. study.py run --profile dynaper in the background (nohup, resumable: re-run this script to continue)
-# Usage: launch_dynaper.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--no-smoke]
-#          --out DIR     output folder (default out/dynaper_v2), log out/<basename DIR>_run.log; the commit
-#                        launched is written to DIR/COMMIT
+#   4. smoke: short runs at 15 cars, seed 1 (profile v3_smoke: 60, v3_map_smoke: 30) + invariant checks,
+#      including "SCI 1-A on every PSSCH" and "leader on dynamic grants" for aperiodic; aborts on any failure
+#   5. study.py run in the background (nohup, resumable: re-run this script to continue)
+# Usage: launch_v3.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--map]
+#                     [--no-smoke]
+#          --out DIR     output folder (default out/v3, out/v3_map with --map), log out/<basename DIR>_run.log;
+#                        the commit launched is written to DIR/COMMIT
 #          --only REGEX  passed to study.py (regex on "arm/tag")
-#        launch_dynaper.sh [--out DIR] --stop
-# Progress: ./monitor_study.sh dynaper --log out/dynaper_v2_run.log --watch 300
+#        launch_v3.sh [--map] [--out DIR] --stop
+# Progress: ./monitor_study.sh v3 --log out/v3_run.log --watch 300   (--map: v3_map, out/v3_map_run.log)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; OUT=""; ONLY=""
+JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; MAP=0; OUT=""; ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -30,13 +32,14 @@ while [ $# -gt 0 ]; do
     --seeds) SEEDS="$2"; shift 2;;
     --out) OUT="$2"; shift 2;;
     --only) ONLY="$2"; shift 2;;
+    --map) MAP=1; shift;;
     --no-smoke) SMOKE=0; shift;;
     --stop) STOP=1; shift;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
-PROFILE=dynaper
-[ -z "$OUT" ] && OUT=out/${PROFILE}_v2
+PROFILE=v3; [ "$MAP" = 1 ] && PROFILE=v3_map
+[ -z "$OUT" ] && OUT=out/${PROFILE}
 case "$OUT" in /*) OUTABS="$OUT";; *) OUTABS="$HERE/$OUT";; esac
 OUTABS="${OUTABS%/}"
 LOG="out/$(basename "$OUTABS")_run.log"
@@ -52,7 +55,7 @@ if [ "$STOP" = 1 ]; then
   exit 0
 fi
 if pgrep -f "$STUDY_PAT" > /dev/null; then
-  echo "a $PROFILE study is already running into $OUTABS: launch_dynaper.sh --out $OUT --stop first"; exit 7
+  echo "a $PROFILE study is already running into $OUTABS: launch_v3.sh --out $OUT --stop first"; exit 7
 fi
 cd "$REPO" || exit 2
 if [ -n "$PULL" ]; then
@@ -75,10 +78,10 @@ if [ -n "$MISSING" ]; then
   echo "missing traces (generate them with launch_density.sh / launch_full.sh first):"; echo "$MISSING"; exit 8
 fi
 if [ "$SMOKE" = 1 ]; then
-  python3 study.py run --profile dynaper_smoke --jobs "$JOBS" --out out/dynaper_smoke > out/dynaper_smoke_run.log 2>&1 && \
-    python3 study.py check --profile dynaper_smoke --out out/dynaper_smoke > out/dynaper_smoke_check.log 2>&1
+  python3 study.py run --profile ${PROFILE}_smoke --jobs "$JOBS" --out out/${PROFILE}_smoke > out/${PROFILE}_smoke_run.log 2>&1 && \
+    python3 study.py check --profile ${PROFILE}_smoke --out out/${PROFILE}_smoke > out/${PROFILE}_smoke_check.log 2>&1
   if [ $? -ne 0 ]; then
-    echo "smoke test FAILED: see $HERE/out/dynaper_smoke_run.log and out/dynaper_smoke_check.log"; exit 6
+    echo "smoke test FAILED: see $HERE/out/${PROFILE}_smoke_run.log and out/${PROFILE}_smoke_check.log"; exit 6
   fi
   echo "smoke test passed"
 fi

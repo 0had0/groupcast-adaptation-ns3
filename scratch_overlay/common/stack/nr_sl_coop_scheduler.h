@@ -609,6 +609,7 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
 
     bool m_prioToSps{true}; //!< Flag to give scheduling priority to logical channels that are
                             //!< configured with SPS in case of priority tie
+    bool m_sciOnEveryTx{false}; //!< SCI 1-A with every PSSCH of a TB (3GPP); false: CTTC default
     bool m_wholeSlotExclusion{false}; //!< Flag to exclude scheduling in a slot for which
                                       //!< reception on at least one resource is sensed
     bool m_allowMultipleDestinationsPerSlot{
