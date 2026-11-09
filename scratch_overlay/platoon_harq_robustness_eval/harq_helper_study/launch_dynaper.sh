@@ -1,13 +1,14 @@
 #!/bin/bash
 # Aperiodic traffic with the leader on dynamic grants, on the remote: every Kuo arm (R1, R1_bsc, R2, R3, R4,
 # R4_bsc, R4.1, R4.2, R5, R6), highway + roundabout (W and E exit, curve window), aperiodic1tb only, 0 / 15 / 30 /
-# 45 / 60 cars at the moderate per-car load, 10 seeds (1500 runs). Every command equals the full_v2 / density_v2 /
+# 45 / 60 cars at the moderate per-car load, 10 seeds (1500 runs), plus R4_bsc periodic1tb at 15 / 30 / 45 cars (90 runs,
+# SB-SPS as before: full_v2 has R4_bsc at 0 / 60 cars only). Every command equals the full_v2 / density_v2 /
 # map_fill_v2 run of the same cell and seed except that --aperiodicRri=20 is dropped: the leader then selects one
 # dynamic grant per packet (periodic traffic keeps SB-SPS; it is not re-run).
 #   1. (optional) update the checkout:   --pull BRANCH
 #   2. (optional) setup.sh --force; build the simulator (always, ninja is a no-op when up to date)
 #   3. check that every trace exists (the earlier campaigns used them: nothing is generated here)
-#   4. smoke: 30 short runs (profile dynaper_smoke) + invariant checks, including "leader on dynamic grants
+#   4. smoke: 33 short runs (profile dynaper_smoke) + invariant checks, including "leader on dynamic grants
 #      only"; aborts the launch on any failure
 #   5. study.py run --profile dynaper in the background (nohup, resumable: re-run this script to continue)
 # Usage: launch_dynaper.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--no-smoke]

@@ -119,19 +119,21 @@ def profile_spec(profile, seeds_arg=None):
         # dynaper: aperiodic1tb with the leader on a dynamic grant per packet (no --aperiodicRri: the simulator
         # keeps SPS for periodic traffic only), every Kuo arm, 0 / 15 / 30 / 45 / 60 cars at the moderate per-car
         # load, 10 seeds; otherwise the same commands as full_v2 / density_v2 / map_fill_v2.
-        # dynaper_smoke: launcher check, every arm x scenario at 15 cars, seed 1, short runs.
+        # Second part: R4_bsc with periodic1tb at 15 / 30 / 45 cars, which full_v2 has at 0 / 60 cars only (SB-SPS
+        # as before, same commands as the density_v2 runs of the other arms).
+        # dynaper_smoke: launcher check, every arm x scenario at 15 cars (+ R4_bsc periodic), seed 1, short runs.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]
         bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
         arms = ['R1', 'R1_bsc', 'R2', 'R3', 'R4', 'R4_bsc', 'R4.1', 'R4.2', 'R5', 'R6']
-        if profile == 'dynaper_smoke':
-            return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=['n15'], trafs=['aperiodic1tb'],
-                        seeds=[1], tmax=lambda sc, bg: 8.0 if sc == 'highway' else 0.0, rbt_curve=True,
-                        rbt_smoke=SMOKE_RBT_S, arms=arms, bglevels=bgl, dyn=True)
-        return dict(scen=['highway', 'roundabout', 'roundaboutE'], bgs=['none'] + list(DENSITY) + ['moderate'],
-                    trafs=['aperiodic1tb'], seeds=parse_seeds(seeds_arg or '1-10'),
-                    tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
-                    arms=arms, bglevels=bgl, dyn=True)
+        smoke = profile == 'dynaper_smoke'
+        bgs = ['n15'] if smoke else ['none'] + list(DENSITY) + ['moderate']
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'], seeds=[1] if smoke else parse_seeds(seeds_arg or '1-10'),
+                    tmax=(lambda sc, bg: 8.0 if sc == 'highway' else 0.0) if smoke else
+                         (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
+                    rbt_curve=True, rbt_smoke=SMOKE_RBT_S if smoke else None, bglevels=bgl, dyn=True,
+                    parts=[dict(arms=arms, bgs=bgs, trafs=['aperiodic1tb']),
+                           dict(arms=['R4_bsc'], bgs=['n15'] if smoke else list(DENSITY), trafs=['periodic1tb'])])
     raise SystemExit('unknown profile ' + profile)
 
 
@@ -192,12 +194,14 @@ def plan(profile, seeds_arg=None, only=None):
     spec = profile_spec(profile, seeds_arg)
     bgl = spec.get('bglevels') or run_retx.get_bg_levels()
     runs = []
-    for arm, aflags in ARMS.items():
-        if arm not in spec['arms'] if 'arms' in spec else arm in MAP_ARMS:
+    # a profile is one block of arms x bgs x trafs, or several ('parts', each with its own arms, bgs, trafs)
+    blocks = spec.get('parts') or [dict(arms=spec.get('arms'), bgs=spec['bgs'], trafs=spec['trafs'])]
+    for part, (arm, aflags) in ((p, a) for p in blocks for a in ARMS.items()):
+        if arm not in part['arms'] if part['arms'] is not None else arm in MAP_ARMS:
             continue
         for sc in spec['scen']:
-            for bg in spec['bgs']:
-                for tr in spec['trafs']:
+            for bg in part['bgs']:
+                for tr in part['trafs']:
                     for seed in spec['seeds']:
                         short, simsc = SCEN[sc]
                         nbg = bgl[bg][0]
@@ -321,7 +325,7 @@ def cmd_check(a):
         chk(x['blind_soft_combining'] == ('1' if arm.endswith('_bsc') else '0'), name + ': blind_soft_combining flag')
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
-        if a.profile.startswith('dynaper'):
+        if a.profile.startswith('dynaper') and r['traffic'] == 'aperiodic1tb':
             chk(f('leader_grants_sps') == 0 and f('leader_grants_dyn') > 0, name + ': leader not on dynamic grants')
         takeover = base in ('R5', 'R6')
         chk(x['leader_fallback'] == ('1' if takeover else '0'), name + ': leader_fallback flag')
