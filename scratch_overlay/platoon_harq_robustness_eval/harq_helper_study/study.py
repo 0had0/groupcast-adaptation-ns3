@@ -10,10 +10,12 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
            R4_bsc: leader and helper copies, HARQ owner = SCI-2A relayedFromRnti)
   *_map    R4, R4.1, R4.2, R5, R6 with --helperSelect=map (Kuo's objective + building map and CAM positions,
            H3); only in the map / map_smoke profiles
+  *_p<N>   --psfchPeriod=N (sl-PSFCH-Period, slots; the other profiles use 1): R2, R3, R4.2, R6 at 2 and 4, R1 at 0
+           (pool without PSFCH: 12 PSSCH symbols in every slot); only in the psfch / psfch_smoke profiles
 Cells: {highway, roundabout (N->W, 1/4 ring), roundaboutE (N->E, 3/4 ring; full profile)} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
 
 Usage:
-  study.py run   --profile smoke|local1|full|density|map|map_fill [--jobs N] [--seeds 1-5] [--out DIR]
+  study.py run   --profile smoke|local1|full|density|map|map_fill|v3|v3_map|psfch [--jobs N] [--seeds 1-5] [--out DIR]
   study.py check --profile smoke [--out DIR]      # invariants of finished runs (smoke tests)
   study.py list  --profile ...                    # print the planned runs
 """
@@ -53,6 +55,12 @@ ARMS = {
 MAP_ARMS = [a + '_map' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6')]
 for _a in MAP_ARMS:
     ARMS[_a] = [f if f != '--helperSelect=kuo' else '--helperSelect=map' for f in ARMS[_a[:-len('_map')]]]
+# PSFCH period sensitivity (profile psfch): the HARQ arms at sl-PSFCH-Period 2 and 4, the blind leader without PSFCH.
+# Period 1 is campaign v3 itself (same commands without --psfchPeriod, same seeds): not re-run.
+PSFCH_ARMS = [f'{a}_p{p}' for a in ('R2', 'R3', 'R4.2', 'R6') for p in (2, 4)] + ['R1_p0']
+for _a in PSFCH_ARMS:
+    _b, _p = _a.rsplit('_p', 1)
+    ARMS[_a] = ARMS[_b] + [f'--psfchPeriod={_p}']
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
           'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo',
           'R4_map': 'map', 'R4.1_map': 'map', 'R4.2_map': 'map', 'R5_map': 'map+takeover',
@@ -135,6 +143,22 @@ def profile_spec(profile, seeds_arg=None):
                          (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
                     rbt_curve=True, rbt_smoke=SMOKE_RBT_S if smoke else None, bglevels=bgl, dyn=True,
                     flags=['--sciOnEveryTx=true'])
+    if profile in ('psfch', 'psfch_smoke'):
+        # psfch: sl-PSFCH-Period sensitivity on the v3 configuration (--sciOnEveryTx=true, aperiodic on dynamic
+        # grants): PSFCH_ARMS, every route x traffic at 0 and 60 cars, 10 seeds (1080 runs). The period-1 reference
+        # is out/v3 (R1, R2, R3, R4.2, R6, same seeds). psfch_smoke: every arm x route x traffic at 15 cars, seed 1.
+        lv = run_retx.get_bg_levels()
+        flows = lv['moderate'][1]
+        bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
+        smoke = profile == 'psfch_smoke'
+        return dict(scen=['highway', 'roundabout', 'roundaboutE'],
+                    bgs=['n15'] if smoke else ['none', 'moderate'],
+                    trafs=['periodic1tb', 'aperiodic1tb'], arms=PSFCH_ARMS,
+                    seeds=[1] if smoke else parse_seeds(seeds_arg or '1-10'),
+                    tmax=(lambda sc, bg: 8.0 if sc == 'highway' else 0.0) if smoke else
+                         (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
+                    rbt_curve=True, rbt_smoke=SMOKE_RBT_S if smoke else None, bglevels=bgl, dyn=True,
+                    flags=['--sciOnEveryTx=true'])
     raise SystemExit('unknown profile ' + profile)
 
 
@@ -198,7 +222,7 @@ def plan(profile, seeds_arg=None, only=None):
     # a profile is one block of arms x bgs x trafs, or several ('parts', each with its own arms, bgs, trafs)
     blocks = spec.get('parts') or [dict(arms=spec.get('arms'), bgs=spec['bgs'], trafs=spec['trafs'])]
     for part, (arm, aflags) in ((p, a) for p in blocks for a in ARMS.items()):
-        if arm not in part['arms'] if part['arms'] is not None else arm in MAP_ARMS:
+        if arm not in part['arms'] if part['arms'] is not None else arm in MAP_ARMS + PSFCH_ARMS:
             continue
         for sc in spec['scen']:
             for bg in part['bgs']:
@@ -320,13 +344,15 @@ def cmd_check(a):
             continue
         x = read_csv(pre + '_run.csv')[0]
         arm = r['arm']
-        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '')
+        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '').split('_p')[0]
         f = lambda k: float(x[k])
         chk(0.0 <= f('prr_mean') <= 1.0 and 0.0 <= f('prr_min') <= f('prr_mean') + 1e-9, name + ': PRR range')
         chk(x['blind_soft_combining'] == ('1' if arm.endswith('_bsc') else '0'), name + ': blind_soft_combining flag')
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
-        if a.profile.startswith('v3'):
+        if '_p' in arm:
+            chk(x['psfch_period'] == arm.rsplit('_p', 1)[1], name + ': psfch_period')
+        if a.profile.startswith('v3') or a.profile.startswith('psfch'):
             chk(x['sci_on_every_tx'] == '1', name + ': SCI 1-A not on every PSSCH')
             if r['traffic'] == 'aperiodic1tb':
                 chk(f('leader_grants_sps') == 0 and f('leader_grants_dyn') > 0, name + ': leader not on dynamic grants')
@@ -369,7 +395,7 @@ def main():
     ap.add_argument('action', choices=['run', 'check', 'list'])
     ap.add_argument('--profile', default='smoke',
                     choices=['smoke', 'local1', 'full', 'density', 'density_smoke', 'map', 'map_fill', 'map_smoke',
-                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke'])
+                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'psfch', 'psfch_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
     ap.add_argument('--out', default=None)

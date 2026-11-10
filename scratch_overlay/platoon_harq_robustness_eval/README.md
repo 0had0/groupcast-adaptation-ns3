@@ -1333,6 +1333,25 @@ previous binary byte for byte (`_pkt`, `_member`, `_ltx`, every `_run` column). 
 missed the leader's first SCI of a TB attempt the later leader copies (R3: 88 of 178 attempted, 17
 decoded; false: 0 of 150).
 
+## PSFCH period sensitivity (2026-11-10, profile `psfch`)
+
+Campaign v3 uses `sl-PSFCH-Period` = 1 (a PSFCH occasion in every slot). Profile `psfch` re-runs the v3
+configuration (`--sciOnEveryTx=true`, aperiodic leader traffic on dynamic grants) with only `--psfchPeriod`
+changed: R2, R3, R4.2, R6 at 2 and 4 slots (`*_p2`, `*_p4`) and R1 at 0 (`R1_p0`, pool without PSFCH);
+every route x traffic, 0 and 60 cars, 10 seeds (1080 runs). The period-1 reference is `out/v3` (same
+commands without `--psfchPeriod`, same seeds), so every comparison is paired by seed.
+
+What changes with the period in 5G-LENA:
+- slots without a PSFCH occasion carry 12 PSSCH symbols instead of 9
+  (`nr-sl-ue-mac-scheduler-fixed-mcs.cc`, `slPsschSymLength`), but the TB is always sized for 9 symbols:
+  same subchannels per TB, lower code rate in those slots;
+- feedback waits for the next PSFCH occasion at least `MinTimeGapPsfch` = 3 slots after the PSSCH, so the
+  HARQ round trip grows by up to period - 1 slots and fewer retransmissions fit before the deadline.
+
+Launch: `launch_v3.sh --psfch [--jobs N]` (smoke `psfch_smoke`, 54 runs at 15 cars; output `out/psfch`).
+Run it after v3 or split the cores, both campaigns use the same CPUs. Local smoke (debug build, highway,
+aperiodic, 15 cars, seed 1, all nine arms): 0 check failures, `psfch_period` 0 / 2 / 4 in every run CSV.
+
 ## One-TB leader traffic classes (2026-10-14, for the PLAN.md campaign)
 
 **Why.** In the pool of the new campaign (μ 1, dedicated carrier, 5 × 10 PRB, MCS 14,
