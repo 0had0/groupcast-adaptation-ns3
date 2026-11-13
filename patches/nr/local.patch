@@ -2885,7 +2885,7 @@ index 9562ebd0..4a3857eb 100644
  
  /**
 diff --git a/model/nr-spectrum-phy.cc b/model/nr-spectrum-phy.cc
-index d5d45551..500a6ddd 100644
+index d5d45551..7555e690 100644
 --- a/model/nr-spectrum-phy.cc
 +++ b/model/nr-spectrum-phy.cc
 @@ -8,6 +8,7 @@
@@ -2896,19 +2896,20 @@ index d5d45551..500a6ddd 100644
  #include "nr-lte-mi-error-model.h"
  #include "nr-sl-mac-pdu-tag.h"
  #include "nr-sl-sci-f1a-header.h"
-@@ -21,9 +22,11 @@
+@@ -21,9 +22,12 @@
  #include <ns3/double.h>
  #include <ns3/lte-radio-bearer-tag.h>
  #include <ns3/node.h>
 +#include <ns3/string.h>
  #include <ns3/trace-source-accessor.h>
++#include <ns3/uinteger.h>
  
  #include <cmath>
 +#include <sstream>
  #include <unordered_set>
  
  namespace ns3
-@@ -183,6 +186,49 @@ NrSpectrumPhy::GetTypeId()
+@@ -183,6 +187,64 @@ NrSpectrumPhy::GetTypeId()
                  BooleanValue(false),
                  MakeBooleanAccessor(&NrSpectrumPhy::DropTbOnRbOnCollision),
                  MakeBooleanChecker())
@@ -2927,6 +2928,21 @@ index d5d45551..500a6ddd 100644
 +                          BooleanValue(true),
 +                          MakeBooleanAccessor(&NrSpectrumPhy::m_slBlindSoftCombining),
 +                          MakeBooleanChecker())
++            .AddAttribute("SlHelperMissProb",
++                          "Controlled experiment (cooperative HARQ): the helper named in a "
++                          "TB's SCI-2A misses the source's first transmission of that TB with "
++                          "this probability, on top of its channel. Drawn only when the SCI-2A "
++                          "was decoded; 0 draws nothing (stock behaviour).",
++                          DoubleValue(0.0),
++                          MakeDoubleAccessor(&NrSpectrumPhy::m_slHelperMissProb),
++                          MakeDoubleChecker<double>(0.0, 1.0))
++            .AddAttribute("SlHelperMissMode",
++                          "How a forced helper miss looks: 0 = SCI-2A decoded and TB failed "
++                          "(the helper NACKs; the copy is not kept for combining), 1 = SCI-2A "
++                          "failed (the helper does not know it is named and stays silent).",
++                          UintegerValue(0),
++                          MakeUintegerAccessor(&NrSpectrumPhy::m_slHelperMissMode),
++                          MakeUintegerChecker<uint8_t>(0, 1))
 +            .AddAttribute("SlSoftCombining",
 +                          "Soft-combine (HARQ-IR) every sidelink retransmission with the earlier "
 +                          "copies of its TB. False: every copy is decoded on its own (ablation "
@@ -2958,10 +2974,15 @@ index d5d45551..500a6ddd 100644
              .AddTraceSource("RxPacketTraceEnb",
                              "The no. of packets received and transmitted by the Base Station",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_rxPacketTraceEnb),
-@@ -246,6 +292,11 @@ NrSpectrumPhy::GetTypeId()
+@@ -246,6 +308,16 @@ NrSpectrumPhy::GetTypeId()
                              "The sidelink SCI-2a transmission failed to decode",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_slSci2aDecodeFailures),
                              "ns3::TracedValueCallback::Uint64")
++            .AddTraceSource("SlHelperForcedMiss",
++                            "First transmissions of a TB that the named helper was forced to "
++                            "miss (SlHelperMissProb)",
++                            MakeTraceSourceAccessor(&NrSpectrumPhy::m_slHelperForcedMiss),
++                            "ns3::TracedValueCallback::Uint64")
 +            .AddTraceSource("SlNdiToggleNewTb",
 +                            "Sidelink receptions whose toggled SCI-2A NDI bit revealed a new TB "
 +                            "while the simulator's new-data flag was 0 (first transmission missed)",
@@ -2970,7 +2991,7 @@ index d5d45551..500a6ddd 100644
              .AddTraceSource("SlTbDecodeFailure",
                              "The sidelink TB transmission failed to decode",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_slTbDecodeFailures),
-@@ -2020,6 +2071,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
+@@ -2020,6 +2092,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
  {
      NS_LOG_FUNCTION(this << " state: " << m_state);
  
@@ -2994,7 +3015,7 @@ index d5d45551..500a6ddd 100644
      switch (m_state)
      {
      case RX_DATA:
-@@ -2387,6 +2455,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2387,6 +2476,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
              DynamicCast<NrSpectrumSignalParametersSlCtrlFrame>(
                  m_slRxSigParamInfo.at(paramIndex).params);
          Ptr<Packet> packet = ctrlParams->packetBurst->GetPackets().front();
@@ -3015,7 +3036,7 @@ index d5d45551..500a6ddd 100644
          if (!corrupt)
          {
              error = false; // at least one control packet is OK
-@@ -2460,6 +2542,81 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2460,6 +2563,81 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
      }
  }
  
@@ -3097,7 +3118,7 @@ index d5d45551..500a6ddd 100644
  void
  NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
  {
-@@ -2514,6 +2671,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2514,6 +2692,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              continue;
          }
          itTb->second.m_sinrPerceived = m_slSinrPerceived.at(pktIndex);
@@ -3142,7 +3163,7 @@ index d5d45551..500a6ddd 100644
          itTb->second.m_pktIndex = pktIndex;
          NS_LOG_DEBUG("Updating SINR for RNTI " << tag.GetRnti());
          itTb->second.m_sinrUpdated = true;
-@@ -2554,6 +2749,76 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2554,6 +2770,76 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          }
      }
  
@@ -3219,7 +3240,7 @@ index d5d45551..500a6ddd 100644
      // Compute the error and check for collision for each expected TB
      for (auto& tbIt : m_slTransportBlocks)
      {
-@@ -2566,9 +2831,28 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2566,11 +2852,31 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              NS_LOG_WARN("SINR not updated for the expected TB from RNTI " << tbIt.first);
              continue;
          }
@@ -3247,8 +3268,11 @@ index d5d45551..500a6ddd 100644
 +        }
  
          bool sciF2aCorrupted = false;
++        bool forcedHelperMiss = false; // SlHelperMissProb drew a miss for this copy
          bool rbCollided =
-@@ -2612,7 +2896,7 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+             false; // no need of this boolean since we track TB info. I might get rid of it later
+ 
+@@ -2612,12 +2918,35 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              tbIt.second.m_outputEmForSci2 = m_slErrorModel->GetTbDecodificationStats(
                  tbIt.second.m_sinrPerceived,
                  tbIt.second.m_expected.m_rbBitmap,
@@ -3257,7 +3281,35 @@ index d5d45551..500a6ddd 100644
                  Sci2Mcs,
                  NrErrorModel::NrErrorModelHistory());
              // check the decodification of SCI stage 2 with a random probability
-@@ -2629,6 +2913,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+             sciF2aCorrupted =
+                 m_random->GetValue() > tbIt.second.m_outputEmForSci2->m_tbler ? false : true;
++            // controlled experiment: the named helper misses the source's first copy
++            // (own random stream, so the other draws of the run are unchanged)
++            forcedHelperMiss = false;
++            if (m_slHelperMissProb > 0 && !sciF2aCorrupted && ueRx &&
++                sciF2a.GetCoopInfo().relayedFromRnti == 0 && sciF2a.GetCoopInfo().helperId != 0 &&
++                sciF2a.GetCoopInfo().helperId == ueRx->GetPhy(GetBwpId())->GetRnti() &&
++                sciF2a.GetNdi())
++            {
++                if (!m_slHelperMissRv)
++                {
++                    m_slHelperMissRv = CreateObject<UniformRandomVariable>();
++                    m_slHelperMissRv->SetStream(900000 + ueRx->GetPhy(GetBwpId())->GetRnti());
++                }
++                if (m_slHelperMissRv->GetValue() < m_slHelperMissProb)
++                {
++                    forcedHelperMiss = true;
++                    m_slHelperForcedMiss++;
++                    if (m_slHelperMissMode == 1)
++                    {
++                        sciF2aCorrupted = true;
++                    }
++                }
++            }
+             tbIt.second.m_isSci2Corrupted = sciF2aCorrupted;
+             NS_LOG_DEBUG(this << " SCI stage 2 decoding, errorRate "
+                               << tbIt.second.m_outputEmForSci2->m_tbler << " corrupt "
+@@ -2629,6 +2958,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  m_slSci2aDecodeFailures++;
                  // If SCI stage 2 is corrupted, data is also corrupted.
                  tbIt.second.m_isCorrupted = true;
@@ -3278,7 +3330,7 @@ index d5d45551..500a6ddd 100644
  
                  // Trace
                  SlRxDataPacketTraceParams traceParams;
-@@ -2666,37 +2964,89 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2666,37 +3009,89 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  NS_LOG_DEBUG(this << " PSSCH SCI stage 2 decoding succeeded, errorRate "
                                    << tbIt.second.m_outputEmForSci2->m_tbler);
              }
@@ -3373,7 +3425,7 @@ index d5d45551..500a6ddd 100644
              }
              tbIt.second.m_outputEmForData =
                  m_slErrorModel->GetTbDecodificationStats(tbIt.second.m_sinrPerceived,
-@@ -2728,23 +3078,63 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2728,25 +3123,78 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                                        << tbIt.second.m_outputEmForData->m_tbler << " data corrupt "
                                        << tbIt.second.m_isCorrupted);
                      tbIt.second.m_isCorrupted = false;
@@ -3406,6 +3458,12 @@ index d5d45551..500a6ddd 100644
 +                        tbIt.second.m_isSci2Corrupted = false;
 +                    }
 +                }
++                if (forcedHelperMiss && m_slHelperMissMode == 0)
++                {
++                    // forced TB failure: the helper NACKs this copy and keeps nothing of it
++                    tbIt.second.m_isCorrupted = true;
++                    m_harqPhyModule->RemovePrevDecoded(harqRnti, sciF2a.GetHarqId());
++                }
 +                if (harqTraced)
 +                {
 +                    traceHarq(SlHarqCombineTraceParams::DECODE,
@@ -3436,11 +3494,22 @@ index d5d45551..500a6ddd 100644
                                                         << " for the packet received from RNTI "
                                                         << tbIt.first);
 -                    m_harqPhyModule->UpdateSlDataHarqProcessStatus(tbIt.first,
-+                    m_harqPhyModule->UpdateSlDataHarqProcessStatus(harqRnti,
-                                                                    sciF2a.GetHarqId(),
-                                                                    tbIt.second.m_outputEmForData);
+-                                                                   sciF2a.GetHarqId(),
+-                                                                   tbIt.second.m_outputEmForData);
++                    if (forcedHelperMiss)
++                    {
++                        m_harqPhyModule->ResetSlDataHarqProcessStatus(harqRnti, sciF2a.GetHarqId());
++                    }
++                    else
++                    {
++                        m_harqPhyModule->UpdateSlDataHarqProcessStatus(harqRnti,
++                                                                       sciF2a.GetHarqId(),
++                                                                       tbIt.second.m_outputEmForData);
++                    }
                  }
-@@ -2764,17 +3154,19 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+ 
+                 if (tbIt.second.m_isCorrupted)
+@@ -2764,17 +3212,19 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          }
          else // No error model enabled
          {
@@ -3462,7 +3531,7 @@ index d5d45551..500a6ddd 100644
                  continue;
              }
  
-@@ -2858,6 +3250,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2858,6 +3308,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              slHarqInfo.m_dstL2Id = sciF2a.GetDstId();
              slHarqInfo.m_harqProcessId = sciF2a.GetHarqId();
              slHarqInfo.m_bwpIndex = GetBwpId();
@@ -3474,7 +3543,7 @@ index d5d45551..500a6ddd 100644
              {
                  NS_LOG_DEBUG("Sending NACK HARQ feedback to SlHarqFeedback callback");
 diff --git a/model/nr-spectrum-phy.h b/model/nr-spectrum-phy.h
-index aa3abafd..0e998e1c 100644
+index aa3abafd..61c0e676 100644
 --- a/model/nr-spectrum-phy.h
 +++ b/model/nr-spectrum-phy.h
 @@ -25,11 +25,15 @@
@@ -3517,7 +3586,7 @@ index aa3abafd..0e998e1c 100644
      /**
       * \brief Function to process received PSFCH signals/messages function
       * \param paramIndexes Indexes of received PSFCH signals/messages parameters
-@@ -996,6 +1017,28 @@ class NrSpectrumPhy : public SpectrumPhy
+@@ -996,6 +1017,33 @@ class NrSpectrumPhy : public SpectrumPhy
          m_slRxSigParamInfo; //!< NR Sidelink received signal parameter info
      bool m_dropTbOnRbCollisionEnabled{
          false}; //!< when true, drop all receptions on colliding RBs regardless SINR value.
@@ -3525,6 +3594,11 @@ index aa3abafd..0e998e1c 100644
 +                                      //!< TB with HARQ feedback enabled is ACKed (TS 38.321
 +                                      //!< 5.22.2.2); false keeps it silent (5G-LENA default)
 +    bool m_slSoftCombining{true};      //!< soft-combine every retransmission (HARQ-IR)
++    double m_slHelperMissProb{0.0};    //!< controlled experiment: the named helper misses the
++                                       //!< source's first copy of a TB with this probability
++    uint8_t m_slHelperMissMode{0};     //!< 0: SCI-2A decoded, TB failed (NACK, not stored);
++                                       //!< 1: SCI-2A failed (silent)
++    Ptr<UniformRandomVariable> m_slHelperMissRv{nullptr}; //!< own stream, created on first use
 +    bool m_slBlindSoftCombining{true}; //!< soft-combine copies sent with HARQ feedback
 +                                       //!< disabled; false decodes each copy on its own
 +    std::string m_slTestFixedSinr;     //!< test hook "rxNode:txNode=dB;...": PSSCH SINR of
@@ -3546,10 +3620,11 @@ index aa3abafd..0e998e1c 100644
      bool m_slDataErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink DATA is
                                            //!< enabled, by default is enabled
      bool m_slCtrlErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink CTRL is
-@@ -1023,6 +1066,8 @@ class NrSpectrumPhy : public SpectrumPhy
+@@ -1023,6 +1071,9 @@ class NrSpectrumPhy : public SpectrumPhy
          m_rxPsschTraceUe;                          //!< trace source for PSSCH reception
      TracedValue<uint64_t> m_slPscchDecodeFailures; //!< Count of observed PSCCH decode failures
      TracedValue<uint64_t> m_slSci2aDecodeFailures; //!< Count of observed SCI 2a decode failures
++    TracedValue<uint64_t> m_slHelperForcedMiss; //!< first copies the named helper was forced to miss
 +    TracedValue<uint64_t> m_slNdiToggleNewTb; //!< receptions whose toggled NDI bit revealed a
 +                                              //!< new TB while the "new data" flag was 0
      TracedValue<uint64_t> m_slTbDecodeFailures;    //!< Count of observed TB decode failures

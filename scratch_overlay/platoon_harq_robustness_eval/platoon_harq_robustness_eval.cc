@@ -313,6 +313,7 @@ struct Global
 {
     double tSlot{0.0005};
     uint64_t ndiToggleNewTb{0}; // members' receptions whose NDI bit revealed a missed copy 1
+    uint64_t helperForcedMiss{0}; // first copies the named helper was forced to miss
     uint32_t slotsPerSubframe{2};
     bool roundabout{false};
     uint32_t totalSubCh{5};
@@ -397,6 +398,13 @@ void
 OnMemberNdiToggle(uint64_t before, uint64_t after)
 {
     g.ndiToggleNewTb += after - before;
+}
+
+/// NrSpectrumPhy::SlHelperForcedMiss of a member (run-level counter helper_forced_miss)
+void
+OnMemberHelperForcedMiss(uint64_t before, uint64_t after)
+{
+    g.helperForcedMiss += after - before;
 }
 
 // ---------------------------------------------------------------------------
@@ -1462,6 +1470,8 @@ main(int argc, char* argv[])
     bool writeHarqTrace = false;    // _harq.csv: members' HARQ soft-buffer events (validation)
     std::string testFixedSinr;      // validation hook: fixed PSSCH SINR "rx:tx=dB;..." (node ids)
     std::string testDropSci;        // validation hook: dropped PSCCH receptions "rx:tx:k,...;..."
+    double helperMissProb = 0.0;    // controlled experiment: named helper misses copy 1
+    std::string helperMissMode = "data"; // data (NACK) | sci (silent)
     // per-TB helper selection (Kuo et al. 2021), on top of a cooperative arm:
     //   off     the static --helper for every TB (default)
     //   static  the static --helper through the selector (tests the selector path)
@@ -1632,6 +1642,13 @@ main(int argc, char* argv[])
                  "SCI stages), \"rxNode:txNode:k[,k...];...\" (NrSpectrumPhy::SlTestDropSci); "
                  "empty = off",
                  testDropSci);
+    cmd.AddValue("helperMissProb",
+                 "controlled experiment: the named helper misses the leader's first copy of a TB "
+                 "with this probability (NrSpectrumPhy::SlHelperMissProb); 0 = off",
+                 helperMissProb);
+    cmd.AddValue("helperMissMode",
+                 "how the forced miss looks: data (SCI-2A decoded, TB failed: NACK) | sci (silent)",
+                 helperMissMode);
     cmd.AddValue("collCond",
                  "log the link condition leader / helper -> interferer of collided attempts "
                  "(extra channel-condition queries can change the random draws: step-2 runs)",
@@ -1762,6 +1779,14 @@ main(int argc, char* argv[])
     if (!testDropSci.empty())
     {
         Config::SetDefault("ns3::NrSpectrumPhy::SlTestDropSci", StringValue(testDropSci));
+    }
+    NS_ABORT_MSG_IF(helperMissMode != "data" && helperMissMode != "sci",
+                    "--helperMissMode must be data or sci");
+    if (helperMissProb > 0)
+    {
+        Config::SetDefault("ns3::NrSpectrumPhy::SlHelperMissProb", DoubleValue(helperMissProb));
+        Config::SetDefault("ns3::NrSpectrumPhy::SlHelperMissMode",
+                           UintegerValue(helperMissMode == "sci" ? 1 : 0));
     }
     // the leader's flow is on SPS only for periodic traffic or aperiodic with aperiodicRri (TrafficFlowKeys)
     const bool leaderSpsCfg = leaderSps && (BaseTraffic(traffic).rfind("periodic", 0) == 0 ||
@@ -2326,6 +2351,9 @@ main(int argc, char* argv[])
         memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
             "SlNdiToggleNewTb",
             MakeCallback(&OnMemberNdiToggle));
+        memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+            "SlHelperForcedMiss",
+            MakeCallback(&OnMemberHelperForcedMiss));
     }
     for (uint32_t i = 0; i < numNodes; ++i)
     {
@@ -3992,7 +4020,7 @@ main(int argc, char* argv[])
               "kuo_objective,pos_err_m,reack_decoded,psfch_exact_attr,fb_late,helper_nack_stale,"
               "blind_soft_combining,opt1_helper_nack,leader_fixed_size,helper_takeover,leader_fallback,"
               "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot,"
-              "ndi_toggle_new_tb,sci_on_every_tx\n";
+              "ndi_toggle_new_tb,sci_on_every_tx,helper_miss_prob,helper_miss_mode,helper_forced_miss\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4225,7 +4253,8 @@ main(int argc, char* argv[])
                << helperTakeover << ',' << (leaderFallback && helperTakeover && coop && !helperBlind)
                << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
                << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << ','
-               << g.ndiToggleNewTb << ',' << sciOnEveryTx << '\n';
+               << g.ndiToggleNewTb << ',' << sciOnEveryTx << ',' << helperMissProb << ','
+               << helperMissMode << ',' << g.helperForcedMiss << '\n';
         }
     }
 
