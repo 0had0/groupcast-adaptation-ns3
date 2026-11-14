@@ -178,6 +178,10 @@ def main():
     total = {ph: len(alljobs[ph]) for ph in phases}
     already = {ph: sum(done(j) for j in alljobs[ph]) for ph in phases}
     todo = sum(total.values()) - sum(already.values())
+    missing = sorted({c.split("=", 1)[1] for ph in phases for j in alljobs[ph] for c in j["cmd"]
+                      if c.startswith("--mobility=") and not os.path.exists(c.split("=", 1)[1])})
+    if missing:
+        sys.exit("missing mobility traces (gen_mobility.py --scenario ... --nbg 0 --seed N):\n  " + "\n  ".join(missing))
     free_gb = shutil.disk_usage(OUT).free / 1e9
     log(f"start: {total} jobs, {already} already done, {todo} to run, {a.jobs} parallel, {free_gb:.1f} GB free")
     if a.dry_run:
