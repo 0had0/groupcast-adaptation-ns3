@@ -16,9 +16,9 @@
 #                        which full_v2 has at 0 / 60 cars only
 #          --only REGEX  passed to study.py (regex on "arm/tag")
 #        launch_map.sh [--fill] [--out DIR] --stop
-# Progress: ./monitor_study.sh map --log out/map_v2_run.log
+# Progress: scripts/monitor_study.sh map --log out/map_v2_run.log
 set -u
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; FILL=0; OUT=""; ONLY=""
@@ -76,8 +76,8 @@ if [ -n "$MISSING" ]; then
   echo "missing traces (generate them with launch_density.sh / launch_full.sh first):"; echo "$MISSING"; exit 8
 fi
 if [ "$SMOKE" = 1 ]; then
-  python3 study.py run --profile map_smoke --jobs "$JOBS" --out out/map_smoke > out/map_smoke_run.log 2>&1 && \
-    python3 study.py check --profile map_smoke --out out/map_smoke > out/map_smoke_check.log 2>&1
+  python3 scripts/study.py run --profile map_smoke --jobs "$JOBS" --out out/map_smoke > out/map_smoke_run.log 2>&1 && \
+    python3 scripts/study.py check --profile map_smoke --out out/map_smoke > out/map_smoke_check.log 2>&1
   if [ $? -ne 0 ]; then
     echo "smoke test FAILED: see $HERE/out/map_smoke_run.log and out/map_smoke_check.log"; exit 6
   fi
@@ -87,7 +87,7 @@ mkdir -p "$OUTABS"
 git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
 echo "starting profile $PROFILE (seeds $SEEDS, $JOBS jobs) -> $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT"))"
 ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
-nohup bash -c "python3 study.py run --profile $PROFILE --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ" \
+nohup bash -c "python3 scripts/study.py run --profile $PROFILE --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ" \
   >> "$LOG" 2>&1 &
-echo "running in background (pid $!). Progress: ./monitor_study.sh $PROFILE --log $LOG --watch 300"
-echo "planned runs: $(python3 study.py list --profile "$PROFILE" --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"
+echo "running in background (pid $!). Progress: scripts/monitor_study.sh $PROFILE --log $LOG --watch 300"
+echo "planned runs: $(python3 scripts/study.py list --profile "$PROFILE" --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"

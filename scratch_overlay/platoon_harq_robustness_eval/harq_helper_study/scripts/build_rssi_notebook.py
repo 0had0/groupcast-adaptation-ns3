@@ -3,14 +3,15 @@
 Analysis code: rssi_threshold.py. Data: out/rssi10 (R6, 60 background vehicles, seeds 1-10, six cells, ease-rtx,
 commit 1ab508d; rssi_campaign.py). The first, one-seed version used out/rssi_v3. Figures: figures/rssi_fallback/.
 
-  python3 build_rssi_notebook.py
-  python3 -m jupyter nbconvert --to notebook --execute --inplace RSSI_FALLBACK.ipynb
+  python3 scripts/build_rssi_notebook.py
+  python3 -m jupyter nbconvert --to notebook --execute --inplace notebooks/RSSI_FALLBACK.ipynb
 """
 import os
 
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 md = nbf.v4.new_markdown_cell
 code = nbf.v4.new_code_cell
 
@@ -219,7 +220,7 @@ def main():
     nb = nbf.v4.new_notebook()
     nb['cells'] = cells()
     nb['metadata']['kernelspec'] = {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}
-    nbf.write(nb, os.path.join(HERE, 'RSSI_FALLBACK.ipynb'))
+    nbf.write(nb_layout.add_preamble(nb), nb_layout.notebook_path('RSSI_FALLBACK.ipynb'))
     print('wrote RSSI_FALLBACK.ipynb')
 
 

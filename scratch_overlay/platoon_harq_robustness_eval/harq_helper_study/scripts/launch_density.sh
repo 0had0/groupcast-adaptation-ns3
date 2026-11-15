@@ -17,9 +17,9 @@
 #            traces for seed 1 / 15 cars, R6 on every scenario x traffic with short runs, consistency
 #            checks, notebook; output out/density_smoke, nothing of the real sweep is touched
 #        launch_density.sh [--out DIR] --stop
-# Progress: ./monitor_study.sh density
+# Progress: scripts/monitor_study.sh density
 set -u
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
 EVAL="$HERE/.."
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
@@ -135,8 +135,8 @@ cd "$HERE" || exit 2
 mkdir -p out
 unset MAGIC_HELPER_ID NUM_MEMBERS
 if [ "$SMOKE" = 1 ]; then
-  echo "smoke: $(python3 study.py list --profile density_smoke | wc -l) short runs, $JOBS in parallel"
-  python3 study.py run --profile density_smoke --jobs "$JOBS" > out/density_smoke_run.log 2>&1
+  echo "smoke: $(python3 scripts/study.py list --profile density_smoke | wc -l) short runs, $JOBS in parallel"
+  python3 scripts/study.py run --profile density_smoke --jobs "$JOBS" > out/density_smoke_run.log 2>&1
   tail -8 out/density_smoke_run.log
   python3 - <<'PYEOF' || { echo "SMOKE FAILED"; exit 9; }
 import glob, json, sys, pandas as pd
@@ -156,18 +156,18 @@ n = len(glob.glob('out/density_smoke/R6/*_run.csv*'))
 print(f'{n}/6 runs'); sys.exit(0 if ok and n == 6 else 1)
 PYEOF
   [ -d out/full ] && FULLDIR=out/full || FULLDIR=out/remote_full
-  python3 build_density_notebook.py --full-dir "$FULLDIR" --density-dir out/density_smoke > out/density_smoke_nb.log 2>&1 \
-    && echo "notebook ok (DENSITY_RESULTS.ipynb from $FULLDIR + out/density_smoke)" \
+  python3 scripts/build_density_notebook.py --full-dir "$FULLDIR" --density-dir out/density_smoke > out/density_smoke_nb.log 2>&1 \
+    && echo "notebook ok (notebooks/DENSITY_RESULTS.ipynb from $FULLDIR + out/density_smoke)" \
     || { tail -5 out/density_smoke_nb.log; echo "SMOKE FAILED (notebook)"; exit 9; }
   echo "SMOKE PASSED"
   exit 0
 fi
-echo "planned runs: $(python3 study.py list --profile density --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l), $JOBS in parallel"
+echo "planned runs: $(python3 scripts/study.py list --profile density --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l), $JOBS in parallel"
 mkdir -p "$OUTABS"
 git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
 echo "output $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT")), notebook with the full cells of $FULLDIR_ARG"
 ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
-nohup bash -c "python3 study.py run --profile density --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
-               python3 build_density_notebook.py --full-dir $FULLDIR_ARG --density-dir $OUTABS" \
+nohup bash -c "python3 scripts/study.py run --profile density --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
+               python3 scripts/build_density_notebook.py --full-dir $FULLDIR_ARG --density-dir $OUTABS" \
       >> "$LOG" 2>&1 &
-echo "running in background (pid $!). Progress: ./monitor_study.sh density --log $LOG"
+echo "running in background (pid $!). Progress: scripts/monitor_study.sh density --log $LOG"

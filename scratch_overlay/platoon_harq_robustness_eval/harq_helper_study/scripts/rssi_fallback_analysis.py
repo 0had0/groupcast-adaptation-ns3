@@ -8,7 +8,7 @@ subchannels, split by transmitter, which only the simulator knows). Classes of t
 A UE measures RSSI = helper + others + noise per RB (no identity). Rule tested: fall back only if no SCI was
 decoded AND RSSI < thr. Per threshold: share of B suppressed (gain) and share of C suppressed (lost recoveries).
 
-  python3 rssi_fallback_analysis.py out/rssi_v3 [--remote out/remote_v3/R6]
+  python3 scripts/rssi_fallback_analysis.py out/rssi_v3 [--remote out/remote_v3/R6]
 """
 import glob
 import os

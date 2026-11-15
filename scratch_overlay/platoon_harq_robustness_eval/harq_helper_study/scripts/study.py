@@ -22,7 +22,7 @@ Usage:
 import argparse, csv, gzip, json, os, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 EVAL = os.path.dirname(HERE)                       # scratch_overlay/platoon_harq_robustness_eval
 REPO = os.path.abspath(os.path.join(EVAL, '..', '..'))
 _BDIR = os.path.join(REPO, 'ns-3-dev', 'build', 'scratch', 'platoon_harq_robustness_eval')

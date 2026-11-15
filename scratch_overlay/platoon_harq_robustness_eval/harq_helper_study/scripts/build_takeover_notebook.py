@@ -3,13 +3,14 @@
 recovery vs helper failure probability, and latency, per scenario x traffic, on campaign v3 (out/remote_v3).
 Per-run tables: takeover_data.py (cached in out/cache_takeover_v3).
 
-  python3 build_takeover_notebook.py [--out-dir out/remote_v3] [--output TAKEOVER_RESULTS_v3.ipynb]
-  python3 -m jupyter nbconvert --to notebook --execute --inplace TAKEOVER_RESULTS_v3.ipynb
+  python3 scripts/build_takeover_notebook.py [--out-dir out/remote_v3] [--output TAKEOVER_RESULTS_v3.ipynb]
+  python3 -m jupyter nbconvert --to notebook --execute --inplace notebooks/TAKEOVER_RESULTS_v3.ipynb
 """
 import argparse, os
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 md = nbf.v4.new_markdown_cell
 code = nbf.v4.new_code_cell
 
@@ -43,7 +44,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from IPython.display import display, Markdown
 HERE = os.path.abspath('.')
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'scripts'))
 import takeover_data as TD
 OUT = os.environ.get('STUDY_OUT', {out_dir!r})
 CACHE = os.path.join(HERE, 'out', 'cache_takeover_v3')
@@ -467,7 +468,7 @@ def main():
     nb = nbf.v4.new_notebook()
     nb.cells = cells(os.path.abspath(os.path.join(HERE, a.out_dir)))
     nb.metadata['kernelspec'] = {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}
-    nbf.write(nb, os.path.join(HERE, a.output))
+    nbf.write(nb_layout.add_preamble(nb), nb_layout.notebook_path(a.output))
     print('wrote', a.output, len(nb.cells), 'cells')
 
 

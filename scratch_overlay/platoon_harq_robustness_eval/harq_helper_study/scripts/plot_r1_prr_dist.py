@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 GAP = 35.0        # IVD 30 m + vehicle length 5 m (arc-length gap per member)
 CURVE_TOL = 0.5   # m below the arc gap = link not straight
 EDGES = np.arange(0, 280 + GAP, GAP) + GAP / 2 - GAP  # bins centred on 35, 70, ...

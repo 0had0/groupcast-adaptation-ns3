@@ -14,7 +14,7 @@
 # Restarting is resumable: finished runs whose command is unchanged are skipped; the
 # roundabout runs are re-done (their KPI window is now the curve only, see study.curve_window).
 set -u
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
 JOBS=8; SEEDS=1-5; PULL=""; SETUP=1; SMOKE=1; STOP=0; OUT=out/full; ONLY=""
 while [ $# -gt 0 ]; do
@@ -72,8 +72,8 @@ cd "$HERE" || exit 2
 mkdir -p out
 unset MAGIC_HELPER_ID NUM_MEMBERS
 if [ "$SMOKE" = 1 ]; then
-  python3 study.py run --profile smoke --jobs "$JOBS" > out/smoke_run.log 2>&1 && \
-    python3 study.py check --profile smoke > out/smoke_check.log 2>&1
+  python3 scripts/study.py run --profile smoke --jobs "$JOBS" > out/smoke_run.log 2>&1 && \
+    python3 scripts/study.py check --profile smoke > out/smoke_check.log 2>&1
   if [ $? -ne 0 ]; then
     echo "smoke test FAILED: see $HERE/out/smoke_run.log and out/smoke_check.log"; exit 6
   fi
@@ -83,7 +83,7 @@ mkdir -p "$OUTABS"
 git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
 echo "starting the full profile (seeds $SEEDS, $JOBS jobs) -> $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT"))"
 ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
-nohup bash -c "python3 study.py run --profile full --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
-               python3 build_notebook.py --profile full --out $OUTABS" >> "$LOG" 2>&1 &
-echo "running in background (pid $!). Progress: tail -f $HERE/$LOG  or  ./monitor_study.sh full --log $LOG"
-echo "planned runs: $(python3 study.py list --profile full --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"
+nohup bash -c "python3 scripts/study.py run --profile full --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ && \
+               python3 scripts/build_notebook.py --profile full --out $OUTABS" >> "$LOG" 2>&1 &
+echo "running in background (pid $!). Progress: tail -f $HERE/$LOG  or  scripts/monitor_study.sh full --log $LOG"
+echo "planned runs: $(python3 scripts/study.py list --profile full --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"

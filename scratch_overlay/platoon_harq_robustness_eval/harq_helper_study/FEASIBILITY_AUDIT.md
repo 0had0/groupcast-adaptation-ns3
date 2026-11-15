@@ -14,7 +14,7 @@ data (`out/remote_full_v2`). Its numbers predate v3 and must not be reused.
 - `ST/` = `scratch_overlay/common/stack/`.
 - `AN/` = `~/Documents/coop-harq-analytical/`.
 
-**Arm names.** The paper schemes map to code arms as follows (`PL/harq_helper_study/study.py:37-52`):
+**Arm names.** The paper schemes map to code arms as follows (`PL/harq_helper_study/scripts/study.py:37-52`):
 
 | Paper scheme | Code arm |
 |---|---|
@@ -435,9 +435,9 @@ packet than Option 2. It does not reduce the resources announced to, and avoided
 | Sensing threshold | -128 dBm | `--slThresRsrp` default | stated in old draft only |
 | SPS keep, RRI list | 0.8; 0,10,20,50,100,...,1000 | `PL/run_retx.py:26-37` | not stated |
 | `sl-MaxNumPerReserve` | 3 | `PL/...eval.cc:1431` | not stated |
-| SCI 1-A on every PSSCH | true (v3) | `study.py:145` | not stated |
+| SCI 1-A on every PSSCH | true (v3) | `scripts/study.py:145` | not stated |
 | PSFCH | period 1, gap 3, processing 2 | 1430; `ST/nr_sl_stack.cc:394`; `NR/nr-sl-ue-mac.cc:151` | processing gap missing |
-| HARQ limit | `--maxNumTx=3` (K = 3) everywhere in ns-3 | `study.py:237` | match; K = 2 / 4 only in the model |
+| HARQ limit | `--maxNumTx=3` (K = 3) everywhere in ns-3 | `scripts/study.py:237` | match; K = 2 / 4 only in the model |
 | Platoon | 9 (leader + 8), 30 m gap | `numPlatoon` 1421; traces `*_ivd30_*` | match |
 | Helper rule | Kuo, per TB, CAM 100 ms, maxmean | `--helperSelect=kuo` | match |
 | Leader traffic | periodic1tb: 100 ms, 190/300 B, SPS RRI 100, PDB 100 ms; aperiodic1tb: ≤ 1200 B, dynamic grant, PDB 50 ms | `PL/...eval.cc:1321-1400`; `run.csv` `leader_grant=dynamic` | match |
@@ -446,7 +446,7 @@ packet than Option 2. It does not reduce the resources announced to, and avoided
 | Channel | TR 37.885 V2V highway / urban, geometric NLOSv (vehicle blockers), SUMO buildings 15 m, shadowing on, 3GPP fast fading (update 10 ms), MaxLossDb 150 | `ST/nr_sl_stack.cc:111-120`; `PL/...eval.cc:1860-1940` | match |
 | Error model | NrEesmIrT1 | `ST/nr_sl_stack.cc:192` | match |
 | Duration | highway KPI 3 to 52.7 s (≈ 500 TBs per run); roundabout: curve window | `_run.csv` `kpi_start`, `kpi_end`, `pkts` | not stated |
-| Seeds | 10 (`--seed = --run = 1..10`), same for every arm | `study.py:235-236` | match |
+| Seeds | 10 (`--seed = --run = 1..10`), same for every arm | `scripts/study.py:235-236` | match |
 
 **Mismatches and gaps:**
 - SCI-2A "3 bits / same size" vs. 46 uncounted bytes (sections 1 and 4).
@@ -454,7 +454,7 @@ packet than Option 2. It does not reduce the resources announced to, and avoided
   stated.
 - The untracked file `NR/nr-spectrum-phy.cc.rej` is stale. The patch matches the working tree, so it does not affect
   the build, but it should be deleted.
-- The env hook `MAGIC_HELPER_ID` (`NR/nr-spectrum-phy.cc:2479-2492`, 3139-3151) forces decoding. `launch_v3.sh`
+- The env hook `MAGIC_HELPER_ID` (`NR/nr-spectrum-phy.cc:2479-2492`, 3139-3151) forces decoding. `scripts/launch_v3.sh`
   unsets it, and test A05 guards it.
 
 ---

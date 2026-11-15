@@ -44,20 +44,20 @@ ns-3 mobility model fed by the SUMO trace, at a packet's first attempt; not inde
 ## Files
 | file | role |
 |---|---|
-| `study.py` | planner + parallel resumable runner (`run` / `check` / `list`); profiles `smoke`, `local1`, `full`, `density`, `density_smoke`; `curve_window`, `SCEN`, `DENSITY` |
-| `launch_full.sh` | remote launcher of the full profile: `--pull`, `--no-setup`, `--no-smoke`, `--stop`; generates missing `rbtE` traces |
-| `launch_density.sh` | remote launcher of the density sweep: `--smoke` (end-to-end check, foreground), `--stop`, `--jobs` / `--gen-jobs` (default all cores); generates missing traces with per-trace logs in `out/traces_log/` and a serial retry; checks the background population reached |
-| `monitor_study.sh` | `./monitor_study.sh density [--log FILE] [--watch 60]` (or `full`): progress, failures, ETA, running sims, memory, disk; `--log` for runs launched with another log name (e.g. `out/full_bsc_run.log`) |
-| `combining_evidence.py` | read-only evidence on `out/remote_full` for cross-source combining (R4.2 vs R4.2_noIR, R3 vs R3_noIR control): next-copy success vs SINR, split by first-copy SINR, SCI miss vs corrupt, HARQ-id reuse, PRR decomposition; writes `figures/combining/` (CSV, PNG, `summary.md`) |
-| `build_notebook.py` | `STUDY_RESULTS_<profile>.ipynb`: PRR vs distance, summary, CBR savings, spectrum, latency / PIR, CDFs, AoI, HARQ-IR, takeover; 95 % CI over seeds everywhere (paired for savings / IR gain); one colour per arm, family = line style + marker |
-| `build_requests_notebook.py` | `REQUESTS.ipynb`: the session analyses (distance definition, curve windows + trace renders, R1 hwy vs rbt, R1 vs R4, R1 vs R2 vs R3) with logistic fits `b + (a-b)/(1+exp((d-d50)/w))` |
-| `build_density_notebook.py` | `DENSITY_RESULTS.ipynb`: merges `--full-dir` (0, 60 cars) and `--density-dir` (15 / 30 / 45); PRR, worst member, paired R6 gains, cost, CBR, takeover activity, PRR vs distance per density |
-| `render_rbt_trace.py` | renders a roundabout trace over the SUMO net + buildings (snapshots PNG + GIF, KPI window in red) |
-| `plot_prr_dist_arms.py`, `plot_r1_prr_dist.py`, `plot_spectrum_prr.py` | standalone figure scripts |
+| `scripts/study.py` | planner + parallel resumable runner (`run` / `check` / `list`); profiles `smoke`, `local1`, `full`, `density`, `density_smoke`; `curve_window`, `SCEN`, `DENSITY` |
+| `scripts/launch_full.sh` | remote launcher of the full profile: `--pull`, `--no-setup`, `--no-smoke`, `--stop`; generates missing `rbtE` traces |
+| `scripts/launch_density.sh` | remote launcher of the density sweep: `--smoke` (end-to-end check, foreground), `--stop`, `--jobs` / `--gen-jobs` (default all cores); generates missing traces with per-trace logs in `out/traces_log/` and a serial retry; checks the background population reached |
+| `scripts/monitor_study.sh` | `./monitor_study.sh density [--log FILE] [--watch 60]` (or `full`): progress, failures, ETA, running sims, memory, disk; `--log` for runs launched with another log name (e.g. `out/full_bsc_run.log`) |
+| `scripts/combining_evidence.py` | read-only evidence on `out/remote_full` for cross-source combining (R4.2 vs R4.2_noIR, R3 vs R3_noIR control): next-copy success vs SINR, split by first-copy SINR, SCI miss vs corrupt, HARQ-id reuse, PRR decomposition; writes `figures/combining/` (CSV, PNG, `summary.md`) |
+| `scripts/build_notebook.py` | `STUDY_RESULTS_<profile>.ipynb`: PRR vs distance, summary, CBR savings, spectrum, latency / PIR, CDFs, AoI, HARQ-IR, takeover; 95 % CI over seeds everywhere (paired for savings / IR gain); one colour per arm, family = line style + marker |
+| `scripts/build_requests_notebook.py` | `REQUESTS.ipynb`: the session analyses (distance definition, curve windows + trace renders, R1 hwy vs rbt, R1 vs R4, R1 vs R2 vs R3) with logistic fits `b + (a-b)/(1+exp((d-d50)/w))` |
+| `scripts/build_density_notebook.py` | `DENSITY_RESULTS.ipynb`: merges `--full-dir` (0, 60 cars) and `--density-dir` (15 / 30 / 45); PRR, worst member, paired R6 gains, cost, CBR, takeover activity, PRR vs distance per density |
+| `scripts/render_rbt_trace.py` | renders a roundabout trace over the SUMO net + buildings (snapshots PNG + GIF, KPI window in red) |
+| `scripts/plot_prr_dist_arms.py`, `scripts/plot_r1_prr_dist.py`, `scripts/plot_spectrum_prr.py` | standalone figure scripts |
 | `../gen_mobility.py` | traces; `--rbt-exit {W,S,E}`; roundabout platoon insertion retried when SUMO cannot insert every member (fix for the remote n15 s5 failure; first attempt unchanged, meta `platoon_insert_attempts`) |
 
 Resuming is command-aware: a run is skipped when its `_run.csv` exists and its `.cmd.json` equals the command.
-Pitfalls: (1) `study.py run` **overwrites `<outdir>/manifest.csv`** with the rows of that call only (the remote
+Pitfalls: (1) `scripts/study.py run` **overwrites `<outdir>/manifest.csv`** with the rows of that call only (the remote
 keeps the campaign ones as `manifest.csv`, the add-on runs as `out/full/manifest_bsc.csv`,
 `out/density/manifest_add.csv`); (2) `--out` must be an absolute path (the simulator runs with cwd = the arm
 folder, so a relative `--out` writes the CSVs into a nested folder and `check` reports "no _run.csv").
@@ -73,9 +73,9 @@ folder, so a relative `--out` writes the CSVs into a nested folder and `check` r
 
 Rebuild locally:
 ```
-python3 build_notebook.py --profile remote_full
-python3 build_requests_notebook.py --hwy-profile remote_full --rbt-profile remote_full --arms-hwy-profile remote_full --arms-rbt-profile remote_full
-python3 build_density_notebook.py --full-dir out/remote_full --density-dir out/remote_density
+python3 scripts/build_notebook.py --profile remote_full
+python3 scripts/build_requests_notebook.py --hwy-profile remote_full --rbt-profile remote_full --arms-hwy-profile remote_full --arms-rbt-profile remote_full
+python3 scripts/build_density_notebook.py --full-dir out/remote_full --density-dir out/remote_density
 ```
 Copy from the remote (`~/.ssh/config` does not include `ease-config`, hence `-F`; run it on the laptop, and use
 `"ssh -F $HOME/.ssh/ease-config"`: inside single quotes the `~` is not expanded and ssh fails):
@@ -152,7 +152,7 @@ Cross-source HARQ combining (why `_noIR` changes the helper arms by only +-0.02)
 - Test C06 (controlled, 3 UEs, fixed SINR): the helper copy is combined with the leader copy (buffer length 2,
   no reset in between, SCI-2A carries the leader's HARQ id / source, NDI 0, RV 2): 174/174 decoded with
   combining vs 0/174 without. **Not a bug.**
-- Campaign data (`combining_evidence.py`): IR shifts the helper copy's 50 % SINR by 2.5-4.3 dB on the highway
+- Campaign data (`scripts/combining_evidence.py`): IR shifts the helper copy's 50 % SINR by 2.5-4.3 dB on the highway
   (R3: 2.0-5.0 dB) but 0.1-1.8 dB on the curve. The PRR effect is small because only 10-30 % of member-TBs get
   a helper copy after a corrupt first copy (R3: 12-54 %, every failure gets a retx) and the helper copy usually
   decodes alone: implied dPRR 0.003-0.016 vs observed -0.011..+0.016 (R3: implied 0.007-0.078, observed
@@ -237,21 +237,21 @@ periodic1tb / aperiodic1tb comparisons (F33 concerns exactly the feedback arms):
 - `platoon_harq_robustness_eval.cc` (`--testFixedSinr`, `--writeHarqTrace`); `tests/`: `CMakeLists.txt`,
   `run_tests.sh`, `TEST_PLAN.md` (C06, F35, SYN_COMB), `campaign/runsets.py`, `common/synth_trace.cc`,
   `workflow/C06_cross_source_combining.test.cc` (new).
-- `harq_helper_study/combining_evidence.py` (new), `figures/combining/` (outputs).
+- `harq_helper_study/scripts/combining_evidence.py` (new), `figures/combining/` (outputs).
 - `STUDY_RESULTS_remote_full.ipynb`: DT section (definition + 4 code cells after the AoI table, ids
   `f2f6ffae`, `887048c2`, `0efed7bb`, `914b794f`, `4f637c1d`), added **in the notebook only**: rebuilding it
-  with `build_notebook.py` drops them (port them to the builder first). Tested by a full execution of a copy
+  with `scripts/build_notebook.py` drops them (port them to the builder first). Tested by a full execution of a copy
   (3 min 40 s, no error); the open file holds the cells without outputs.
-- `build_notebook.py`: the user's own uncommitted style rework (STYLE as (colour, linestyle, width), MARK per
+- `scripts/build_notebook.py`: the user's own uncommitted style rework (STYLE as (colour, linestyle, width), MARK per
   arm, bar hatching). Note: the DT cells use the notebook's current 2-tuple STYLE; adapt them when porting.
 
 ## Next steps
 1. DT: agree on and add the outage-rate view (outages > theta per member-minute); port the DT cells to
-   `build_notebook.py`; DT for the density sweep (`_pkt.csv` is there).
-2. Notebooks: add R1_bsc / R4_bsc to `build_notebook.py` and R4 / R4.2 / R1_bsc to `build_density_notebook.py`
+   `scripts/build_notebook.py`; DT for the density sweep (`_pkt.csv` is there).
+2. Notebooks: add R1_bsc / R4_bsc to `scripts/build_notebook.py` and R4 / R4.2 / R1_bsc to `scripts/build_density_notebook.py`
    (crossover R4 - R1 and takeover gain R6 - R4.2 vs CBR).
 3. Density notebook: CBR-axis versions of the R6-gain, takeover-activity and worst-member figures; relabel
-   60 cars "saturated" in `build_notebook.py` / `build_density_notebook.py`.
+   60 cars "saturated" in `scripts/build_notebook.py` / `scripts/build_density_notebook.py`.
 4. Confirm the R4 aperiodic loss is collisions of the helper copies (`lost_collision`, `_coll.csv`).
 5. Archive the remote traces (`traces/*_ivd30_n{15,30,45,60}_*`) next to the results.
 6. Check whether F33 / F34 affect the HARQ / R6 cells (see Validation).

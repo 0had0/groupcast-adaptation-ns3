@@ -7,8 +7,9 @@ usage: build_density_notebook.py [--full-dir out/full] [--density-dir out/densit
 """
 import argparse, os, subprocess
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 ap = argparse.ArgumentParser()
 ap.add_argument('--full-dir', default='out/full')
 ap.add_argument('--density-dir', default='out/density')
@@ -177,8 +178,8 @@ display(T['prr'].unstack('nbg')); display(T['worst'].unstack('nbg')); T['res'].u
 
 nb = nbf.v4.new_notebook(cells=C, metadata={'kernelspec': {'name': 'python3', 'display_name': 'Python 3',
                                                            'language': 'python'}})
-out = os.path.join(HERE, 'DENSITY_RESULTS.ipynb')
-nbf.write(nb, out)
+out = nb_layout.notebook_path('DENSITY_RESULTS.ipynb')
+nbf.write(nb_layout.add_preamble(nb), out)
 print(out)
 if not a.no_exec:
     subprocess.run(['jupyter', 'nbconvert', '--to', 'notebook', '--execute', '--inplace',

@@ -7,10 +7,10 @@ paths and build), plus three attributes:
                                            (source takeover / fallback / withholding a copy, helper relay gating)
   --ns3::NrSlUeMac::MinTimeGapProcessing   processing gap of the selection (slots; v3: 2, i.e. 5-slot spacing)
 
-  python3 timing_sweep.py list  [--stage A|B]
-  python3 timing_sweep.py run   [--stage A|B] [--jobs N]      # resumable: skips runs with a _run.csv
-  python3 timing_sweep.py collect                             # -> out/timing/summary.csv
-  python3 timing_sweep.py check [--jobs N]   # new build, no timing flags: must reproduce campaign v3 exactly
+  python3 scripts/timing_sweep.py list  [--stage A|B]
+  python3 scripts/timing_sweep.py run   [--stage A|B] [--jobs N]      # resumable: skips runs with a _run.csv
+  python3 scripts/timing_sweep.py collect                             # -> out/timing/summary.csv
+  python3 scripts/timing_sweep.py check [--jobs N]   # new build, no timing flags: must reproduce campaign v3 exactly
 
 Stage A: 0 background vehicles, 3 routes x 2 traffic types, seeds 1-10 (as v3).
 Stage B: 60 background vehicles, 3 routes, aperiodic traffic, seeds 1-3.
@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 REMOTE_REPO = '/home/ease/Documents/groupcast-adaptation-ns3'
 OUT = os.path.join(HERE, 'out', 'timing')

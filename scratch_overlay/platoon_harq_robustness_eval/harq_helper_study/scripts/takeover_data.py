@@ -27,7 +27,7 @@ Windows: WIN_S seconds from the KPI-window start, by packet generation time (tra
 import glob, os, sys
 import numpy as np, pandas as pd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 sys.path.insert(0, os.path.join(HERE, 'paper_v2', 'analysis'))
 from paper_data import rd, _reserved_subch_slots, NBG  # noqa: E402
 

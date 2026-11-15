@@ -5,8 +5,9 @@ usage: build_requests_notebook.py [--hwy-profile local1] [--rbt-profile full] [-
 """
 import argparse, os, subprocess
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 ap = argparse.ArgumentParser()
 ap.add_argument('--hwy-profile', default='local1')
 ap.add_argument('--rbt-profile', default='full')
@@ -36,7 +37,7 @@ $$\\mathrm{PRR}(d) = b + \\frac{a - b}{1 + e^{(d - d_{50})/w}}$$
 
 $a$ = plateau PRR at short range, $b$ = floor at long range, $d_{50}$ = distance of the mid-point between $a$ and
 $b$, $w$ = width of the drop (m).
-Re-run `python3 build_requests_notebook.py --hwy-profile full --rbt-profile full` when the full results are in."""))
+Re-run `python3 scripts/build_requests_notebook.py --hwy-profile full --rbt-profile full` when the full results are in."""))
 
 C.append(code(f"""import glob, gzip, os, sys, subprocess
 import numpy as np, pandas as pd
@@ -44,7 +45,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from IPython.display import Image, display
 HERE = {HERE!r}
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'scripts'))
 import study
 HWY_PROF, RBT_PROF = {a.hwy_profile!r}, {a.rbt_profile!r}
 ARMS_PROF = {{'hwy': {a.arms_hwy_profile!r}, 'rbt': {a.arms_rbt_profile!r}, 'rbtE': {a.arms_rbt_profile!r}}}
@@ -157,7 +158,7 @@ C.append(md("Renders of the trace over the SUMO net + buildings (red = inside th
 C.append(code("""for name in ('rbt_ivd30_n60_s1', 'rbt_ivd30_n60_s5', 'rbtE_ivd30_n60_s1'):
     png = f'{HERE}/figures/trace_{name}_snapshots.png'
     if not os.path.exists(png):
-        subprocess.run([sys.executable, f'{HERE}/render_rbt_trace.py', name], check=True)
+        subprocess.run([sys.executable, f'{HERE}/scripts/render_rbt_trace.py', name], check=True)
     print(name); display(Image(png))"""))
 C.append(code("""# animations (W exit, E exit)
 for name in ('rbt_ivd30_n60_s1', 'rbtE_ivd30_n60_s1'):
@@ -256,21 +257,21 @@ C.append(md("""## 6. Commands
 Remote (from `harq_helper_study/`), stop the running study, then pull + restart (resumable: highway runs are
 skipped, roundabout runs re-done with the curve window, `rbtE` traces generated if missing, needs SUMO):
 ```bash
-./launch_full.sh --stop
-./launch_full.sh --pull coop-arms --no-smoke --seeds 1-5 --jobs 8
+scripts/launch_full.sh --stop
+scripts/launch_full.sh --pull coop-arms --no-smoke --seeds 1-5 --jobs 8
 grep -L kpiStart out/full/*/rbt*.cmd.json      # empty = every roundabout run has the curve window
 ```
 Local seed 1, moderate background, main arms (36 runs, ~9 h at 2 jobs):
 ```bash
-nohup python3 study.py run --profile full --seeds 1 --jobs 2 --only '^R[1-6]/.*_moderate_s1$' > out/full_s1_run.log 2>&1 &
-python3 build_requests_notebook.py --hwy-profile full --rbt-profile full
+nohup python3 scripts/study.py run --profile full --seeds 1 --jobs 2 --only '^R[1-6]/.*_moderate_s1$' > out/full_s1_run.log 2>&1 &
+python3 scripts/build_requests_notebook.py --hwy-profile full --rbt-profile full
 ```
-Trace validation: `python3 render_rbt_trace.py rbtE_ivd30_n60_s1`."""))
+Trace validation: `python3 scripts/render_rbt_trace.py rbtE_ivd30_n60_s1`."""))
 
 nb = nbf.v4.new_notebook(cells=C, metadata={'kernelspec': {'name': 'python3', 'display_name': 'Python 3',
                                                            'language': 'python'}})
-out = os.path.join(HERE, 'REQUESTS.ipynb')
-nbf.write(nb, out)
+out = nb_layout.notebook_path('REQUESTS.ipynb')
+nbf.write(nb_layout.add_preamble(nb), out)
 print(out)
 if not a.no_exec:
     subprocess.run(['jupyter', 'nbconvert', '--to', 'notebook', '--execute', '--inplace',

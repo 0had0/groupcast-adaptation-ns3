@@ -7,8 +7,8 @@ Uses the same loading / accounting code as the study notebook (build_notebook.py
 """
 import argparse, os, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
+sys.path.insert(0, os.path.join(HERE, 'scripts'))
 import build_notebook as bn  # noqa: E402
 
 

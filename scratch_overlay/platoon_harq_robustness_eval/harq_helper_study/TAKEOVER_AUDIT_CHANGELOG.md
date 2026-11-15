@@ -1,10 +1,10 @@
-# Audit of TAKEOVER_RESULTS_v3.ipynb (2026-11-12)
+# Audit of notebooks/TAKEOVER_RESULTS_v3.ipynb (2026-11-12)
 
-- Original: `TAKEOVER_RESULTS_v3.ipynb` and `figures/takeover_v3/`. Not modified.
-- Corrected copy: `TAKEOVER_RESULTS_v3_audited.ipynb`, built by `build_takeover_audit_notebook.py`, with all outputs
+- Original: `notebooks/TAKEOVER_RESULTS_v3.ipynb` and `figures/takeover_v3/`. Not modified.
+- Corrected copy: `notebooks/TAKEOVER_RESULTS_v3_audited.ipynb`, built by `scripts/build_takeover_audit_notebook.py`, with all outputs
   regenerated. Its figures and tables are in `figures/takeover_v3_audit/`.
-- Analysis code: `takeover_audit.py`. It reads only `out/cache_takeover_v3/<arm>_{win,sinr,lat}.csv` (written by
-  `takeover_data.py` from `out/remote_v3`). It imports no project module, and none of the original notebook's cells
+- Analysis code: `scripts/takeover_audit.py`. It reads only `out/cache_takeover_v3/<arm>_{win,sinr,lat}.csv` (written by
+  `scripts/takeover_data.py` from `out/remote_v3`). It imports no project module, and none of the original notebook's cells
   were executed.
 - Scope: 8 arms (R1, R2, R3, R4, R4.1, R4.2, R5, R6), i.e. 2400 runs. The `_bsc` arms are not used.
 
@@ -66,7 +66,7 @@ corrected copy.
 
 Cell numbers in this section refer to the current notebook (36 cells). Inserting the high-SINR check (new cell 6)
 shifts every later cell by one compared with the round-1 table above; for example round-1 cells 11–12 are now 12–13.
-Corrections 1–5 and the attempt rule were written into `takeover_audit.py` and `build_takeover_audit_notebook.py` by
+Corrections 1–5 and the attempt rule were written into `scripts/takeover_audit.py` and `scripts/build_takeover_audit_notebook.py` by
 the reviewing session, without executing the notebook. This session verified each against the data, added the
 all-seed high-SINR check, rebuilt the notebook, executed it with every output regenerated (0 errors; pandas
 FutureWarnings only), and inspected the figures.
@@ -79,7 +79,7 @@ FutureWarnings only), and inspected the figures.
 | 4 | Fig. 2c read as an effect at a given helper failure (cells 14–16) | **verified** | retitled as a paired, descriptive contrast within outcome-defined strata, explicitly not the effect at a controlled failure probability; Fig. 2 stays the primary result | text |
 | 5 | coverage check matched observed keys only (cell 4) | **verified gap** (no current omission) | `assert_complete`: every arm has exactly the 300 expected runs (3 × 2 × 5 × 10); duplicate (arm, run, window) rows rejected; `coverage_check` adds `validate='one_to_one'` and per-window pair equality | 2400 = 300 × 8; a run deleted from both arms of a pair is now caught (checked) |
 | 6 | fallback interval from 8 attempts (cell 30) | **verified** | table cells need ≥ 30 attempts from ≥ 5 seeds that have an attempt; otherwise `supported = False` and no interval | R5, roundabout W periodic, 0 cars, fallback: 8 attempts in 4 seeds → flagged. 12 load cells are below 30 attempts, all for the fallback trigger. |
-| 7 | high-SINR explanation rested on 4 seeds of one cell (cells 5–6) | **verified; the claim was wrong in magnitude** | `high_sinr_check.py` (raw `_att.csv`, all 1800 runs of R1, R3, R4, R4.2, R5, R6) → `check_high_sinr.csv`; new cell 6 shows it and asserts 1800 runs | first copies above 25 dB fail in 0.69–0.87 % of pairs in every arm, not ~3 %. Of those, R4 / R4.2 never deliver 79.5 % / 77.8 %; R1 5.7 %, R3 1.8 %, R5 7.9 %, R6 5.4 %. The cause (SCI-2A vs partial-band interference) is still not separated. |
+| 7 | high-SINR explanation rested on 4 seeds of one cell (cells 5–6) | **verified; the claim was wrong in magnitude** | `scripts/high_sinr_check.py` (raw `_att.csv`, all 1800 runs of R1, R3, R4, R4.2, R5, R6) → `check_high_sinr.csv`; new cell 6 shows it and asserts 1800 runs | first copies above 25 dB fail in 0.69–0.87 % of pairs in every arm, not ~3 %. Of those, R4 / R4.2 never deliver 79.5 % / 77.8 %; R1 5.7 %, R3 1.8 %, R5 7.9 %, R6 5.4 %. The cause (SCI-2A vs partial-band interference) is still not separated. |
 
 Latent issue, not fixed: `binned_points` counts every seed with a window in a bin, including seeds with a zero
 denominator. It changes no plotted point now (checked for Fig. 2b, 3w and 4: 0 points pass the rule only because of

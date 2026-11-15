@@ -4,7 +4,7 @@
 #   reads out/<profile>_run.log (density) or out/full_run.log (full), or FILE (relative to this folder);
 #   the running simulations are those writing to out/<name>/ for a log out/<name>_run.log
 #   (e.g. --log out/full_v2_run.log -> out/full_v2/)
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 PROFILE="${1:-density}"; [ $# -gt 0 ] && shift
 WATCH=0; EVERY=60; LOGARG=""
 while [ $# -gt 0 ]; do

@@ -3,14 +3,15 @@
 process, and what does a missed deadline cost? Data: out/timing/summary.csv (timing_sweep.py, ease-rtx, commit
 d7c8646 build) and the campaign-v3 baseline out/remote_v3. Figures: figures/timing/.
 
-  python3 build_timing_notebook.py
-  python3 -m jupyter nbconvert --to notebook --execute --inplace TIMING_SWEEP.ipynb
+  python3 scripts/build_timing_notebook.py
+  python3 -m jupyter nbconvert --to notebook --execute --inplace notebooks/TIMING_SWEEP.ipynb
 """
 import os
 
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 md = nbf.v4.new_markdown_cell
 code = nbf.v4.new_code_cell
 
@@ -187,7 +188,7 @@ def main():
     nb = nbf.v4.new_notebook()
     nb['cells'] = cells()
     nb['metadata']['kernelspec'] = {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}
-    nbf.write(nb, os.path.join(HERE, 'TIMING_SWEEP.ipynb'))
+    nbf.write(nb_layout.add_preamble(nb), nb_layout.notebook_path('TIMING_SWEEP.ipynb'))
     print('wrote TIMING_SWEEP.ipynb')
 
 

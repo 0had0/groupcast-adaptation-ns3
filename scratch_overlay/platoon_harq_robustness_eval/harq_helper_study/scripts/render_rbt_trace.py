@@ -14,7 +14,7 @@ from matplotlib.patches import Polygon
 
 import study
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 NET = f'{study.EVAL}/sumo/roundabout/roundabout.net.xml'
 BLD = f'{study.EVAL}/sumo/roundabout/buildings.csv'
 P = 9  # platoon nodes 0..8

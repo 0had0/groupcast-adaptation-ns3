@@ -605,7 +605,7 @@ Question: does a member soft-combine the helper's relayed copy with the leader's
   (≤ 1 %; weak: the 10 dB copy decodes alone ≥ 99 %); reuse: no copy of TB k reaches J after the leader's NDI = 1 of a newer
   TB on the same HARQ id (0).
 * Artefact `results/C06_copies.csv` (per case: SINRs, TBLER ranges, buffer lengths, outcomes, PRR of J).
-* Campaign evidence (read-only, `harq_helper_study/combining_evidence.py` on `out/remote_full`): next-copy success vs SINR after a
+* Campaign evidence (read-only, `harq_helper_study/scripts/combining_evidence.py` on `out/remote_full`): next-copy success vs SINR after a
   corrupt first copy (R3 vs R3_noIR, R4.2 vs R4.2_noIR), split by the first copy's SINR; SCI miss vs corrupt among failed first
   attempts; HARQ-id reuse before a helper copy.
 

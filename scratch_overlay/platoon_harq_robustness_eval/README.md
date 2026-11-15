@@ -1348,7 +1348,7 @@ What changes with the period in 5G-LENA:
 - feedback waits for the next PSFCH occasion at least `MinTimeGapPsfch` = 3 slots after the PSSCH, so the
   HARQ round trip grows by up to period - 1 slots and fewer retransmissions fit before the deadline.
 
-Launch: `launch_v3.sh --psfch [--jobs N]` (smoke `psfch_smoke`, 54 runs at 15 cars; output `out/psfch`).
+Launch: `harq_helper_study/scripts/launch_v3.sh --psfch [--jobs N]` (smoke `psfch_smoke`, 54 runs at 15 cars; output `out/psfch`).
 Run it after v3 or split the cores, both campaigns use the same CPUs. Local smoke (debug build, highway,
 aperiodic, 15 cars, seed 1, all nine arms): 0 check failures, `psfch_period` 0 / 2 / 4 in every run CSV.
 

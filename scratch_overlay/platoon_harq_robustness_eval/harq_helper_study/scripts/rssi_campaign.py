@@ -3,8 +3,8 @@ seeds 1-10 (60 runs). Each run is the campaign-v3 command unchanged; the build s
 <out>_fbchk.csv log (no random draw: the outputs are otherwise those of v3). Analysis: rssi_threshold.py /
 RSSI_FALLBACK.ipynb on the copied folder.
 
-  python3 rssi_campaign.py list
-  python3 rssi_campaign.py run [--jobs N]        # resumable: skips runs with a _run.csv
+  python3 scripts/rssi_campaign.py list
+  python3 scripts/rssi_campaign.py run [--jobs N]        # resumable: skips runs with a _run.csv
 """
 import argparse
 import os

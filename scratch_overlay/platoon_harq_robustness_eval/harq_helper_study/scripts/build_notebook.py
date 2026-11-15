@@ -5,8 +5,9 @@ Usage: build_notebook.py [--profile local1|full|smoke] [--out DIR] [--no-exec]
 """
 import argparse, os, subprocess, sys
 import nbformat as nbf
+import nb_layout
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 
 LOAD = r'''
 import csv, glob, gzip, json, os
@@ -607,7 +608,7 @@ def build(out, path, profile='local1'):
                                   "'Feedback (PSFCH) use per packet, in subchannel-slots: zoom', 'subchannel-slots per packet', scale=SUBCH_SLOT)"))
     c.append(nbf.v4.new_markdown_cell("### Spectrum and PRR together (script `plot_spectrum_prr.py`)\n"
         "Rendered by the standalone script, which also saves `figures/spectrum_prr_{prb,subch}_<profile>.png`."))
-    c.append(nbf.v4.new_code_cell(f"%run plot_spectrum_prr.py --profile {profile} --out {{OUT}} --show"))
+    c.append(nbf.v4.new_code_cell(f"%run scripts/plot_spectrum_prr.py --profile {profile} --out {{OUT}} --show"))
     c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet (bars, left) and PRR (lines, right)', "
                                   "'PRB x symbols per packet', prr=True)"))
     c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet in subchannel-slots (bars, left) and PRR (lines, right)', "
@@ -646,7 +647,7 @@ def build(out, path, profile='local1'):
     c.append(nbf.v4.new_code_cell(IR))
     c.append(nbf.v4.new_markdown_cell(MD['take']))
     c.append(nbf.v4.new_code_cell(TAKE))
-    nbf.write(nb, path)
+    nbf.write(nb_layout.add_preamble(nb), path)
 
 
 def main():
@@ -656,7 +657,7 @@ def main():
     ap.add_argument('--no-exec', action='store_true')
     a = ap.parse_args()
     out = a.out or os.path.join(HERE, 'out', a.profile)
-    path = os.path.join(HERE, f'STUDY_RESULTS_{a.profile}.ipynb')
+    path = nb_layout.notebook_path(f'STUDY_RESULTS_{a.profile}.ipynb')
     build(out, path, a.profile)
     if not a.no_exec:
         subprocess.check_call([sys.executable, '-m', 'jupyter', 'nbconvert', '--to', 'notebook', '--execute',

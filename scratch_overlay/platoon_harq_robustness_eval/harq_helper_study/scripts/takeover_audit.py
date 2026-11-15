@@ -30,7 +30,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 CACHE = os.path.join(HERE, 'out', 'cache_takeover_v3')
 NMEM = 8
 PDB_MS = {'periodic1tb': 100.0, 'aperiodic1tb': 50.0}

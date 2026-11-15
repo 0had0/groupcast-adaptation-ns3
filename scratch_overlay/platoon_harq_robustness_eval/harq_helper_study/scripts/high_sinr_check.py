@@ -6,13 +6,13 @@ leader first copy (side 0, tx_in_tb 1) had SINR > THR dB inside the KPI window, 
 failed (status 2), and how many of the pairs were never decoded by any copy. Writes
 figures/takeover_v3_audit/check_high_sinr.csv (one row per run).
 
-  python3 high_sinr_check.py [--thr 25] [--jobs 6]
+  python3 scripts/high_sinr_check.py [--thr 25] [--jobs 6]
 """
 import argparse, glob, os
 from concurrent.futures import ProcessPoolExecutor
 import pandas as pd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 ARMS = ['R1', 'R3', 'R4', 'R4.2', 'R5', 'R6']
 NBG = {'none': 0, 'n15': 15, 'n30': 30, 'n45': 45, 'moderate': 60}
 
