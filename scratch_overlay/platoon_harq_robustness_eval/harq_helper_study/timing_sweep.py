@@ -106,6 +106,8 @@ def collect():
     rows = []
     for f in sorted(glob.glob(os.path.join(OUT, '*', '*_run.csv'))):
         key = os.path.basename(os.path.dirname(f))
+        if key.startswith('check_'):
+            continue
         arm, d, g = key.split('_')
         r = pd.read_csv(f).iloc[0].to_dict()
         rows.append(dict(arm=arm, delay_us=int(d[1:]), gap=int(g[1:]),

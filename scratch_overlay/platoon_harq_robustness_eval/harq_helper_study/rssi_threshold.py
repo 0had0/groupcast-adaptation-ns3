@@ -86,7 +86,7 @@ def load(folder: str) -> pd.DataFrame:
         d = load_run(pre)
         cell = os.path.basename(pre)
         sc, _, tr, bg, s = cell.split('_')
-        out.append(d.assign(cell=cell, route={'hwy': 'Highway', 'rbt': 'Roundabout W', 'rbtE': 'Roundabout E'}[sc],
+        out.append(d.assign(cell=cell, ctx=f'{sc}_{tr}', route={'hwy': 'Highway', 'rbt': 'Roundabout W', 'rbtE': 'Roundabout E'}[sc],
                             traffic=tr.replace('1tb', ''), seed=int(s[1:])))
     return pd.concat(out, ignore_index=True)
 
@@ -119,14 +119,14 @@ def evaluate(d: pd.DataFrame, suppress: pd.Series, r_alone: dict) -> dict:
     """Effect of withholding the fallback where `suppress` is True (B and C checks only).
     B with a double (s3 = LH): the helper's copy goes alone; its recoveries are estimated with r_alone[cell], the
     recovery rate of a helper copy sent alone at s3 after a decoded helper SCI (class A, s3 = H), per member in
-    need. B with the leader alone at s3 (the helper had stopped): the slot goes silent, those recoveries are lost.
+    need, for the same context (route x traffic, pooled over seeds). B with the leader alone at s3 (the helper had stopped): the slot goes silent, those recoveries are lost.
     C: the slot goes silent, the fallback's recoveries are lost."""
     acted = d[d.cls.isin(['B', 'C'])]
     s = suppress.loc[acted.index]
     b, c = acted[acted.cls == 'B'], acted[acted.cls == 'C']
     sb, sc = s.loc[b.index], s.loc[c.index]
     bd, bl = b[b.s3_who == 'LH'], b[b.s3_who != 'LH']
-    gain = sum(row.n_need * r_alone.get(row.cell, np.nan) - row.n_rec3 for row in bd[sb.loc[bd.index]].itertuples())
+    gain = sum(row.n_need * r_alone.get(row.ctx, np.nan) - row.n_rec3 for row in bd[sb.loc[bd.index]].itertuples())
     lost = bl[sb.loc[bl.index]].n_rec3.sum() + c[sc].n_rec3.sum()
     tbs = d.drop_duplicates('cell').tbs.sum()
     return dict(doubles_avoided=int(sb.loc[bd.index].sum()), doubles=len(bd),
@@ -136,17 +136,17 @@ def evaluate(d: pd.DataFrame, suppress: pd.Series, r_alone: dict) -> dict:
                 tx_saved=int(s.sum()))
 
 
-def r_alone_by_cell(d: pd.DataFrame) -> dict:
+def r_alone_by_ctx(d: pd.DataFrame) -> dict:
     a = d[(d.cls == 'A') & (d.s3_who == 'H') & (d.n_need > 0)]
-    g = a.groupby('cell')[['n_rec3', 'n_need']].sum()
+    g = a.groupby('ctx')[['n_rec3', 'n_need']].sum()
     return (g.n_rec3 / g.n_need).to_dict()
 
 
 if __name__ == '__main__':
     import sys
-    d = load(sys.argv[1] if len(sys.argv) > 1 else 'out/rssi_v3')
+    d = load(sys.argv[1] if len(sys.argv) > 1 else 'out/rssi10')
     print(d.groupby(['cls', 's3_who']).agg(n=('t', 'size'), need=('n_need', 'sum'), rec=('n_rec3', 'sum')))
-    ra = r_alone_by_cell(d)
-    print({k[:24]: round(v, 3) for k, v in ra.items()})
+    ra = r_alone_by_ctx(d)
+    print({k: round(v, 3) for k, v in ra.items()})
     for x in (-105, -100, -95, -90, -85, -80):
         print(x, evaluate(d, rule_suppress(d, 'fixed', x), ra))

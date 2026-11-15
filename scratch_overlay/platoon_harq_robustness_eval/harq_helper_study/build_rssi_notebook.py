@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build RSSI_FALLBACK.ipynb: should the leader's fallback be gated by an SL-RSSI threshold, fixed or dynamic?
-Analysis code: rssi_threshold.py. Data: out/rssi_v3 (R6, 60 background vehicles, seed 1, six cells, laptop,
-commit 40a5601 logging). Figures: figures/rssi_fallback/.
+Analysis code: rssi_threshold.py. Data: out/rssi10 (R6, 60 background vehicles, seeds 1-10, six cells, ease-rtx,
+commit 1ab508d; rssi_campaign.py). The first, one-seed version used out/rssi_v3. Figures: figures/rssi_fallback/.
 
   python3 build_rssi_notebook.py
   python3 -m jupyter nbconvert --to notebook --execute --inplace RSSI_FALLBACK.ipynb
@@ -32,8 +32,9 @@ vehicles happen to transmit on the handed subchannels. So we need the value of e
 - what a double transmission costs the members, compared with the helper's copy sent alone;
 - what a true fallback recovers.
 
-**Data.** `out/rssi_v3`: R6, 60 background vehicles, seed 1, three routes x two traffic types (laptop,
-logging-only build `40a5601`; the protocol is unchanged). One row per fallback check
+**Data.** `out/rssi10`: R6, 60 background vehicles, seeds 1-10, three routes x two traffic types, 60 runs
+(ease-rtx, `rssi_campaign.py`, build `1ab508d`: the campaign-v3 commands with the logging added; the protocol is
+unchanged). Rates that are pooled "per context" are pooled over the ten seeds of a route and traffic type. One row per fallback check
 (`<cell>_fbchk.csv`), joined with the per-transmission logs (`_ltx`, `_htx`) and the per-member reception log
 (`_att`). The split of the received power by transmitter is simulation ground truth. A UE measures only the total.
 
@@ -49,21 +50,23 @@ logging-only build `40a5601`; the protocol is unchanged). One row per fallback c
 | RSSI | per RB on the handed subchannels: helper + others + noise (noise -113.4 dBm per RB) |"""))
     C.append(code(r"""import numpy as np, pandas as pd, matplotlib.pyplot as plt, os
 import rssi_threshold as R
+DATA = 'out/rssi10'
 FIG = 'figures/rssi_fallback'; os.makedirs(FIG, exist_ok=True)
 plt.rcParams.update({'figure.dpi': 110, 'font.size': 9, 'axes.grid': True, 'grid.alpha': 0.3})
 COL = {'A': '#4C78A8', 'B': '#E45756', 'C': '#54A24B'}
 LBL = {'A': 'A: helper sent, SCI decoded', 'B': 'B: helper sent, SCI missed', 'C': 'C: helper silent'}
-d = R.load('out/rssi_v3')
+d = R.load(DATA)
 d['helper_ref'] = R.helper_reference(d)
-ra = R.r_alone_by_cell(d)
-print(len(d), 'checks;', d.drop_duplicates('cell').tbs.sum(), 'TBs in the KPI windows')
+ra = R.r_alone_by_ctx(d)
+print(len(d), 'checks in', d.cell.nunique(), 'runs;', d.drop_duplicates('cell').tbs.sum(), 'TBs in the KPI windows')
 d.pivot_table(index=['route', 'traffic'], columns='cls', values='t', aggfunc='size', fill_value=0)"""))
     C.append(md(r"""## 1. What the leader measures
 
-The B checks are the problem, and they almost all come from aperiodic traffic. In every B check the helper's PSCCH
-reached the leader and failed under interference. The RSSI is high because the helper's own power is in it. The C
-checks are often not quiet: another vehicle transmits on the handed subchannels in about three quarters of them, so
-their RSSI has a long upper tail that overlaps B."""))
+The B checks are the problem: 22 % of the fallbacks, at about the same rate for both traffic types (aperiodic
+traffic has more fallbacks, so 83 % of the B checks). In every B check the helper's PSCCH reached the leader and
+failed under interference. The RSSI is high because the helper's own power is in it. The C checks are often not
+quiet: another vehicle transmits on the handed subchannels in about three quarters of them, so their RSSI has a long
+upper tail that overlaps B."""))
     C.append(code(r"""fig, ax = plt.subplots(1, 2, figsize=(10, 3.4))
 for k in 'ABC':
     x = np.sort(d[d.cls == k].rssi.values)
@@ -93,13 +96,12 @@ The two copies of a double carry the same TB on the same subchannels. Each is in
 member can still decode either one, and both enter the same HARQ buffer. A double therefore costs much less than a
 plain collision. A suppressed true fallback, by contrast, leaves the last slot empty."""))
     C.append(code(r"""def rate(sel):
-    g = sel.groupby('cell')[['n_rec3', 'n_need']].sum()
+    g = sel.groupby('ctx')[['n_rec3', 'n_need']].sum()
     return g.n_rec3 / g.n_need, g.n_need
 dbl, nb = rate(d[(d.cls == 'B') & (d.s3_who == 'LH')])
 fb, nc = rate(d[(d.cls == 'C') & (d.s3_who == 'L')])
 t = pd.DataFrame({'double (B, LH)': dbl, 'members in need (B)': nb, 'helper alone (A, H)': pd.Series(ra),
                   'fallback alone (C, L)': fb, 'members in need (C)': nc})
-t.index = [i.replace('_ivd30', '').replace('_moderate_s1', '') for i in t.index]
 tot = lambda m: (lambda g: g.n_rec3.sum() / g.n_need.sum())(d[m])
 print(f"pooled: double {tot((d.cls=='B')&(d.s3_who=='LH')):.3f}, helper alone "
       f"{tot((d.cls=='A')&(d.s3_who=='H')&(d.n_need>0)):.3f}, fallback alone {tot((d.cls=='C')&(d.s3_who=='L')):.3f}")
@@ -112,7 +114,7 @@ For a threshold x, the rule withholds the fallback when RSSI ≥ x. The effect i
   rate of the same cell, minus what the double delivered.
 - **lost:** in a suppressed true fallback, or a B check where the helper had already stopped, the slot stays empty and
   its recoveries are lost.
-- **net** in percentage points of group PRR: (gained − lost) / (TBs × 8 members), over the six runs.
+- **net** in percentage points of group PRR: (gained − lost) / (TBs × 8 members), over all runs.
 - **saved:** fallback transmissions withheld, which also means less interference for other vehicles.
 
 The helper-alone counterfactual comes from A checks, which saw less interference than B checks. If anything it
@@ -127,14 +129,19 @@ ax[0].set_xlabel('true fallbacks suppressed (share of C)'); ax[0].set_ylabel('do
 ax[1].plot(F.x, F.pairs_gained, color=COL['B'], label='pairs gained (doubles avoided)')
 ax[1].plot(F.x, -F.pairs_lost, color=COL['C'], label='pairs lost (fallbacks suppressed)')
 ax[1].plot(F.x, F.net_pairs, color='k', lw=1.6, label='net'); ax[1].axhline(0, color='grey', lw=0.8)
-ax[1].set_xlabel('threshold (dBm per RB)'); ax[1].set_ylabel('(TB, member) pairs, 6 runs'); ax[1].legend(fontsize=7); ax[1].set_title('Delivered pairs')
+ax[1].set_xlabel('threshold (dBm per RB)'); ax[1].set_ylabel(f'(TB, member) pairs, {d.cell.nunique()} runs'); ax[1].legend(fontsize=7); ax[1].set_title('Delivered pairs')
 ax[2].plot(F.tx_saved, F.net_pp, '-o', ms=2, color='k')
 for x in (-105, -95, -85, -75):
     r = F[F.x == x].iloc[0]; ax[2].annotate(f'{x:.0f}', (r.tx_saved, r.net_pp), fontsize=7, xytext=(4, 2), textcoords='offset points')
-ax[2].set_xlabel('fallback transmissions withheld (6 runs)'); ax[2].set_ylabel('group PRR change (pp)'); ax[2].set_title('Resources vs reliability')
+ax[2].set_xlabel(f'fallback transmissions withheld ({d.cell.nunique()} runs)'); ax[2].set_ylabel('group PRR change (pp)'); ax[2].set_title('Resources vs reliability')
 fig.tight_layout(); fig.savefig(f'{FIG}/fixed_threshold.pdf'); plt.show()
 F[F.x.isin([-110, -105, -100, -95, -90, -85, -80, -75, -70])].set_index('x')[
     ['doubles_avoided', 'doubles', 'true_fb_lost', 'true_fb', 'pairs_gained', 'pairs_lost', 'net_pp', 'tx_saved']].round(3)"""))
+    C.append(md(r"""**Seed to seed.** The same evaluation per seed (six cells each), to see whether any seed favours a gate."""))
+    C.append(code(r"""S = pd.DataFrame([{'seed': s, 'x': x, 'net_pp': R.evaluate(g, R.rule_suppress(g, 'fixed', x), ra)['net_pp']}
+                  for s, g in d.groupby('seed') for x in (-105, -95, -85, -80, -75, -70)])
+S = S.pivot(index='seed', columns='x', values='net_pp')
+pd.concat([S, S.agg(['mean', 'std', 'min', 'max'])]).round(3)"""))
     C.append(md(r"""## 4. Dynamic thresholds
 
 Two ways to adapt the threshold, both causal (they use only what the leader knew before the check):
@@ -162,8 +169,8 @@ x = d[d.cls.isin(['B', 'C'])]
 print('RSSI - helper reference (dB), by class:'); print((x.rssi - x.helper_ref).groupby(x.cls).describe().round(1))"""))
     C.append(code(r"""# per-context oracle: the best threshold per route and traffic, "none" = no gate
 rows = []
-for cell, g in d.groupby('cell'):
-    rag = {cell: ra.get(cell, np.nan)}
+for ctx, g in d.groupby('ctx'):
+    rag = {ctx: ra.get(ctx, np.nan)}
     best = max([(np.inf, R.evaluate(g, pd.Series(False, index=g.index), rag))] +
                [(x, R.evaluate(g, R.rule_suppress(g, 'fixed', x), rag)) for x in grid], key=lambda p: p[1]['net_pairs'])
     e95 = R.evaluate(g, R.rule_suppress(g, 'fixed', -95), rag)
@@ -173,34 +180,38 @@ for cell, g in d.groupby('cell'):
 pd.DataFrame(rows).round(3)"""))
     C.append(md(r"""## 5. Decision
 
-**No RSSI gate for reliability, fixed or dynamic.** On these runs every threshold lowers the group PRR:
-- **Fixed:** −0.21 pp at −80 dBm per RB, −0.74 pp at −95 dBm.
-- **Dynamic:** the helper-relative rule traces about the same trade-off curve as a fixed threshold, so adapting the
-  threshold to the helper's RSRP does not help. The per-context oracle picks no gate in 5 of 6 cells; in the
-  sixth (Roundabout E, aperiodic) its best threshold, −61 dBm, gains 0.006 pp.
+**No RSSI gate for reliability, fixed or dynamic.** Over 60 runs (10 seeds), every threshold lowers the group PRR:
+- **Fixed:** −0.24 pp at −80 dBm per RB, −0.69 pp at −95 dBm. The sign holds on every seed: at −95 dBm the
+  per-seed change ranges from −1.18 to −0.41 pp, at −80 dBm from −0.45 to −0.13 pp. The loss only shrinks towards
+  zero as the threshold rises and the gate stops acting.
+- **Dynamic:** the helper-relative rule traces about the same trade-off curve as a fixed threshold (no better than
+  −0.24 pp), so adapting the threshold to the helper's RSRP does not help. The per-context oracle picks no gate in
+  4 of 6 contexts. In the other two (Roundabout W and E, periodic) its best threshold gains under 0.01 pp.
 - **Why:** each avoided double gains little. The two copies share the TB, and members recover the TB about as often
-  as from a single copy: pooled, 35 % of the members in need decode the double, against 30 % for a helper copy
-  alone and 36 % for a true fallback. Each suppressed true fallback loses the last
-  chance of about a third of its members in need. Interference on the handed subchannels is too common for an energy
-  test to tell "helper present" from "someone else present".
-- **Where a double does hurt:** on the highway with aperiodic traffic the helper alone recovers more than the double
-  (0.67 against 0.39). There are too few doubles for that to outweigh the lost fallbacks.
+  as from a single copy: pooled, 34 % of the members in need decode the double, against 31 % for a helper copy
+  alone and 40 % for a true fallback. Each suppressed true fallback loses the last chance of about 40 % of its
+  members in need. Interference on the handed subchannels is too common for an energy test to tell "helper
+  present" from "someone else present".
+- **Where a double does hurt:** on the highway the helper alone recovers far more than the double (aperiodic 0.57
+  against 0.31, periodic 0.74 against 0.44). Even there, the oracle prefers no gate: the true fallbacks it would
+  suppress (998 C checks against 274 B on highway aperiodic) are worth more. On the roundabouts the double recovers
+  more than the helper alone.
 
-**If the objective were resources or interference.** A gate saves transmissions: a high threshold such as −80 dBm
-per RB withholds 64 fallback copies in six runs for −0.2 pp. That is a separate trade-off and should be stated as
-one. It needs no dynamic rule.
+**If the objective were resources or interference.** A gate saves transmissions: −80 dBm per RB withholds 529
+fallback copies over 60 runs (23 305 TBs) for −0.24 pp; −70 dBm withholds 123 for −0.04 pp. That is a separate
+trade-off and should be stated as one. It needs no dynamic rule.
 
-**For the paper.** Report the double transmissions as a measured limitation: 26 % of fallbacks with 60 vehicles,
-almost all aperiodic. Add that an energy gate does not pay off, because doubles cost little reliability and true
+**For the paper.** Report the double transmissions as a measured limitation: 22 % of fallbacks with 60 vehicles,
+for both traffic types. Add that an energy gate does not pay off, because doubles cost little reliability and true
 fallbacks are valuable. The better levers are those that make the helper's SCI decodable at the leader, not
 detection after the fact.
 
 **Limits of this analysis.**
-- One seed per cell on the laptop: 74 doubles and 264 true fallbacks in all.
-- The helper-alone counterfactual is estimated from other checks, not simulated.
+- The helper-alone counterfactual is estimated from other checks (A checks, which saw less interference), not
+  simulated. If anything it overstates the gain of a gate.
 - Recoveries are counted at s3 only.
-- Confirming would need the same logging on more seeds, for example R6 at 60 vehicles with seeds 1-10 on the
-  remote. Gating the fallback in the simulator and measuring PRR directly would be a stronger test still."""))
+- Gating the fallback in the simulator and measuring PRR directly would be the stronger test. Given a loss on every
+  seed, it is not needed for the decision."""))
     return C
 
 
