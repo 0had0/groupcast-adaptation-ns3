@@ -3500,6 +3500,24 @@ main(int argc, char* argv[])
                    << k.txRnti << ',' << +k.harqId << '\n';
             }
         }
+        if (!ctl.FbChecks().empty())
+        {
+            // leader fallback checks (validation): received power on the handed subchannels
+            // of the checked slot, by transmitter; W -> dBm, -inf written as -999
+            auto dbm = [](double w) { return w > 0 ? 10.0 * std::log10(w) + 30.0 : -999.0; };
+            std::ofstream fc(out + "_fbchk.csv");
+            fc << "t,slot_abs,harq_id,gen,helper_rnti,sb_start,sb_len,n_rb,outcome,sci_failed,"
+                  "p_data_helper_dbm,p_data_other_dbm,p_ctrl_helper_dbm,p_ctrl_other_dbm,n_other\n";
+            for (const auto& c : ctl.FbChecks())
+            {
+                fc << std::fixed << std::setprecision(6) << c.t << ',' << c.slotAbs << ','
+                   << +c.harqId << ',' << c.gen << ',' << c.helperRnti << ',' << c.sbStart << ','
+                   << c.sbLen << ',' << c.nRb << ',' << c.outcome << ',' << c.sciFailed << ','
+                   << std::setprecision(2) << dbm(c.pDataHelperW) << ',' << dbm(c.pDataOtherW)
+                   << ',' << dbm(c.pCtrlHelperW) << ',' << dbm(c.pCtrlOtherW) << ',' << c.nOther
+                   << '\n';
+            }
+        }
         if (!g.div.empty())
         {
             std::ofstream dv(out + "_div.csv");
@@ -4020,7 +4038,9 @@ main(int argc, char* argv[])
               "kuo_objective,pos_err_m,reack_decoded,psfch_exact_attr,fb_late,helper_nack_stale,"
               "blind_soft_combining,opt1_helper_nack,leader_fixed_size,helper_takeover,leader_fallback,"
               "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot,"
-              "ndi_toggle_new_tb,sci_on_every_tx,helper_miss_prob,helper_miss_mode,helper_forced_miss\n";
+              "ndi_toggle_new_tb,sci_on_every_tx,helper_miss_prob,helper_miss_mode,helper_forced_miss,"
+              "psfch_delay_us,activation_us,min_gap_proc,takeover_late,takeover_late_no_slot,"
+              "fallback_late,fallback_late_no_slot,cancel_late,helper_fb_late\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4254,7 +4274,25 @@ main(int argc, char* argv[])
                << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
                << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << ','
                << g.ndiToggleNewTb << ',' << sciOnEveryTx << ',' << helperMissProb << ','
-               << helperMissMode << ',' << g.helperForcedMiss << '\n';
+               << helperMissMode << ',' << g.helperForcedMiss << ',' << std::setprecision(1)
+               << ctl.PsfchDelay().GetMicroSeconds() << ',' << ctl.ActivationDelay().GetMicroSeconds()
+               << ',' << [&]() {
+                      UintegerValue v;
+                      g.leaderMac->GetAttribute("MinTimeGapProcessing", v);
+                      return v.Get();
+                  }()
+               << ',' << ctl.nTakeoverLate << ',' << ctl.nTakeoverLateNoSlot << ','
+               << ctl.nFallbackLate << ',' << ctl.nFallbackLateNoSlot << ',' << ctl.nCancelLate
+               << ',' << [&]() {
+                      uint64_t n = 0; // every member can be named helper (per-TB selection)
+                      for (uint32_t m = 1; m <= numMembers; ++m)
+                      {
+                          n += nodes.Get(m)->GetDevice(0)->GetObject<NrUeNetDevice>()->GetMac(0)
+                                   ->GetObject<NrSlUeMac>()->GetCoopFbLate();
+                      }
+                      return n;
+                  }()
+               << '\n';
         }
     }
 

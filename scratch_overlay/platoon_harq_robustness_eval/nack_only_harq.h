@@ -152,6 +152,29 @@ class NackOnlyHarqController
     void TagAppPacket(Ptr<Packet> p);
 
     const std::vector<LeaderTx>& Txs() const { return m_txs; }
+
+    /// one leader fallback check (validation log, no random draw): the received power on the
+    /// handed slot's PSSCH subchannels, split by transmitter (simulation ground truth)
+    struct FbCheck
+    {
+        double t{0};          //!< time of the check (s)
+        int64_t slotAbs{0};   //!< checked (handed) slot
+        uint8_t harqId{0};
+        uint32_t gen{0};      //!< index of the leader transmission that triggered the check
+        uint16_t helperRnti{0};
+        uint32_t helperNode{0};
+        uint16_t sbStart{0};
+        uint16_t sbLen{0};
+        int outcome{-1};      //!< 0 helper SCI decoded, 1 fallback tx, 2 no slot left, 3 stale
+        bool sciFailed{false}; //!< a PSCCH of the helper arrived in the slot but failed
+        double pDataHelperW{0}; //!< PSSCH power of the helper on the handed RBs (W)
+        double pDataOtherW{0};  //!< PSSCH power of every other transmitter on the handed RBs
+        double pCtrlHelperW{0}; //!< PSCCH power of the helper on the handed RBs
+        double pCtrlOtherW{0};  //!< PSCCH power of every other transmitter on the handed RBs
+        uint32_t nOther{0};     //!< other transmitters with power on the handed RBs
+        uint32_t nRb{0};        //!< RBs of the handed subchannels
+    };
+    const std::vector<FbCheck>& FbChecks() const { return m_fbChecks; }
     Time SlotPeriod() const { return m_slot; }
 
     // statistics
@@ -175,6 +198,14 @@ class NackOnlyHarqController
     uint64_t nFallbackHeard{0};   //!< ... in which the leader decoded the helper's SCI
     uint64_t nFallbackTx{0};      //!< ... silent: the leader took back the next handed slot
     uint64_t nFallbackNoSlot{0};  //!< ... silent, but no handed slot was left
+    // activation deadline (NrUePhy::SlPsfchProcessingDelay, NrSlUeMac::CoopActivationDelay)
+    uint64_t nTakeoverLate{0};        //!< helper NACK too late for the next handed slot
+    uint64_t nTakeoverLateNoSlot{0};  //!< ... and no later handed slot to take back
+    uint64_t nFallbackLate{0};        //!< silent helper detected too late for the next handed slot
+    uint64_t nFallbackLateNoSlot{0};  //!< ... and no later handed slot to take back
+    uint64_t nCancelLate{0};          //!< success decided too late to withhold the next own slot
+    Time PsfchDelay() const { return m_psfchDelay; }
+    Time ActivationDelay() const { return m_activation; }
 
     HarqMode GetMode() const { return m_mode; }
     typedef Callback<void, double, uint32_t, uint32_t, uint8_t> FeedbackCallback;
@@ -234,7 +265,16 @@ class NackOnlyHarqController
     void MaybeScheduleFallback(size_t idx);
     void CheckHelperRelay(size_t idx, int64_t slotAbs);
     void OnLeaderPscch(SlRxCtrlPacketTraceParams p);
+    void OnLeaderRxSignal(uint32_t nodeId, uint8_t kind, Ptr<const SpectrumValue> psd);
     void DeliverSuccess(const LeaderTx& tx);
+    void DeliverSuccessLate(size_t idx);
+    /// success: withhold the remaining own slots, or (activation deadline) after the next one
+    void Succeed(size_t idx);
+    int64_t AbsOfSfn(const LeaderTx& tx, const SfnSf& s) const; //!< absolute slot of s
+    SfnSf SfnOfAbs(const LeaderTx& tx, int64_t abs) const;      //!< SfnSf of an absolute slot
+    int64_t EarliestActionSlot() const; //!< first slot a decision taken now can still act on
+    /// take back the first handed slot the activation deadline allows; counts late actions
+    bool ReclaimInTime(size_t dev, const LeaderTx& tx, uint64_t& nLate, uint64_t& nLateNoSlot);
 
     Ptr<NrUeNetDevice> m_leader;
     Ptr<NrSlUeMac> m_mac;
@@ -249,10 +289,15 @@ class NackOnlyHarqController
     bool m_fallback{false};
     std::map<uint8_t, uint8_t> m_pendingOrigin;           //!< HARQ id -> origin of its next retx
     std::map<uint16_t, std::set<int64_t>> m_sciHeard;     //!< leader: slots with a decoded SCI per RNTI
+    std::map<uint16_t, std::set<int64_t>> m_sciFailed;    //!< leader: slots with a failed SCI per RNTI
+    std::vector<FbCheck> m_fbChecks;                      //!< fallback checks (validation log)
+    std::map<int64_t, std::vector<size_t>> m_fbWatch;     //!< slot -> pending rows of m_fbChecks
     uint8_t m_gap{3};
     uint8_t m_mu{1};
     Time m_slot;
     Time m_sym;
+    Time m_psfchDelay;        //!< end of PSFCH -> feedback at the MAC
+    Time m_activation{0};     //!< decision -> earliest slot start it can act on
     uint32_t m_nextSeq{0};
 
     NrSlUePhySapUser* m_origUser{nullptr}; //!< first device's (ACK injection)

@@ -188,6 +188,11 @@ NackOnlyHarqController::Install(Ptr<NrUeNetDevice> leader,
     m_sym = phy->GetSymbolPeriod();
     m_mu = static_cast<uint8_t>(std::lround(std::log2(1e-3 / m_slot.GetSeconds())));
     m_origUser = m_mac->GetNrSlUePhySapUser();
+    TimeValue tv;
+    phy->GetAttribute("SlPsfchProcessingDelay", tv);
+    m_psfchDelay = tv.Get().IsNegative() ? m_slot : tv.Get();
+    m_mac->GetAttribute("CoopActivationDelay", tv);
+    m_activation = tv.Get();
     Attach(leader, leader->GetNode()->GetId());
 }
 
@@ -364,9 +369,9 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
         psfch.Add(1);
         ++k;
     }
-    // NACKs reach the MAC at  t(m) + 13 sym (end of PSFCH) + 1 slot;
-    // decide half a symbol later, before slot m + 2 starts.
-    const Time decideAt = m_slot * static_cast<int64_t>(k + 1) + m_sym * 13 + m_sym / 2;
+    // NACKs reach the MAC at  t(m) + 13 sym (end of PSFCH) + the PSFCH processing delay
+    // (default one slot); decide half a symbol later.
+    const Time decideAt = m_slot * static_cast<int64_t>(k) + m_sym * 13 + m_psfchDelay + m_sym / 2;
     m_txs[idx].decideAtS = (Simulator::Now() + decideAt).GetSeconds();
     Simulator::Schedule(decideAt, &NackOnlyHarqController::Decide, this, idx);
 }
@@ -433,7 +438,7 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
             // had handed over (the helper listens to it and may relay after it)
             best->helperNack = true;
             ++nHelperNack;
-            if (m_macs[dev]->ReclaimSlHelperSlot(m_dst, best->harqId))
+            if (ReclaimInTime(dev, *best, nTakeoverLate, nTakeoverLateNoSlot))
             {
                 best->helperReclaim = true;
                 ++nHelperReclaim;
@@ -460,6 +465,92 @@ NackOnlyHarqController::OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& i
             best->nackedMembers.insert(nodeId);
         }
     }
+}
+
+int64_t
+NackOnlyHarqController::AbsOfSfn(const LeaderTx& tx, const SfnSf& s) const
+{
+    const SfnSf txSfn(tx.frame, tx.subframe, static_cast<uint8_t>(tx.slot), m_mu);
+    int64_t d = static_cast<int64_t>(s.Normalize()) - static_cast<int64_t>(txSfn.Normalize());
+    const int64_t wrap = 1024LL * 10 * (1LL << m_mu);
+    if (d < -wrap / 2)
+    {
+        d += wrap;
+    }
+    return tx.slotAbs + d;
+}
+
+SfnSf
+NackOnlyHarqController::SfnOfAbs(const LeaderTx& tx, int64_t abs) const
+{
+    SfnSf s(tx.frame, tx.subframe, static_cast<uint8_t>(tx.slot), m_mu);
+    if (abs > tx.slotAbs)
+    {
+        s.Add(static_cast<uint32_t>(abs - tx.slotAbs));
+    }
+    return s;
+}
+
+int64_t
+NackOnlyHarqController::EarliestActionSlot() const
+{
+    const double x = (Simulator::Now() + m_activation).GetSeconds() / m_slot.GetSeconds();
+    return static_cast<int64_t>(std::ceil(x - 1e-9));
+}
+
+bool
+NackOnlyHarqController::ReclaimInTime(size_t dev,
+                                      const LeaderTx& tx,
+                                      uint64_t& nLate,
+                                      uint64_t& nLateNoSlot)
+{
+    const int64_t earliest = EarliestActionSlot();
+    SfnSf next;
+    const bool late = m_macs[dev]->GetSlNextHelperSlot(m_dst, tx.harqId, next) &&
+                      AbsOfSfn(tx, next) < earliest;
+    const bool ok = m_macs[dev]->ReclaimSlHelperSlot(m_dst, tx.harqId, SfnOfAbs(tx, earliest));
+    if (late)
+    {
+        ++(ok ? nLate : nLateNoSlot);
+    }
+    return ok;
+}
+
+void
+NackOnlyHarqController::Succeed(size_t idx)
+{
+    const LeaderTx& tx = m_txs[idx];
+    SfnSf next;
+    bool usurped = false;
+    if (m_mac->GetSlNextGrantSlot(m_dst, tx.harqId, next, usurped) && !usurped)
+    {
+        const int64_t abs = AbsOfSfn(tx, next);
+        if (abs < EarliestActionSlot())
+        {
+            // too late to withhold the next own (prepared) copy: it goes out, the success
+            // cancels what remains after it
+            ++nCancelLate;
+            const Time at = m_slot * abs + m_sym / 2 - Simulator::Now();
+            Simulator::Schedule(at, &NackOnlyHarqController::DeliverSuccessLate, this, idx);
+            return;
+        }
+    }
+    DeliverSuccess(tx);
+}
+
+void
+NackOnlyHarqController::DeliverSuccessLate(size_t idx)
+{
+    const LeaderTx& tx = m_txs[idx];
+    if (m_curGen[tx.harqId] != tx.gen)
+    {
+        return;
+    }
+    if (m_spsSafeAck && !m_mac->IsSlRetxPending(m_dst, tx.harqId))
+    {
+        return;
+    }
+    DeliverSuccess(tx);
 }
 
 void
@@ -512,7 +603,7 @@ NackOnlyHarqController::Decide(size_t idx)
             ++nAckNoRetxLeft;
             return;
         }
-        DeliverSuccess(tx);
+        Succeed(idx);
         return;
     }
     if (m_mode == HarqMode::OPT2)
@@ -565,7 +656,7 @@ NackOnlyHarqController::Decide(size_t idx)
                 ++nAckNoRetxLeft;
                 return;
             }
-            DeliverSuccess(tx);
+            Succeed(idx);
         }
         else
         {
@@ -586,18 +677,28 @@ NackOnlyHarqController::SetLeaderFallback(bool on)
         m_leader->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
             "RxPscchTraceUe",
             MakeCallback(&NackOnlyHarqController::OnLeaderPscch, this));
+        m_leader->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+            "SlRxSignal",
+            MakeCallback(&NackOnlyHarqController::OnLeaderRxSignal, this));
     }
 }
 
 void
 NackOnlyHarqController::OnLeaderPscch(SlRxCtrlPacketTraceParams p)
 {
-    if (p.m_corrupt)
-    {
-        return;
-    }
     const int64_t slotAbs =
         static_cast<int64_t>(std::floor(p.m_timeMs * 1e-3 / m_slot.GetSeconds() + 1e-9));
+    if (p.m_corrupt)
+    {
+        // validation only: the protocol never reads it (a real UE cannot tell who sent it)
+        std::set<int64_t>& failed = m_sciFailed[p.m_txRnti];
+        failed.insert(slotAbs);
+        while (!failed.empty() && *failed.begin() < slotAbs - 4000)
+        {
+            failed.erase(failed.begin());
+        }
+        return;
+    }
     std::set<int64_t>& heard = m_sciHeard[p.m_txRnti];
     heard.insert(slotAbs);
     while (!heard.empty() && *heard.begin() < slotAbs - 4000)
@@ -615,7 +716,9 @@ NackOnlyHarqController::MaybeScheduleFallback(size_t idx)
         return; // no helper, or its NACK already took back a slot
     }
     SfnSf next;
-    if (!m_mac->GetSlNextHelperSlot(m_dst, tx.harqId, next))
+    uint16_t sbStart = 0;
+    uint16_t sbLen = 0;
+    if (!m_mac->GetSlNextHelperSlot(m_dst, tx.harqId, next, sbStart, sbLen))
     {
         return; // no handed slot left: nothing the helper should relay in
     }
@@ -633,6 +736,16 @@ NackOnlyHarqController::MaybeScheduleFallback(size_t idx)
         return;
     }
     ++nFallbackCheck;
+    FbCheck row;
+    row.slotAbs = slotAbs;
+    row.harqId = tx.harqId;
+    row.gen = tx.gen;
+    row.helperRnti = static_cast<uint16_t>(tx.helperRnti);
+    row.helperNode = tx.helperNode;
+    row.sbStart = sbStart;
+    row.sbLen = sbLen;
+    m_fbWatch[slotAbs].push_back(m_fbChecks.size());
+    m_fbChecks.push_back(row);
     Simulator::Schedule(checkAt - Simulator::Now(),
                         &NackOnlyHarqController::CheckHelperRelay,
                         this,
@@ -641,28 +754,117 @@ NackOnlyHarqController::MaybeScheduleFallback(size_t idx)
 }
 
 void
+NackOnlyHarqController::OnLeaderRxSignal(uint32_t nodeId, uint8_t kind, Ptr<const SpectrumValue> psd)
+{
+    if (m_fbWatch.empty() || kind > 1 || !psd)
+    {
+        return;
+    }
+    const int64_t slotAbs =
+        static_cast<int64_t>(std::floor(Simulator::Now().GetSeconds() / m_slot.GetSeconds() + 1e-9));
+    auto w = m_fbWatch.find(slotAbs);
+    if (w == m_fbWatch.end())
+    {
+        return;
+    }
+    const uint32_t rbPerSubch = m_mac->GetNrSlSubChSize();
+    for (size_t r : w->second)
+    {
+        FbCheck& row = m_fbChecks[r];
+        const bool isHelper = row.helperNode != 0 && nodeId == row.helperNode;
+        const uint32_t rb0 = row.sbStart * rbPerSubch;
+        const uint32_t rb1 = rb0 + row.sbLen * rbPerSubch;
+        row.nRb = rb1 - rb0;
+        double pw = 0.0;
+        uint32_t rb = 0;
+        auto band = psd->ConstBandsBegin();
+        for (auto v = psd->ConstValuesBegin(); v != psd->ConstValuesEnd(); ++v, ++band, ++rb)
+        {
+            if (rb >= rb0 && rb < rb1)
+            {
+                pw += *v * (band->fh - band->fl);
+            }
+        }
+        if (pw <= 0.0)
+        {
+            continue;
+        }
+        if (kind == 1)
+        {
+            (isHelper ? row.pDataHelperW : row.pDataOtherW) += pw;
+            row.nOther += isHelper ? 0 : 1;
+        }
+        else
+        {
+            (isHelper ? row.pCtrlHelperW : row.pCtrlOtherW) += pw;
+        }
+    }
+}
+
+void
 NackOnlyHarqController::CheckHelperRelay(size_t idx, int64_t slotAbs)
 {
     const LeaderTx& tx = m_txs[idx];
+    // the validation row of this check (registered by MaybeScheduleFallback)
+    FbCheck* row = nullptr;
+    auto w = m_fbWatch.find(slotAbs);
+    if (w != m_fbWatch.end())
+    {
+        for (auto r = w->second.begin(); r != w->second.end(); ++r)
+        {
+            if (m_fbChecks[*r].gen == tx.gen && m_fbChecks[*r].harqId == tx.harqId)
+            {
+                row = &m_fbChecks[*r];
+                w->second.erase(r);
+                break;
+            }
+        }
+        if (w->second.empty())
+        {
+            m_fbWatch.erase(w);
+        }
+    }
+    if (row)
+    {
+        row->t = Simulator::Now().GetSeconds();
+        auto f = m_sciFailed.find(static_cast<uint16_t>(tx.helperRnti));
+        row->sciFailed = f != m_sciFailed.end() && f->second.count(slotAbs);
+    }
     if (m_curGen[tx.harqId] != tx.gen)
     {
+        if (row)
+        {
+            row->outcome = 3;
+        }
         return; // the HARQ process already carries the next TB
     }
     auto it = m_sciHeard.find(static_cast<uint16_t>(tx.helperRnti));
     if (it != m_sciHeard.end() && it->second.count(slotAbs))
     {
         ++nFallbackHeard; // the helper relayed
+        if (row)
+        {
+            row->outcome = 0;
+        }
         return;
     }
     // nothing sensed from the helper where a relay was expected: it missed the TB
-    if (m_mac->ReclaimSlHelperSlot(m_dst, tx.harqId))
+    if (ReclaimInTime(0, tx, nFallbackLate, nFallbackLateNoSlot))
     {
         ++nFallbackTx;
         m_pendingOrigin[tx.harqId] = 2;
+        if (row)
+        {
+            row->outcome = 1;
+        }
     }
     else
     {
         ++nFallbackNoSlot;
+        if (row)
+        {
+            row->outcome = 2;
+        }
     }
 }
 
