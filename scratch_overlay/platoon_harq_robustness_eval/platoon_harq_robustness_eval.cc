@@ -4313,7 +4313,9 @@ main(int argc, char* argv[])
                     "assertion failed: relayByUnchosen > 0 (" << relayByUnchosen << ")");
     if (harqMode == "opt2")
     {
-        NS_ABORT_MSG_IF(ctl.nAllAckDecision > 0 && leaderRetxNoNack > 0,
+        // a success decided too late to withhold the next prepared copy lets that copy go
+        // (activation deadline, cancel_late): only those are allowed
+        NS_ABORT_MSG_IF(ctl.nAllAckDecision > 0 && leaderRetxNoNack > ctl.nCancelLate,
                         "assertion failed: leader retransmission occurred after all-ACK");
     }
 
