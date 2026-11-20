@@ -3014,7 +3014,7 @@ index 9562ebd0..165ed5e7 100644
  
  /**
 diff --git a/model/nr-spectrum-phy.cc b/model/nr-spectrum-phy.cc
-index d5d45551..69c8d68f 100644
+index d5d45551..fc3a604c 100644
 --- a/model/nr-spectrum-phy.cc
 +++ b/model/nr-spectrum-phy.cc
 @@ -8,6 +8,7 @@
@@ -3038,7 +3038,7 @@ index d5d45551..69c8d68f 100644
  #include <unordered_set>
  
  namespace ns3
-@@ -183,6 +187,64 @@ NrSpectrumPhy::GetTypeId()
+@@ -183,6 +187,106 @@ NrSpectrumPhy::GetTypeId()
                  BooleanValue(false),
                  MakeBooleanAccessor(&NrSpectrumPhy::DropTbOnRbOnCollision),
                  MakeBooleanChecker())
@@ -3072,6 +3072,48 @@ index d5d45551..69c8d68f 100644
 +                          UintegerValue(0),
 +                          MakeUintegerAccessor(&NrSpectrumPhy::m_slHelperMissMode),
 +                          MakeUintegerChecker<uint8_t>(0, 1))
++            .AddAttribute("SlPsfchErrorMode",
++                          "PSFCH reception errors (controlled experiment): 0 = none (stock, every "
++                          "ACK/NACK is delivered), 1 = forced (SlPsfchMissProb, SlPsfchNackToAckProb), "
++                          "2 = SNR-based: each PSFCH is decoded like a PSCCH of the same link (sidelink "
++                          "error model, MCS 0, SlPsfchEmRbs PRBs) at the 3GPP PSFCH power: "
++                          "SlPsfchTxPowerDbm - 10 log10(N_Tx,PSFCH) on one PRB (TS 38.213 16.2.3 without "
++                          "dl-P0-PSFCH, TS 38.211 8.3.4 format 0), over noise. PSFCH resources of different "
++                          "UEs are orthogonal in 3GPP (TS 38.213 16.3), so the other PSFCH signals (5G-LENA "
++                          "sends every PSFCH on all PRBs) do not interfere. A failed PSFCH is lost (DTX).",
++                          UintegerValue(0),
++                          MakeUintegerAccessor(&NrSpectrumPhy::m_slPsfchErrorMode),
++                          MakeUintegerChecker<uint8_t>(0, 2))
++            .AddAttribute("SlPsfchMissProb",
++                          "SlPsfchErrorMode 1: each received HARQ feedback is lost (DTX) with this "
++                          "probability, independently per receiver.",
++                          DoubleValue(0.0),
++                          MakeDoubleAccessor(&NrSpectrumPhy::m_slPsfchMissProb),
++                          MakeDoubleChecker<double>(0.0, 1.0))
++            .AddAttribute("SlPsfchNackToAckProb",
++                          "SlPsfchErrorMode 1 or 2: a received NACK that is not lost is detected as "
++                          "an ACK with this probability.",
++                          DoubleValue(0.0),
++                          MakeDoubleAccessor(&NrSpectrumPhy::m_slPsfchNackToAckProb),
++                          MakeDoubleChecker<double>(0.0, 1.0))
++            .AddAttribute("SlPsfchTxPowerDbm",
++                          "SlPsfchErrorMode 2: PSFCH transmit power P (dBm) before the split over the "
++                          "N_Tx,PSFCH simultaneous PSFCHs of the sender (P_CMAX out of coverage, TS 38.213 "
++                          "16.2.3); the stock signal carries the UE TxPower over the whole pool, rescaled.",
++                          DoubleValue(23.0),
++                          MakeDoubleAccessor(&NrSpectrumPhy::m_slPsfchTxPowerDbm),
++                          MakeDoubleChecker<double>())
++            .AddAttribute("SlPsfchEmRbs",
++                          "SlPsfchErrorMode 2: PRBs over which the PSFCH is decoded like a PSCCH (1 = the "
++                          "single PRB of PSFCH format 0).",
++                          UintegerValue(1),
++                          MakeUintegerAccessor(&NrSpectrumPhy::m_slPsfchEmRbs),
++                          MakeUintegerChecker<uint16_t>(1, 275))
++            .AddAttribute("SlPsfchSnrOffsetDb",
++                          "SlPsfchErrorMode 2: offset (dB) added to the PSFCH SNR before decoding.",
++                          DoubleValue(0.0),
++                          MakeDoubleAccessor(&NrSpectrumPhy::m_slPsfchSnrOffsetDb),
++                          MakeDoubleChecker<double>())
 +            .AddAttribute("SlSoftCombining",
 +                          "Soft-combine (HARQ-IR) every sidelink retransmission with the earlier "
 +                          "copies of its TB. False: every copy is decoded on its own (ablation "
@@ -3103,7 +3145,7 @@ index d5d45551..69c8d68f 100644
              .AddTraceSource("RxPacketTraceEnb",
                              "The no. of packets received and transmitted by the Base Station",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_rxPacketTraceEnb),
-@@ -230,6 +292,11 @@ NrSpectrumPhy::GetTypeId()
+@@ -230,6 +334,11 @@ NrSpectrumPhy::GetTypeId()
                              "Pathloss calculated for CTRL",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_dlDataPathlossTrace),
                              "ns3::NrSpectrumPhy::DlPathlossTrace")
@@ -3115,10 +3157,16 @@ index d5d45551..69c8d68f 100644
              .AddTraceSource("RxPscchTraceUe",
                              "The PSCCH transmission received by the User Device",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_rxPscchTraceUe),
-@@ -246,6 +313,16 @@ NrSpectrumPhy::GetTypeId()
+@@ -246,6 +355,22 @@ NrSpectrumPhy::GetTypeId()
                              "The sidelink SCI-2a transmission failed to decode",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_slSci2aDecodeFailures),
                              "ns3::TracedValueCallback::Uint64")
++            .AddTraceSource("SlPsfchRx",
++                            "Every PSFCH HARQ feedback reaching this PHY: sender node id, outcome "
++                            "(0 delivered, 1 lost forced, 2 lost SNR, 3 NACK detected as ACK), the "
++                            "feedback as sent, and the SNR-mode error rate",
++                            MakeTraceSourceAccessor(&NrSpectrumPhy::m_slPsfchRxTrace),
++                            "ns3::NrSpectrumPhy::SlPsfchRxTracedCallback")
 +            .AddTraceSource("SlHelperForcedMiss",
 +                            "First transmissions of a TB that the named helper was forced to "
 +                            "miss (SlHelperMissProb)",
@@ -3132,7 +3180,15 @@ index d5d45551..69c8d68f 100644
              .AddTraceSource("SlTbDecodeFailure",
                              "The sidelink TB transmission failed to decode",
                              MakeTraceSourceAccessor(&NrSpectrumPhy::m_slTbDecodeFailures),
-@@ -507,6 +584,13 @@ NrSpectrumPhy::StartRx(Ptr<SpectrumSignalParameters> params)
+@@ -459,6 +584,7 @@ NrSpectrumPhy::SetNoisePowerSpectralDensity(const Ptr<const SpectrumValue>& nois
+     }
+ 
+     m_slInterference->SetNoisePowerSpectralDensity(noisePsd);
++    m_slNoisePsd = noisePsd;
+ }
+ 
+ void
+@@ -507,6 +633,13 @@ NrSpectrumPhy::StartRx(Ptr<SpectrumSignalParameters> params)
  
      // pass it to Sidelink interference calculations regardless of the type (SL or non-Sl)
      m_slInterference->AddSignal(params->psd, params->duration);
@@ -3146,7 +3202,7 @@ index d5d45551..69c8d68f 100644
      if (nrDataRxParams)
      {
          if (nrDataRxParams->cellId == GetCellId())
-@@ -2020,6 +2104,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
+@@ -2020,6 +2153,23 @@ NrSpectrumPhy::StartTxSlDataFrames(const Ptr<PacketBurst>& pb, Time duration)
  {
      NS_LOG_FUNCTION(this << " state: " << m_state);
  
@@ -3170,7 +3226,7 @@ index d5d45551..69c8d68f 100644
      switch (m_state)
      {
      case RX_DATA:
-@@ -2387,6 +2488,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2387,6 +2537,20 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
              DynamicCast<NrSpectrumSignalParametersSlCtrlFrame>(
                  m_slRxSigParamInfo.at(paramIndex).params);
          Ptr<Packet> packet = ctrlParams->packetBurst->GetPackets().front();
@@ -3191,7 +3247,7 @@ index d5d45551..69c8d68f 100644
          if (!corrupt)
          {
              error = false; // at least one control packet is OK
-@@ -2460,6 +2575,81 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
+@@ -2460,6 +2624,81 @@ NrSpectrumPhy::RxSlPscch(std::vector<uint32_t> paramIndexes)
      }
  }
  
@@ -3273,7 +3329,7 @@ index d5d45551..69c8d68f 100644
  void
  NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
  {
-@@ -2514,6 +2704,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2514,6 +2753,44 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              continue;
          }
          itTb->second.m_sinrPerceived = m_slSinrPerceived.at(pktIndex);
@@ -3318,7 +3374,7 @@ index d5d45551..69c8d68f 100644
          itTb->second.m_pktIndex = pktIndex;
          NS_LOG_DEBUG("Updating SINR for RNTI " << tag.GetRnti());
          itTb->second.m_sinrUpdated = true;
-@@ -2554,6 +2782,76 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2554,6 +2831,76 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          }
      }
  
@@ -3395,7 +3451,7 @@ index d5d45551..69c8d68f 100644
      // Compute the error and check for collision for each expected TB
      for (auto& tbIt : m_slTransportBlocks)
      {
-@@ -2566,11 +2864,31 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2566,11 +2913,31 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              NS_LOG_WARN("SINR not updated for the expected TB from RNTI " << tbIt.first);
              continue;
          }
@@ -3427,7 +3483,7 @@ index d5d45551..69c8d68f 100644
          bool rbCollided =
              false; // no need of this boolean since we track TB info. I might get rid of it later
  
-@@ -2612,12 +2930,35 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2612,12 +2979,35 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              tbIt.second.m_outputEmForSci2 = m_slErrorModel->GetTbDecodificationStats(
                  tbIt.second.m_sinrPerceived,
                  tbIt.second.m_expected.m_rbBitmap,
@@ -3464,7 +3520,7 @@ index d5d45551..69c8d68f 100644
              tbIt.second.m_isSci2Corrupted = sciF2aCorrupted;
              NS_LOG_DEBUG(this << " SCI stage 2 decoding, errorRate "
                                << tbIt.second.m_outputEmForSci2->m_tbler << " corrupt "
-@@ -2629,6 +2970,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2629,6 +3019,20 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  m_slSci2aDecodeFailures++;
                  // If SCI stage 2 is corrupted, data is also corrupted.
                  tbIt.second.m_isCorrupted = true;
@@ -3485,7 +3541,7 @@ index d5d45551..69c8d68f 100644
  
                  // Trace
                  SlRxDataPacketTraceParams traceParams;
-@@ -2666,37 +3021,89 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2666,37 +3070,89 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                  NS_LOG_DEBUG(this << " PSSCH SCI stage 2 decoding succeeded, errorRate "
                                    << tbIt.second.m_outputEmForSci2->m_tbler);
              }
@@ -3580,7 +3636,7 @@ index d5d45551..69c8d68f 100644
              }
              tbIt.second.m_outputEmForData =
                  m_slErrorModel->GetTbDecodificationStats(tbIt.second.m_sinrPerceived,
-@@ -2728,25 +3135,78 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2728,25 +3184,78 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
                                        << tbIt.second.m_outputEmForData->m_tbler << " data corrupt "
                                        << tbIt.second.m_isCorrupted);
                      tbIt.second.m_isCorrupted = false;
@@ -3664,7 +3720,7 @@ index d5d45551..69c8d68f 100644
                  }
  
                  if (tbIt.second.m_isCorrupted)
-@@ -2764,17 +3224,19 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2764,17 +3273,19 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
          }
          else // No error model enabled
          {
@@ -3686,7 +3742,7 @@ index d5d45551..69c8d68f 100644
                  continue;
              }
  
-@@ -2858,6 +3320,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
+@@ -2858,6 +3369,10 @@ NrSpectrumPhy::RxSlPssch(std::vector<uint32_t> paramIndexes)
              slHarqInfo.m_dstL2Id = sciF2a.GetDstId();
              slHarqInfo.m_harqProcessId = sciF2a.GetHarqId();
              slHarqInfo.m_bwpIndex = GetBwpId();
@@ -3697,8 +3753,120 @@ index d5d45551..69c8d68f 100644
              if (GetTBInfo(tbIt).m_isCorrupted || GetTBInfo(tbIt).m_isSci2Corrupted)
              {
                  NS_LOG_DEBUG("Sending NACK HARQ feedback to SlHarqFeedback callback");
+@@ -2891,25 +3406,104 @@ void
+ NrSpectrumPhy::RxSlPsfch(std::vector<uint32_t> paramIndexes)
+ {
+     NS_LOG_FUNCTION(this << "Number of PSFCH messages:" << paramIndexes.size());
+-    for (uint32_t i = 0; i < m_slRxSigParamInfo.size(); i++)
++    // (stock loop bound was m_slRxSigParamInfo.size(); a PSFCH frame holds PSFCH signals only, so
++    // the two sizes are equal, but paramIndexes is the vector indexed)
++    for (uint32_t i = 0; i < paramIndexes.size(); i++)
+     {
+         uint32_t pktIndex = paramIndexes[i];
+         Ptr<NrSpectrumSignalParametersSlFeedback> feedbackParams =
+             DynamicCast<NrSpectrumSignalParametersSlFeedback>(
+                 m_slRxSigParamInfo.at(pktIndex).params);
++        double tbler = 0.0;
++        if (m_slPsfchErrorMode != 0 && !m_slPsfchRv)
++        {
++            m_slPsfchRv = CreateObject<UniformRandomVariable>();
++            Ptr<NrUeNetDevice> ueRx = DynamicCast<NrUeNetDevice>(GetDevice());
++            m_slPsfchRv->SetStream(920000 + (ueRx ? ueRx->GetNode()->GetId() : 0));
++        }
++        if (m_slPsfchErrorMode == 2)
++        {
++            tbler = PsfchSnrErrorRate(pktIndex, feedbackParams->feedbackList.size());
++        }
+         for (auto& it : feedbackParams->feedbackList)
+         {
++            SlHarqInfo fb = it->GetSlHarqFeedback();
++            uint8_t outcome = 0;
++            if (m_slPsfchErrorMode == 1 && m_slPsfchRv->GetValue() < m_slPsfchMissProb)
++            {
++                outcome = 1;
++            }
++            else if (m_slPsfchErrorMode == 2 && m_slPsfchRv->GetValue() < tbler)
++            {
++                outcome = 2;
++            }
++            else if (m_slPsfchErrorMode != 0 && !fb.IsReceivedOk() &&
++                     m_slPsfchNackToAckProb > 0 && m_slPsfchRv->GetValue() < m_slPsfchNackToAckProb)
++            {
++                outcome = 3;
++            }
++            m_slPsfchRxTrace(feedbackParams->nodeId, outcome, it->GetSlHarqFeedback(), tbler);
++            if (outcome == 1 || outcome == 2)
++            {
++                NS_LOG_DEBUG("PSFCH from node " << feedbackParams->nodeId << " lost");
++                continue;
++            }
++            if (outcome == 3)
++            {
++                fb.m_harqStatus = SlHarqInfo::ACK;
++            }
+             NS_LOG_DEBUG("Received RxSlPsfch from node "
+-                         << feedbackParams->nodeId << " dstL2Id "
+-                         << it->GetSlHarqFeedback().m_dstL2Id << " harqProcessId "
+-                         << +it->GetSlHarqFeedback().m_harqProcessId << " bwpIndex "
+-                         << +it->GetSlHarqFeedback().m_bwpIndex
+-                         << (it->GetSlHarqFeedback().IsReceivedOk() ? " ACK" : " NACK"));
+-            m_nrPhyRxSlPsfchCallback(feedbackParams->nodeId, it->GetSlHarqFeedback());
++                         << feedbackParams->nodeId << " dstL2Id " << fb.m_dstL2Id
++                         << " harqProcessId " << +fb.m_harqProcessId << " bwpIndex "
++                         << +fb.m_bwpIndex << (fb.IsReceivedOk() ? " ACK" : " NACK"));
++            m_nrPhyRxSlPsfchCallback(feedbackParams->nodeId, fb);
+         }
+     }
+ }
+ 
++double
++NrSpectrumPhy::PsfchSnrErrorRate(uint32_t pktIndex, size_t nFb)
++{
++    // 3GPP PSFCH (format 0, TS 38.211 8.3.4.2): a 12-subcarrier sequence on ONE PRB of the PSFCH RB set,
++    // resource index (P_ID + M_ID) mod R (TS 38.213 16.3), power P_CMAX - 10 log10(N_Tx,PSFCH) out of
++    // coverage (TS 38.213 16.2.3). 5G-LENA instead sends each UE's feedback on every PRB of the pool with
++    // the UE TxPower spread over them, all PSFCHs overlapping. Here the stock received PSD is rescaled to
++    // the 3GPP power on one PRB (the sender's TxPower is taken equal to this UE's, as all UEs are configured
++    // alike), the other PSFCHs are not counted as interference (orthogonal resources), and the result is
++    // decoded like a PSCCH: sidelink error model, MCS 0, SlPsfchEmRbs PRBs, no history.
++    NS_ABORT_MSG_IF(!m_slNoisePsd, "PSFCH SNR error model: no noise PSD");
++    if (!m_slErrorModel)
++    {
++        ObjectFactory emFactory;
++        emFactory.SetTypeId(m_slErrorModelType);
++        m_slErrorModel = DynamicCast<NrErrorModel>(emFactory.Create());
++        NS_ABORT_IF(m_slErrorModel == nullptr);
++    }
++    const auto& info = m_slRxSigParamInfo.at(pktIndex);
++    const size_t nRb = info.rbBitmap.size();
++    if (nRb == 0)
++    {
++        return 1.0;
++    }
++    const double pStockDbm = m_phy->GetTxPower(); // spread by the sender over the nRb PRBs
++    const double pDbm = m_slPsfchTxPowerDbm - 10.0 * std::log10(std::max<size_t>(1, nFb));
++    const double gain = nRb * std::pow(10.0, (pDbm - pStockDbm + m_slPsfchSnrOffsetDb) / 10.0);
++    SpectrumValue snr = *info.params->psd / *m_slNoisePsd;
++    snr *= gain;
++    // the PRB(s) of this sender's resource: a fixed position per sender (stands for (P_ID + M_ID) mod R)
++    const size_t first = info.params->nodeId % nRb;
++    std::vector<int> rbs;
++    for (size_t k = 0; k < std::min<size_t>(m_slPsfchEmRbs, nRb); ++k)
++    {
++        rbs.push_back(info.rbBitmap[(first + k) % nRb]);
++    }
++    const uint8_t mcs = 0; // as the PSCCH (QPSK)
++    const uint32_t size = std::max<uint32_t>(1, m_slAmc->CalculateTbSize(mcs, 1, rbs.size()));
++    Ptr<NrErrorModelOutput> out = m_slErrorModel->GetTbDecodificationStats(
++        snr, rbs, size, mcs, NrErrorModel::NrErrorModelHistory());
++    return out->m_tbler;
++}
++
+ Ptr<Packet>
+ NrSpectrumPhy::RetrieveSci2FromPktBurst(uint32_t pktIndex)
+ {
 diff --git a/model/nr-spectrum-phy.h b/model/nr-spectrum-phy.h
-index aa3abafd..0be9581f 100644
+index aa3abafd..bbd1dc67 100644
 --- a/model/nr-spectrum-phy.h
 +++ b/model/nr-spectrum-phy.h
 @@ -25,11 +25,15 @@
@@ -3717,7 +3885,20 @@ index aa3abafd..0be9581f 100644
  
  /**
   * \ingroup ue-phy
-@@ -964,6 +968,23 @@ class NrSpectrumPhy : public SpectrumPhy
+@@ -414,6 +418,12 @@ class NrSpectrumPhy : public SpectrumPhy
+      * \param [in] bwpId BWP ID
+      * \param [in] cellId Cell ID
+      */
++    /**
++     * \brief TracedCallback signature of SlPsfchRx: sender node id, outcome (0 delivered, 1 lost
++     *        forced, 2 lost SNR, 3 NACK detected as ACK), the feedback as sent, SNR-mode error rate
++     */
++    typedef void (*SlPsfchRxTracedCallback)(uint32_t, uint8_t, const SlHarqInfo&, double);
++
+     typedef void (*RxDataTracedCallback)(const SfnSf& sfnSf,
+                                          Ptr<const SpectrumValue> v,
+                                          const Time& t,
+@@ -964,11 +974,36 @@ class NrSpectrumPhy : public SpectrumPhy
       * \param paramIndexes Indexes of received PSSCH signals/messages parameters
       */
      void RxSlPssch(std::vector<uint32_t> paramIndexes);
@@ -3741,7 +3922,20 @@ index aa3abafd..0be9581f 100644
      /**
       * \brief Function to process received PSFCH signals/messages function
       * \param paramIndexes Indexes of received PSFCH signals/messages parameters
-@@ -996,6 +1017,33 @@ class NrSpectrumPhy : public SpectrumPhy
+      */
+     void RxSlPsfch(std::vector<uint32_t> paramIndexes);
++    /**
++     * \brief SlPsfchErrorMode 2: error rate of the PSFCH signal pktIndex decoded like a PSCCH of
++     *        the same link on its received PSD over noise (see attribute SlPsfchErrorMode)
++     * \param pktIndex index of the PSFCH signal in m_slRxSigParamInfo
++     * \param nFb simultaneous PSFCH transmissions of the sender (power split)
++     * \return the error rate
++     */
++    double PsfchSnrErrorRate(uint32_t pktIndex, size_t nFb);
+     /**
+      * \brief Get SINR stats function
+      *
+@@ -996,6 +1031,45 @@ class NrSpectrumPhy : public SpectrumPhy
          m_slRxSigParamInfo; //!< NR Sidelink received signal parameter info
      bool m_dropTbOnRbCollisionEnabled{
          false}; //!< when true, drop all receptions on colliding RBs regardless SINR value.
@@ -3754,6 +3948,18 @@ index aa3abafd..0be9581f 100644
 +    uint8_t m_slHelperMissMode{0};     //!< 0: SCI-2A decoded, TB failed (NACK, not stored);
 +                                       //!< 1: SCI-2A failed (silent)
 +    Ptr<UniformRandomVariable> m_slHelperMissRv{nullptr}; //!< own stream, created on first use
++    uint8_t m_slPsfchErrorMode{0};     //!< PSFCH reception errors: 0 none (stock, error-free),
++                                       //!< 1 forced (SlPsfchMissProb), 2 SNR with the PSCCH error model
++    double m_slPsfchMissProb{0.0};     //!< mode 1: a received ACK/NACK is lost (read as DTX)
++    double m_slPsfchNackToAckProb{0.0}; //!< modes 1, 2: a received NACK is detected as ACK
++    uint16_t m_slPsfchEmRbs{1};        //!< mode 2: PRBs of the PSCCH-like decoding (1 = format 0)
++    double m_slPsfchTxPowerDbm{23.0}; //!< mode 2: PSFCH power before the N_Tx,PSFCH split (P_CMAX)
++    double m_slPsfchSnrOffsetDb{0.0};  //!< mode 2: offset added to the PSFCH SNR (power assumptions)
++    Ptr<UniformRandomVariable> m_slPsfchRv{nullptr}; //!< own stream, created on first use
++    Ptr<const SpectrumValue> m_slNoisePsd{nullptr};  //!< noise PSD (PSFCH SNR)
++    /// every PSFCH feedback reaching this PHY: sender node id, outcome (0 delivered, 1 lost forced,
++    /// 2 lost SNR, 3 NACK detected as ACK), the feedback as sent, and the mode-2 error rate
++    TracedCallback<uint32_t, uint8_t, const SlHarqInfo&, double> m_slPsfchRxTrace;
 +    bool m_slBlindSoftCombining{true}; //!< soft-combine copies sent with HARQ feedback
 +                                       //!< disabled; false decodes each copy on its own
 +    std::string m_slTestFixedSinr;     //!< test hook "rxNode:txNode=dB;...": PSSCH SINR of
@@ -3775,7 +3981,7 @@ index aa3abafd..0be9581f 100644
      bool m_slDataErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink DATA is
                                            //!< enabled, by default is enabled
      bool m_slCtrlErrorModelEnabled{true}; //!< whether the phy error model for NR Sidelink CTRL is
-@@ -1019,10 +1067,16 @@ class NrSpectrumPhy : public SpectrumPhy
+@@ -1019,10 +1093,16 @@ class NrSpectrumPhy : public SpectrumPhy
  
      TracedCallback<SlRxCtrlPacketTraceParams>
          m_rxPscchTraceUe; //!< trace source for PSCCH reception

@@ -314,6 +314,9 @@ struct Global
     double tSlot{0.0005};
     uint64_t ndiToggleNewTb{0}; // members' receptions whose NDI bit revealed a missed copy 1
     uint64_t helperForcedMiss{0}; // first copies the named helper was forced to miss
+    uint64_t psfch[2][4]{};        // PSFCH feedback of the platoon received at [leader, members] by
+                                   // outcome (0 delivered, 1 lost forced, 2 lost SNR, 3 NACK -> ACK)
+    double psfchTblerLeader{0.0};  // sum of the SNR-mode PSFCH error rates at the leader
     uint32_t slotsPerSubframe{2};
     bool roundabout{false};
     uint32_t totalSubCh{5};
@@ -398,6 +401,21 @@ void
 OnMemberNdiToggle(uint64_t before, uint64_t after)
 {
     g.ndiToggleNewTb += after - before;
+}
+
+/// NrSpectrumPhy::SlPsfchRx of the leader (who = 0) or a member (who = 1): platoon feedback only
+void
+OnPsfchRx(uint32_t who, uint32_t /*sender*/, uint8_t outcome, const SlHarqInfo& fb, double tbler)
+{
+    if (fb.m_dstL2Id != 254 || outcome > 3)
+    {
+        return;
+    }
+    ++g.psfch[who][outcome];
+    if (who == 0)
+    {
+        g.psfchTblerLeader += tbler;
+    }
 }
 
 /// NrSpectrumPhy::SlHelperForcedMiss of a member (run-level counter helper_forced_miss)
@@ -2354,7 +2372,12 @@ main(int argc, char* argv[])
         memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
             "SlHelperForcedMiss",
             MakeCallback(&OnMemberHelperForcedMiss));
+        memberDevs[m - 1]->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(
+            "SlPsfchRx",
+            MakeBoundCallback(&OnPsfchRx, 1u));
     }
+    leaderDev->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext("SlPsfchRx",
+                                                                       MakeBoundCallback(&OnPsfchRx, 0u));
     for (uint32_t i = 0; i < numNodes; ++i)
     {
         auto dev = nodes.Get(i)->GetDevice(0)->GetObject<NrUeNetDevice>();
@@ -2990,8 +3013,11 @@ main(int argc, char* argv[])
             hSciMissedUnserved += (!later && someoneMissing) ? 1 : 0;
         }
     }
-    if (harqMode == "opt2")
+    UintegerValue psfchErrMode;
+    leaderDev->GetPhy(0)->GetSpectrumPhy()->GetAttribute("SlPsfchErrorMode", psfchErrMode);
+    if (harqMode == "opt2" && psfchErrMode.Get() == 0)
     {
+        // (with PSFCH errors a helper NACK detected as ACK shows up as a helper ACK)
         NS_ABORT_MSG_IF(ctl.nHelperAck > 0,
                         "assertion failed: the named helper ACKed "
                             << ctl.nHelperAck << " transmissions (it must stay silent)");
@@ -4040,7 +4066,9 @@ main(int argc, char* argv[])
               "soft_combining,fallback_check,fallback_heard,fallback_tx,fallback_no_slot,"
               "ndi_toggle_new_tb,sci_on_every_tx,helper_miss_prob,helper_miss_mode,helper_forced_miss,"
               "psfch_delay_us,activation_us,min_gap_proc,takeover_late,takeover_late_no_slot,"
-              "fallback_late,fallback_late_no_slot,cancel_late,helper_fb_late\n";
+              "fallback_late,fallback_late_no_slot,cancel_late,helper_fb_late,psfch_err_mode,psfch_miss_prob,"
+              "psfch_n2a_prob,psfch_fb_leader,psfch_lost_leader,psfch_n2a_leader,psfch_fb_members,"
+              "psfch_lost_members,psfch_n2a_members,psfch_tbler_leader_mean,psfch_tx_dbm\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4291,6 +4319,28 @@ main(int argc, char* argv[])
                                    ->GetObject<NrSlUeMac>()->GetCoopFbLate();
                       }
                       return n;
+                  }()
+               << ',' << psfchErrMode.Get() << ',' << [&]() {
+                      DoubleValue p, q;
+                      leaderDev->GetPhy(0)->GetSpectrumPhy()->GetAttribute("SlPsfchMissProb", p);
+                      leaderDev->GetPhy(0)->GetSpectrumPhy()->GetAttribute("SlPsfchNackToAckProb", q);
+                      std::ostringstream o;
+                      o << p.Get() << ',' << q.Get();
+                      return o.str();
+                  }()
+               << ',' << [&]() {
+                      std::ostringstream o;
+                      for (int w = 0; w < 2; ++w)
+                      {
+                          const uint64_t n = g.psfch[w][0] + g.psfch[w][1] + g.psfch[w][2] + g.psfch[w][3];
+                          o << n << ',' << g.psfch[w][1] + g.psfch[w][2] << ',' << g.psfch[w][3] << ',';
+                      }
+                      const uint64_t nl = g.psfch[0][0] + g.psfch[0][1] + g.psfch[0][2] + g.psfch[0][3];
+                      o << (nl ? g.psfchTblerLeader / nl : 0.0);
+                      DoubleValue pw;
+                      leaderDev->GetPhy(0)->GetSpectrumPhy()->GetAttribute("SlPsfchTxPowerDbm", pw);
+                      o << ',' << pw.Get();
+                      return o.str();
                   }()
                << '\n';
         }
