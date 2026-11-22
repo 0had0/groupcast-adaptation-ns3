@@ -74,7 +74,7 @@ ninja -C ns-3-dev/cmake-cache scratch_platoon_harq_robustness_eval_platoon_harq_
 mkdir -p "$HERE/out/traces_log"
 # ---- traces (git-ignored): generate the missing ones, GENJOBS in parallel; each has its own log in
 # out/traces_log/; a failure is retried once on its own (no parallel neighbours), then reported
-SEEDLIST=$(python3 -c "import sys; sys.path.insert(0, '$HERE'); import study; print(*study.parse_seeds('$SEEDS'))")
+SEEDLIST=$(python3 -c "import sys; sys.path.insert(0, '$HERE/scripts'); import study; print(*study.parse_seeds('$SEEDS'))")
 gen_cmd() {   # $1 = hwy | rbt | rbtE, $2 = cars, $3 = seed
   case $1 in
     hwy)  A="--scenario highway";;

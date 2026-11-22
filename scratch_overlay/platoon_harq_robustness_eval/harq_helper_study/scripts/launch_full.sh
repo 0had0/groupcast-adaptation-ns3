@@ -60,7 +60,7 @@ ninja -C ns-3-dev/cmake-cache scratch_platoon_harq_robustness_eval_platoon_harq_
 
 # roundaboutE traces (N -> E exit) are git-ignored: generate the missing ones (needs SUMO)
 for N in 0 60; do
-  for S in $(python3 -c "import sys; sys.path.insert(0, '$HERE'); import study; print(*study.parse_seeds('$SEEDS'))"); do
+  for S in $(python3 -c "import sys; sys.path.insert(0, '$HERE/scripts'); import study; print(*study.parse_seeds('$SEEDS'))"); do
     T="$HERE/../traces/rbtE_ivd30_n${N}_s${S}.csv.gz"
     [ -f "$T" ] && continue
     python3 "$HERE/../gen_mobility.py" --scenario roundabout --ivd 30 --nbg "$N" --seed "$S" --rbt-exit E \

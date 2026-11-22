@@ -82,7 +82,7 @@ cd "$HERE" || exit 2
 mkdir -p out
 unset MAGIC_HELPER_ID NUM_MEMBERS
 MISSING=$(python3 -c "
-import os, sys; sys.path.insert(0, '$HERE'); import study
+import os, sys; sys.path.insert(0, '$HERE/scripts'); import study
 print(*sorted({r['trace'] for r in study.plan('$PROFILE', '$SEEDS') if not os.path.exists(r['trace'])}), sep='\n')")
 if [ -n "$MISSING" ]; then
   echo "missing traces (generate them with launch_density.sh / launch_full.sh first):"; echo "$MISSING"; exit 8
