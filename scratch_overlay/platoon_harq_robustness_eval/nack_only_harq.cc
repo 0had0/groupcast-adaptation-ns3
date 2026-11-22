@@ -250,7 +250,7 @@ NackOnlyHarqController::OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id)
     // the SCI-2A of this PSSCH travels as its own packet (no bearer tag, the header only):
     // the helper it names for the transmitter's own TB (Option 2 with a helper)
     LteRadioBearerTag bearer;
-    if ((m_mode == HarqMode::OPT2 || m_opt1HelperNack) && !p->PeekPacketTag(bearer))
+    if ((m_mode == HarqMode::OPT2 || m_opt1HelperNack || m_blindFallback) && !p->PeekPacketTag(bearer))
     {
         NrSlSciF2aHeader sci;
         if (p->GetSize() > 0 && p->PeekHeader(sci) == p->GetSize())
@@ -304,7 +304,7 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
     m_pendingSeqs[dev].clear();
     tx.node = m_devNode[dev];
     tx.rnti = p.rnti;
-    if ((m_mode == HarqMode::OPT2 || m_opt1HelperNack) && m_helperTakeover)
+    if (((m_mode == HarqMode::OPT2 || m_opt1HelperNack) && m_helperTakeover) || m_blindFallback)
     {
         // the helper this transmission's SCI-2A names (sent just before this trace)
         tx.helperRnti = m_pendingHelper.count(dev) ? m_pendingHelper[dev] : 0;
@@ -358,6 +358,11 @@ NackOnlyHarqController::OnPsschScheduling(size_t dev, SlPsschUeMacStatParameters
     }
     m_lastTxOfHarq[tx.harqId] = idx;
     m_txs.push_back(tx);
+    if (m_blindFallback && dev == 0)
+    {
+        // blind helper: no feedback decision; check the helper's next handed slot right away
+        MaybeScheduleFallback(idx);
+    }
 
     // PSFCH occasion of this transmission
     SfnSf sfn(p.frameNum, static_cast<uint8_t>(p.subframeNum), static_cast<uint8_t>(p.slotNum),
@@ -671,7 +676,7 @@ NackOnlyHarqController::Decide(size_t idx)
 void
 NackOnlyHarqController::SetLeaderFallback(bool on)
 {
-    m_fallback = on && m_mode != HarqMode::BLIND;
+    m_fallback = on && (m_mode != HarqMode::BLIND || m_blindFallback);
     if (m_fallback)
     {
         m_leader->GetPhy(0)->GetSpectrumPhy()->TraceConnectWithoutContext(

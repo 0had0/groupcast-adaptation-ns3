@@ -254,6 +254,14 @@ class NackOnlyHarqController
      */
     void SetLeaderFallback(bool on);
 
+    /**
+     * Blind helper (R4) with the leader fallback: the leader reads the helper named in its
+     * SCI-2A and, after each of its own transmissions, listens in the helper's next handed
+     * slot; if it decodes no SCI of the helper there, it takes back the following handed
+     * slot (no HARQ feedback is involved). Call before SetLeaderFallback.
+     */
+    void SetBlindHelperFallback(bool on) { m_blindFallback = on && m_mode == HarqMode::BLIND; }
+
     // hooks used by the SAP wrappers
     void OnPsschPdu(size_t dev, Ptr<Packet> p, uint32_t dstL2Id);
     void OnPsfch(size_t dev, uint32_t nodeId, const SlHarqInfo& info);
@@ -287,6 +295,7 @@ class NackOnlyHarqController
     bool m_opt1HelperNack{false};
     bool m_helperTakeover{true};
     bool m_fallback{false};
+    bool m_blindFallback{false};  //!< blind helper: fallback after every own transmission
     std::map<uint8_t, uint8_t> m_pendingOrigin;           //!< HARQ id -> origin of its next retx
     std::map<uint16_t, std::set<int64_t>> m_sciHeard;     //!< leader: slots with a decoded SCI per RNTI
     std::map<uint16_t, std::set<int64_t>> m_sciFailed;    //!< leader: slots with a failed SCI per RNTI

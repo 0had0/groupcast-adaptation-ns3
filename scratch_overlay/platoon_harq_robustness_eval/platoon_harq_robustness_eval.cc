@@ -1503,6 +1503,7 @@ main(int argc, char* argv[])
     bool opt1HelperNack = true;      // Option 1: helper NACK on its own resource -> reclaim
     bool helperTakeover = true;      // R5 / R6: helper NACK / silence lets the leader take over
     bool leaderFallback = true;      // R5 / R6: leader retransmits if the helper stays silent
+    bool blindHelperFallback = false; // R4: the leader fallback with the blind helper (arm R4 + C + fallback)
     bool softCombining = true;       // HARQ-IR at the receivers (false: ablation)
     bool sciOnEveryTx = false;       // SCI 1-A with every PSSCH (3GPP); false: CTTC default
     double camPeriodMs = 100.0;     // CAM period: positions known to the leader
@@ -1617,6 +1618,12 @@ main(int argc, char* argv[])
                  "slot and, if no SCI of the helper is decoded there, retransmits in the "
                  "following handed slot",
                  leaderFallback);
+    cmd.AddValue("blindHelperFallback",
+                 "R4 (blind helper): the leader fallback without feedback; after each of its own "
+                 "transmissions the leader listens in the helper's next handed slot and, if no SCI "
+                 "of the helper is decoded there, retransmits in the following handed slot "
+                 "(arm R4 + C + fallback with --blindSoftCombining=true)",
+                 blindHelperFallback);
     cmd.AddValue("softCombining",
                  "receivers soft-combine (HARQ-IR) retransmissions; false: every copy is an "
                  "independent attempt (ablation of the HARQ-IR gain)",
@@ -1970,6 +1977,7 @@ main(int argc, char* argv[])
                     "bad --helperSelect " << helperSelect);
     NS_ABORT_MSG_IF(helperSelect != "off" && !coop, "--helperSelect needs a cooperative arm");
     NS_ABORT_MSG_IF(helperBlind && !coop, "--helperBlind needs a cooperative arm");
+    NS_ABORT_MSG_IF(blindHelperFallback && !helperBlind, "--blindHelperFallback needs the blind helper (R4)");
     g.hselOn = (helperSelect != "off");
 
     // Option 1 at the receivers: NACK only, inside the MCR (disabled for Option 2 and blind)
@@ -2164,7 +2172,8 @@ main(int argc, char* argv[])
     ctl.SetExactPsfchAttribution(psfchExactAttribution);
     ctl.SetHelperTakeover(helperTakeover);
     ctl.SetOpt1HelperNack(opt1HelperNack && helperTakeover && coop && !helperBlind);
-    ctl.SetLeaderFallback(leaderFallback && helperTakeover && coop && !helperBlind);
+    ctl.SetBlindHelperFallback(blindHelperFallback && leaderFallback && helperTakeover && coop && helperBlind);
+    ctl.SetLeaderFallback(leaderFallback && helperTakeover && coop && (!helperBlind || blindHelperFallback));
     ctl.SetFeedbackCallback(MakeCallback(&HelperSelector::OnFeedback, &hsel));
 
     uint8_t helperFbMode = 0;
@@ -4298,7 +4307,8 @@ main(int argc, char* argv[])
                << ctl.nFbLate << ',' << ctl.nHelperNackStale << ',' << blindSoftCombining << ','
                << (opt1HelperNack && helperTakeover && coop && !helperBlind && harqMode == "opt1") << ','
                << (kFixedSize.count(traffic) ? kFixedSize.at(traffic) : 0) << ','
-               << helperTakeover << ',' << (leaderFallback && helperTakeover && coop && !helperBlind)
+               << helperTakeover << ','
+               << (leaderFallback && helperTakeover && coop && (!helperBlind || blindHelperFallback))
                << ',' << softCombining << ',' << ctl.nFallbackCheck << ',' << ctl.nFallbackHeard
                << ',' << ctl.nFallbackTx << ',' << ctl.nFallbackNoSlot << ','
                << g.ndiToggleNewTb << ',' << sciOnEveryTx << ',' << helperMissProb << ','
