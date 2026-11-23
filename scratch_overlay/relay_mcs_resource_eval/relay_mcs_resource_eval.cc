@@ -211,7 +211,7 @@ main(int argc, char* argv[])
     sp.scenario         = BandwidthPartInfo::V2V_Highway;
     sp.adaptiveMcs      = false; // fixed-MCS sweep
     sp.schedulerMode    = "sbsps";
-    sp.mcdMeters        = mcdMeters;
+    sp.mcrMeters        = mcdMeters;
     sp.rriList          = {static_cast<uint16_t>(std::lround(leaderRriMs))};
 
     // Per-node MCS override: in relay mode, pin the relay node to mcsHop2

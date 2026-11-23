@@ -230,7 +230,7 @@ main(int argc, char* argv[])
     sp.scenario         = BandwidthPartInfo::V2V_Highway;
     sp.adaptiveMcs      = false; // fixed MCS sweep
     sp.schedulerMode    = "sbsps";
-    sp.mcdMeters        = mcdMeters;
+    sp.mcrMeters        = mcdMeters;
     // Build RRI list: only the leader RRI (10 ms)
     sp.rriList          = {static_cast<uint16_t>(std::lround(leaderRriMs))};
 

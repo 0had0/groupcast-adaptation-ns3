@@ -245,7 +245,7 @@ main(int argc, char* argv[])
     // counter is delivered — so the sender always retransmits up to maxNumTx.
     // We KEEP psfchPeriod >= 1 here to model real HARQ with feedback, matching
     // the paper's "HARQ retransmission scheme" (Fig. 12(b) vs 13(b)).
-    stackParams.harqOption       = 1;
+    stackParams.harqOption       = 2;
     stackParams.mcrMeters        = 0.0;       // no distance gate; single-dstL2Id group
 
     // Compute the actual subchannel count for the configured BW and bwPRBs.
@@ -272,7 +272,7 @@ main(int argc, char* argv[])
     // DoReceivePsfch does not always erase retx grants on ACK, so ~98% of
     // retx TBs fire wastefully and clog the channel. Setting to 1 makes
     // PRR_after_HARQ >= PRR_before_HARQ (HARQ can only rescue, not hurt).
-    stackParams.maxNumPerReserve = 1;
+    stackParams.maxNumPerReserve = 3;
     // Sensing-based SPS (Mode-2) — the paper's actual scheduler. We do NOT
     // add an explicit FDM/TDM partition: doing so siloes UEs onto disjoint
     // subchannels and makes their sensing blind to each other, which lets

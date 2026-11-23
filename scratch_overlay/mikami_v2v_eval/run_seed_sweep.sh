@@ -41,6 +41,7 @@ for ((s = 1; s <= N_SEEDS; s++)); do
     --outputDir="$RUN_DIR/" \
     --outRunCsv="$RUN_CSV" \
     --outPacketsCsv="$PKT_CSV" \
+    --numSubchannels="${NUM_SUBCHANNELS:-0}" \
     2>&1 | tail -5
 
   # 2) post-process (DataCache filters pktTxRx/psschRxUePhy by SEED/RUN; pass them through)
