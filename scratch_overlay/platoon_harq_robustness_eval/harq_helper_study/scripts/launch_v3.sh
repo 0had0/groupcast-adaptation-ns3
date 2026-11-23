@@ -7,7 +7,8 @@
 # arms instead (R4, R4.1, R4.2, R5, R6 with --helperSelect=map, 1500 runs). --psfch: the sl-PSFCH-Period
 # sensitivity on the same configuration (R2, R3, R4.2, R6 at period 2 and 4, R1 without PSFCH; 0 and 60 cars,
 # 1080 runs; period 1 = out/v3). --fb: "R4 + C + fallback" (R4_bsc_fb: the blind helper with soft combining and
-# the leader fallback), same cells and seeds as v3 (300 runs; reference R4_bsc in out/v3). Run it after v3 (or split the cores with --jobs): both use the same CPUs.
+# the leader fallback), same cells and seeds as v3 (300 runs; reference R4_bsc in out/v3). --fbs: "R4 + C + fallback,
+# spaced" (R4_bsc_fbs: the same with --blindPsfchGap=true), 300 runs in out/v3_fbs. Run it after v3 (or split the cores with --jobs): both use the same CPUs.
 # Needs the NR patch of this commit: run with --setup once after pulling (applies patches/nr/local.patch).
 #   1. (optional) update the checkout:   --pull BRANCH
 #   2. (optional) setup.sh --force; build the simulator (always, ninja is a no-op when up to date)
@@ -15,7 +16,7 @@
 #   4. smoke: short runs at 15 cars, seed 1 (profile v3_smoke: 60, v3_map_smoke: 30, psfch_smoke: 54) + checks,
 #      including "SCI 1-A on every PSSCH" and "leader on dynamic grants" for aperiodic; aborts on any failure
 #   5. study.py run in the background (nohup, resumable: re-run this script to continue)
-# Usage: launch_v3.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--map | --psfch | --fb]
+# Usage: launch_v3.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--map | --psfch | --fb | --fbs]
 #                     [--no-smoke]
 #          --out DIR     output folder (default out/v3, out/v3_map with --map, out/psfch with --psfch),
 #                        log out/<basename DIR>_run.log;
@@ -28,7 +29,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; MAP=0; PSFCH=0; FB=0; OUT=""; ONLY=""
+JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; MAP=0; PSFCH=0; FB=0; FBS=0; OUT=""; ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -39,14 +40,15 @@ while [ $# -gt 0 ]; do
     --only) ONLY="$2"; shift 2;;
     --map) MAP=1; shift;;
     --fb) FB=1; shift;;
+    --fbs) FBS=1; shift;;
     --psfch) PSFCH=1; shift;;
     --no-smoke) SMOKE=0; shift;;
     --stop) STOP=1; shift;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
-[ $((MAP + PSFCH + FB)) -gt 1 ] && { echo "--map, --psfch and --fb exclude each other"; exit 2; }
-PROFILE=v3; [ "$MAP" = 1 ] && PROFILE=v3_map; [ "$PSFCH" = 1 ] && PROFILE=psfch; [ "$FB" = 1 ] && PROFILE=v3_fb
+[ $((MAP + PSFCH + FB + FBS)) -gt 1 ] && { echo "--map, --psfch, --fb and --fbs exclude each other"; exit 2; }
+PROFILE=v3; [ "$MAP" = 1 ] && PROFILE=v3_map; [ "$PSFCH" = 1 ] && PROFILE=psfch; [ "$FB" = 1 ] && PROFILE=v3_fb; [ "$FBS" = 1 ] && PROFILE=v3_fbs
 [ -z "$OUT" ] && OUT=out/${PROFILE}
 case "$OUT" in /*) OUTABS="$OUT";; *) OUTABS="$HERE/$OUT";; esac
 OUTABS="${OUTABS%/}"

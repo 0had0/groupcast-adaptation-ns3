@@ -77,6 +77,7 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
   uint32_t m_leaderTxCount{1};
     bool m_chainedResActive{false};
     uint32_t m_helperMinGap{2}; //!< min slots between the leader's last tx and the helper's first
+    bool m_blindPsfchGap{false}; //!< blind chained reservations keep the PSFCH minimum time gap
     bool m_helperOwnResources{false}; //!< helper-picks-resource arm
     uint32_t m_additiveRelays{0}; //!< additive arm: helper copies on its own resources (0 = off)
     SfnSf m_pendingDeadline;          //!< deadline of the TB being allocated

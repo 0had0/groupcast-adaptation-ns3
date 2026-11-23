@@ -1504,6 +1504,7 @@ main(int argc, char* argv[])
     bool helperTakeover = true;      // R5 / R6: helper NACK / silence lets the leader take over
     bool leaderFallback = true;      // R5 / R6: leader retransmits if the helper stays silent
     bool blindHelperFallback = false; // R4: the leader fallback with the blind helper (arm R4 + C + fallback)
+    bool blindPsfchGap = false; // R4: blind slots selected with the PSFCH minimum time gap (spaced arm)
     bool softCombining = true;       // HARQ-IR at the receivers (false: ablation)
     bool sciOnEveryTx = false;       // SCI 1-A with every PSSCH (3GPP); false: CTTC default
     double camPeriodMs = 100.0;     // CAM period: positions known to the leader
@@ -1624,6 +1625,11 @@ main(int argc, char* argv[])
                  "of the helper is decoded there, retransmits in the following handed slot "
                  "(arm R4 + C + fallback with --blindSoftCombining=true)",
                  blindHelperFallback);
+    cmd.AddValue("blindPsfchGap",
+                 "R4 (blind helper): select the TB's reserved slots with the minimum time gap of "
+                 "HARQ feedback (as R6 does), so the leader fallback always has time to take back "
+                 "the next handed slot (NrSlCoopScheduler::BlindPsfchGap)",
+                 blindPsfchGap);
     cmd.AddValue("softCombining",
                  "receivers soft-combine (HARQ-IR) retransmissions; false: every copy is an "
                  "independent attempt (ablation of the HARQ-IR gain)",
@@ -1797,6 +1803,7 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSpectrumPhy::SlSoftCombining", BooleanValue(softCombining));
     Config::SetDefault("ns3::NrSlUeMacSchedulerFixedMcs::SciOnEveryTx", BooleanValue(sciOnEveryTx));
     Config::SetDefault("ns3::NrSlCoopScheduler::SciOnEveryTx", BooleanValue(sciOnEveryTx));
+    Config::SetDefault("ns3::NrSlCoopScheduler::BlindPsfchGap", BooleanValue(blindPsfchGap));
     if (!testFixedSinr.empty())
     {
         Config::SetDefault("ns3::NrSpectrumPhy::SlTestFixedSinr", StringValue(testFixedSinr));
@@ -1978,6 +1985,7 @@ main(int argc, char* argv[])
     NS_ABORT_MSG_IF(helperSelect != "off" && !coop, "--helperSelect needs a cooperative arm");
     NS_ABORT_MSG_IF(helperBlind && !coop, "--helperBlind needs a cooperative arm");
     NS_ABORT_MSG_IF(blindHelperFallback && !helperBlind, "--blindHelperFallback needs the blind helper (R4)");
+    NS_ABORT_MSG_IF(blindPsfchGap && !helperBlind, "--blindPsfchGap needs the blind helper (R4)");
     g.hselOn = (helperSelect != "off");
 
     // Option 1 at the receivers: NACK only, inside the MCR (disabled for Option 2 and blind)
@@ -4077,7 +4085,7 @@ main(int argc, char* argv[])
               "psfch_delay_us,activation_us,min_gap_proc,takeover_late,takeover_late_no_slot,"
               "fallback_late,fallback_late_no_slot,cancel_late,helper_fb_late,psfch_err_mode,psfch_miss_prob,"
               "psfch_n2a_prob,psfch_fb_leader,psfch_lost_leader,psfch_n2a_leader,psfch_fb_members,"
-              "psfch_lost_members,psfch_n2a_members,psfch_tbler_leader_mean,psfch_tx_dbm\n";
+              "psfch_lost_members,psfch_n2a_members,psfch_tbler_leader_mean,psfch_tx_dbm,blind_psfch_gap\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4352,7 +4360,7 @@ main(int argc, char* argv[])
                       o << ',' << pw.Get();
                       return o.str();
                   }()
-               << '\n';
+               << ',' << blindPsfchGap << '\n';
         }
     }
 

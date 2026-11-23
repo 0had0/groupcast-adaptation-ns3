@@ -64,6 +64,14 @@ NrSlCoopScheduler::GetTypeId(void)
                       UintegerValue(2),
                       MakeUintegerAccessor(&NrSlCoopScheduler::m_helperMinGap),
                       MakeUintegerChecker<uint32_t>(1))
+        .AddAttribute("BlindPsfchGap",
+                      "Blind retransmissions with chained reservations: select the TB's slots "
+                      "with the minimum time gap of HARQ feedback (MinTimeGapPsfch + processing, "
+                      "as with feedback enabled) instead of without it, so that a leader "
+                      "fallback has time to take back the next handed slot",
+                      BooleanValue(false),
+                      MakeBooleanAccessor(&NrSlCoopScheduler::m_blindPsfchGap),
+                      MakeBooleanChecker())
         .AddAttribute("HelperOwnResources",
                       "Helper-picks-resource arm: the leader reserves only its own "
                       "LeaderTxCount transmission(s); the helper selects its own resources "
@@ -2082,7 +2090,7 @@ NrSlCoopScheduler::SelectResourcesForBlindRetransmissions(std::list<SlResourceIn
     std::list<SlResourceInfo> sel;
     for (int attempt = 0; attempt < 50; ++attempt)
     {
-        sel = SelectBlindOnce(txOpps);
+        sel = m_blindPsfchGap ? SelectResourcesWithConstraint(txOpps, true) : SelectBlindOnce(txOpps);
         if (sel.size() <= m_leaderTxCount)
         {
             return sel; // no slot for the helper

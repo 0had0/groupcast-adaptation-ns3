@@ -53,6 +53,10 @@ ARMS = {
     # "R4 + C + fallback": R4_bsc plus the leader fallback (the leader takes back a handed slot when it hears
     # no SCI of the helper in the one before; profile v3_fb)
     'R4_bsc_fb': ['--retx=R4'] + KUO + ['--blindSoftCombining=true', '--blindHelperFallback=true'],
+    # "R4 + C + fallback, spaced" (profile v3_fbs): the same, with the TB's reserved slots selected with the PSFCH
+    # minimum time gap as R6's, so the fallback always has time to take back the next handed slot
+    'R4_bsc_fbs': ['--retx=R4'] + KUO + ['--blindSoftCombining=true', '--blindHelperFallback=true',
+                                         '--blindPsfchGap=true'],
 }
 # the helper arms with the map selector: same flags as the Kuo arm, only --helperSelect differs
 MAP_ARMS = [a + '_map' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6')]
@@ -65,7 +69,7 @@ for _a in PSFCH_ARMS:
     _b, _p = _a.rsplit('_p', 1)
     ARMS[_a] = ARMS[_b] + [f'--psfchPeriod={_p}']
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
-          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo', 'R4_bsc_fb': 'kuo+fallback',
+          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo', 'R4_bsc_fb': 'kuo+fallback', 'R4_bsc_fbs': 'kuo+fallback',
           'R4_map': 'map', 'R4.1_map': 'map', 'R4.2_map': 'map', 'R5_map': 'map+takeover',
           'R6_map': 'map+takeover'}
 DIAG = ['--writeAtt=true', '--writeAllTx=true', '--writeGrants=true']
@@ -126,18 +130,20 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=parse_seeds(seeds_arg or '1-10'),
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
                     arms=['R2', 'R4.1', 'R5'] if fill else MAP_ARMS, bglevels=bgl)
-    if profile in ('v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke'):
+    if profile in ('v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke'):
         # v3: the campaign re-run with SCI 1-A on every PSSCH (--sciOnEveryTx=true, every UE) and the leader's
         # aperiodic traffic on dynamic grants (no --aperiodicRri: the simulator keeps SB-SPS for periodic traffic
         # only). Every Kuo arm incl. R1_bsc / R4_bsc, periodic1tb + aperiodic1tb, 0 / 15 / 30 / 45 / 60 cars at
         # the moderate per-car load, 10 seeds (3000 runs). v3_map: the five map-selection arms, same cells (1500).
         # v3_fb: "R4 + C + fallback" (R4_bsc_fb), same cells and seeds (300 runs); its reference is R4_bsc in out/v3.
+        # v3_fbs: "R4 + C + fallback, spaced" (R4_bsc_fbs), same cells and seeds (300 runs).
         # *_smoke: launcher check, every arm x scenario x traffic at 15 cars, seed 1, short runs.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]
         bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
         smoke = profile.endswith('_smoke')
-        arms = MAP_ARMS if profile.startswith('v3_map') else ['R4_bsc_fb'] if profile.startswith('v3_fb') else \
+        arms = MAP_ARMS if profile.startswith('v3_map') else ['R4_bsc_fbs'] if profile.startswith('v3_fbs') else \
+            ['R4_bsc_fb'] if profile.startswith('v3_fb') else \
             ['R1', 'R1_bsc', 'R2', 'R3', 'R4', 'R4_bsc', 'R4.1', 'R4.2', 'R5', 'R6']
         return dict(scen=['highway', 'roundabout', 'roundaboutE'],
                     bgs=['n15'] if smoke else ['none'] + list(DENSITY) + ['moderate'],
@@ -348,13 +354,18 @@ def cmd_check(a):
             continue
         x = read_csv(pre + '_run.csv')[0]
         arm = r['arm']
-        fb = arm.endswith('_fb')
-        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '').replace('_fb', '').split('_p')[0]
+        fb = arm.endswith('_fb') or arm.endswith('_fbs')
+        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '').replace('_fbs', '').replace('_fb', '') \
+            .split('_p')[0]
         f = lambda k: float(x[k])
         chk(0.0 <= f('prr_mean') <= 1.0 and 0.0 <= f('prr_min') <= f('prr_mean') + 1e-9, name + ': PRR range')
         chk(x['blind_soft_combining'] == ('1' if '_bsc' in arm else '0'), name + ': blind_soft_combining flag')
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
+        if 'blind_psfch_gap' in x:
+            chk(x['blind_psfch_gap'] == ('1' if arm.endswith('_fbs') else '0'), name + ': blind_psfch_gap flag')
+        elif arm.endswith('_fbs'):
+            chk(False, name + ': no blind_psfch_gap column')
         if '_p' in arm:
             chk(x['psfch_period'] == arm.rsplit('_p', 1)[1], name + ': psfch_period')
         if a.profile.startswith('v3') or a.profile.startswith('psfch'):
@@ -407,7 +418,7 @@ def main():
     ap.add_argument('action', choices=['run', 'check', 'list'])
     ap.add_argument('--profile', default='smoke',
                     choices=['smoke', 'local1', 'full', 'density', 'density_smoke', 'map', 'map_fill', 'map_smoke',
-                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'psfch',
+                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke', 'psfch',
                              'psfch_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
