@@ -14,6 +14,7 @@ ap.add_argument('--rbt-profile', default='full')
 ap.add_argument('--arms-hwy-profile', default='local1', help='R1/R2/R3 comparison, highway data')
 ap.add_argument('--arms-rbt-profile', default='full', help='R1/R2/R3 comparison, roundabout curve data')
 ap.add_argument('--no-exec', action='store_true')
+ap.add_argument('--output', default='REQUESTS.ipynb', help='notebook file name (in notebooks/)')
 a = ap.parse_args()
 
 md, code = nbf.v4.new_markdown_cell, nbf.v4.new_code_cell
@@ -270,7 +271,7 @@ Trace validation: `python3 scripts/render_rbt_trace.py rbtE_ivd30_n60_s1`."""))
 
 nb = nbf.v4.new_notebook(cells=C, metadata={'kernelspec': {'name': 'python3', 'display_name': 'Python 3',
                                                            'language': 'python'}})
-out = nb_layout.notebook_path('REQUESTS.ipynb')
+out = nb_layout.notebook_path(a.output)
 nbf.write(nb_layout.add_preamble(nb), out)
 print(out)
 if not a.no_exec:

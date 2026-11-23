@@ -12,6 +12,9 @@ the highway and both roundabout routes. Every command is the campaign-v3 command
 itself: the local build reproduces those runs bit for bit (checked on R6, highway, seed 1).
 
   python3 campaign.py [--jobs 4] [--phase fixed|controlled|all] [--dry-run] [--no-analysis]
+  python3 campaign.py --set fb   # controlled phase only, for R4_bsc_fb (data, sci) and R4_bsc sci, into
+                                 # out/local_helperrx_fb, no analysis (see build_hrx_fb_notebook.py)
+  python3 campaign.py --set fbs  # the same for R4 + C + fallback with spaced slots (R4_bsc_fbs), with p = 0
 
 Resumable: a job whose <out>_run.csv.gz exists is skipped. A finished run's CSV files are gzipped (about 0.15 MB per
 run instead of 0.75). Progress: out/local_helperrx/status.json (monitor.py), log: out/local_helperrx/campaign.log,
@@ -40,7 +43,9 @@ ROOT = STUDY.parents[2]  # groupcast-adaptation-ns3
 NS3 = ROOT / "ns-3-dev"
 BIN = NS3 / "build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-default"
 V3 = STUDY / "out/remote_v3"
+V3_OF = {"R4_bsc_fb": STUDY / "out/remote_v3_fb"}  # arms of other campaigns (v3 command + one flag)
 OUT = STUDY / "out/local_helperrx"
+OUT_FB = STUDY / "out/local_helperrx_fb"  # --set fb: R4 + C + fallback against the R6 sweep
 ANALYTICAL = Path(os.environ.get("COOPHARQ_ANALYTICAL", "/Users/hadih/Documents/coop-harq-analytical"))
 SERVER_ROOT = "/home/ease/Documents/groupcast-adaptation-ns3"
 
@@ -49,12 +54,23 @@ SEEDS = range(1, 11)
 HELPERS = range(1, 9)
 PROBS = (0.1, 0.2, 0.3, 0.5, 0.7)
 CONTROLLED_ARMS = (("R4_bsc", "data"), ("R6", "data"), ("R6", "sci"))
+# --set fb (2026-11-22): the same controlled sweep for R4 + C + fallback, both miss modes, plus the R4_bsc sci twin
+FB_ARMS = (("R4_bsc_fb", "data"), ("R4_bsc_fb", "sci"), ("R4_bsc", "sci"))
+# --set fbs (2026-11-23): R4 + C + fallback with spaced slots (--blindPsfchGap=true: the TB's reserved slots keep
+# the PSFCH minimum time gap, as R6's), both miss modes, plus its own p = 0 runs (not in campaign v3)
+FBS_ARMS = (("R4_bsc_fbs", "data"), ("R4_bsc_fbs", "sci"))
+EXTRA_FLAGS = {"R4_bsc_fbs": dict(blindPsfchGap="true")}  # arm = base arm's v3 command + these flags
+BASE_ARM = {"R4_bsc_fbs": "R4_bsc_fb"}
 
 
 def base_cmd(arm: str, cell: str, seed: int) -> list[str]:
-    cmd = json.load(open(V3 / arm / f"{cell}_s{seed}.cmd.json"))
+    base = BASE_ARM.get(arm, arm)
+    cmd = json.load(open(V3_OF.get(base, V3) / base / f"{cell}_s{seed}.cmd.json"))
     cmd = [c.replace(SERVER_ROOT, str(ROOT)) for c in cmd]
     cmd[0] = str(BIN)
+    if arm in EXTRA_FLAGS:
+        cmd = [c for c in cmd if c.split("=")[0].lstrip("-") not in EXTRA_FLAGS[arm]]
+        cmd = cmd + [f"--{k}={v}" for k, v in EXTRA_FLAGS[arm].items()]
     return cmd
 
 
@@ -63,8 +79,15 @@ def with_flags(cmd, out: Path, **flags) -> list[str]:
     return keep + [f"--{k}={v}" for k, v in flags.items()] + [f"--out={out}"]
 
 
-def jobs(phase: str) -> list[dict]:
+def jobs(phase: str, arms=CONTROLLED_ARMS, p0=False) -> list[dict]:
     out = []
+    if p0 and phase == "controlled":  # the arms' own no-miss runs (arms not in campaign v3)
+        for seed in SEEDS:
+            for cell in CELLS:
+                for arm in sorted({a for a, _ in arms}):
+                    o = OUT / "controlled" / arm / f"{cell}_s{seed}"
+                    out.append(dict(phase="controlled", arm=arm, cell=cell, seed=seed, helper=0, p=0.0, mode="",
+                                    out=str(o), cmd=with_flags(base_cmd(arm, cell, seed), o)))
     if phase in ("fixed", "all"):
         for seed in SEEDS:
             for cell in CELLS:
@@ -77,7 +100,7 @@ def jobs(phase: str) -> list[dict]:
     if phase in ("controlled", "all"):
         for seed in SEEDS:
             for cell in CELLS:
-                for arm, mode in CONTROLLED_ARMS:
+                for arm, mode in arms:
                     for p in PROBS:
                         o = OUT / "controlled" / arm / f"{cell}_p{p:g}_{mode}_s{seed}"
                         out.append(dict(phase="controlled", arm=arm, cell=cell, seed=seed, helper=0, p=p, mode=mode,
@@ -169,12 +192,21 @@ def main():
     ap.add_argument("--phase", default="all", choices=("fixed", "controlled", "all"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-analysis", action="store_true")
+    ap.add_argument("--set", default="main", choices=("main", "fb", "fbs"),
+                    help="fb: controlled phase of R4_bsc_fb (data, sci) and R4_bsc sci into out/local_helperrx_fb")
     a = ap.parse_args()
+    global OUT
+    arms = CONTROLLED_ARMS
+    p0 = False
+    if a.set == "fb":
+        OUT, arms, a.phase, a.no_analysis = OUT_FB, FB_ARMS, "controlled", True
+    if a.set == "fbs":
+        OUT, arms, a.phase, a.no_analysis, p0 = OUT_FB, FBS_ARMS, "controlled", True, True
     OUT.mkdir(parents=True, exist_ok=True)
     if not BIN.exists():
         sys.exit(f"binary missing: {BIN}")
     phases = ["fixed", "controlled"] if a.phase == "all" else [a.phase]
-    alljobs = {ph: jobs(ph) for ph in phases}
+    alljobs = {ph: jobs(ph, arms, p0) for ph in phases}
     total = {ph: len(alljobs[ph]) for ph in phases}
     already = {ph: sum(done(j) for j in alljobs[ph]) for ph in phases}
     todo = sum(total.values()) - sum(already.values())

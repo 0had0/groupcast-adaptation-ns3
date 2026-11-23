@@ -28,11 +28,13 @@ from scipy import stats  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 DATA = os.path.join(HERE, 'out', 'remote_v3')
-DATA_OF = {'R4_bsc_fb': os.path.join(HERE, 'out', 'remote_v3_fb')}   # arms of other campaigns (same commands + flag)
+DATA_OF = {'R4_bsc_fb': os.path.join(HERE, 'out', 'remote_v3_fb'),
+           'R4_bsc_fbs': os.path.join(HERE, 'out', 'remote_v3_fbs')}   # arms of other campaigns (same commands + flag)
 FIG = os.path.join(HERE, 'figures', 'prr_vs_cbr')
 ARMS = {'R3': ('Leader Opt. 2 (R3)', '#1565c0', 's', '-'),
         'R4_bsc': ('Blind helper + C (R4+C)', '#e65100', '^', '--'),
         'R4_bsc_fb': ('R4 + C + fallback', '#8e24aa', 'v', '-.'),
+        'R4_bsc_fbs': ('R4 + C + fallback, spaced', '#00838f', 's', ':'),
         'R6': ('Cooperative (R6)', '#1b5e20', 'D', '-')}
 SCN = {'hwy': 'Highway', 'rbt': 'Roundabout W', 'rbtE': 'Roundabout E'}
 TRN = {'periodic1tb': 'periodic', 'aperiodic1tb': 'aperiodic'}

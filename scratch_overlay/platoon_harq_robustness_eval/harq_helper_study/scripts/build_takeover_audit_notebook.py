@@ -47,12 +47,12 @@ which P beats B is shown beside it. **Seed-support rule** for binned points: dra
 ≥ 200 pairs (≥ 30 attempts for takeover points); unsupported points are kept in the CSV with `supported = False`
 and no interval, and are not drawn. Lines never bridge an omitted point.
 
-**Design.** R6 vs R4.2 (Option 2) and R5 vs R4.1 (Option 1) differ only in the takeover configuration: same helper
+**Design.** R6 vs R4.2 (Option 2) and R5 vs R4.1 (Option 1) differ in the takeover configuration: same helper
 selector, same traces, same seeds, identical packets (pair counts asserted equal per run and per window below). The
 treatment is the whole takeover package of the protocol: the leader reclaims a handed slot after a helper NACK and,
 through the fallback, after hearing no helper SCI, with the feedback handling that goes with it. The primary
 experimental comparison is this full-run takeover-on / takeover-off contrast. Pairing by seed is a statistical design
-choice; that the two arms are otherwise equivalent rests on the configuration (one flag apart) and on the data checks. Every plot against helper
+choice; that the two arms are otherwise equivalent rests on the configuration (one flag, `helperTakeover`, apart) and on the data checks. That flag does more than the takeover under Option 2: (in R6 the named helper also never ACKs and listens to the other members' feedback, so it can cancel redundant relays; in R4.2 it ACKs like any member and, being half duplex, cannot hear the others in that feedback occasion; `platoon_harq_robustness_eval.cc`, ACK suppression installed only for Option 2 with `helperTakeover`). So R6 − R4.2 is a protocol-package contrast; its transmitted-resource difference mixes the takeover's extra leader copies with the helper's relay cancellation. Under Option 1 (R5 vs R4.1) no member ACKs, so there is no such listening difference; R5 adds the helper's dedicated NACK resource the takeover needs. Every plot against helper
 failure probability is a **descriptive association**: the helper failure rate is an outcome of each run (it depends
 on interference), not a controlled input, and in matched windows the two arms fall in different bins half of the
 time (data check below).
@@ -188,8 +188,8 @@ display((t.div(t.sum(1), axis=0) * 100).round(1))
 
     # ---------------- Fig 2 primary: paired gain
     C.append(md("""## Figure 2 (primary takeover result) — paired PRR gain of the takeover versus background load
-R6 − R4.2 (Option 2) and R5 − R4.1 (Option 1): same selector, traces, seeds and packets; the only difference is the
-takeover. Absolute gain in percentage points with its paired 95 % interval (same seed indices in both arms, 20 000
+R6 − R4.2 (Option 2) and R5 − R4.1 (Option 1): same selector, traces, seeds and packets; the difference is the
+takeover package (for R6 − R4.2 including the helper's ACK suppression and listening, see Design). Absolute gain in percentage points with its paired 95 % interval (same seed indices in both arms, 20 000
 replicates); `all` = loads pooled (seeds resampled jointly across loads). The table adds the relative gain, the
 loss reduction, the number of matched seeds and the seeds in which the takeover arm is better."""))
     C.append(code("""PG = A.paired_by_load(W)

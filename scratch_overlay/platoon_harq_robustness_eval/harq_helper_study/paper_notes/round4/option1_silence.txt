@@ -1,0 +1,8 @@
+                                      dead  all_sci2  m_sci2  all_sci1  m_sci1  mixed_sci  not_silent  m_nack  f_all_sci1  f_all_sci2  f_mixed_sci  f_not_silent
+arm cell                                                                                                                                                        
+R2  hwy_ivd30_aperiodic1tb_moderate  0.292     0.152   0.461     0.080   0.376      0.060       0.000   0.000       0.275       0.520        0.205         0.000
+    rbtE_ivd30_periodic1tb_none      0.361     0.076   0.178     0.177   0.257      0.107       0.000   0.000       0.492       0.211        0.297         0.000
+    rbt_ivd30_aperiodic1tb_moderate  0.487     0.128   0.916     0.100   0.648      0.259       0.000   0.000       0.205       0.264        0.532         0.000
+R6  hwy_ivd30_aperiodic1tb_moderate  0.305     0.031   0.462     0.037   0.450      0.019       0.218   0.518       0.120       0.102        0.062         0.716
+    rbtE_ivd30_periodic1tb_none      0.004     0.001   0.004     0.001   0.003      0.000       0.003   0.005       0.193       0.134        0.000         0.674
+    rbt_ivd30_aperiodic1tb_moderate  0.192     0.009   0.480     0.019   0.444      0.045       0.119   0.231       0.100       0.049        0.234         0.618

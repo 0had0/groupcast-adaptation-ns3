@@ -57,7 +57,7 @@ with pd.option_context('display.max_rows', 100):
     display(T[T.nbg == 60].pivot_table(index=['route', 'traffic'], columns='scheme',
                                        values=['dprr', 'dworst']).round(1))
 M.round(4).to_csv(f'{P.FIG}/prr_vs_cbr.csv', index=False)"""))
-    C.append(md(r"""## 4. Findings (R3, R4+C, R6; pool CBR 0 → 0.70)
+    C.append(md(r"""## 4. Findings (pool CBR 0 → 0.70)
 
 **The load axis.** 0 / 15 / 30 / 45 / 60 vehicles give a pool CBR of 0.01 / 0.23–0.24 / 0.42–0.43 / 0.58–0.59 /
 0.69–0.70 (offered load 0.01 / 0.25 / 0.49 / 0.74 / 0.99). Earlier notes quoting "CBR 0.99" at 60 vehicles used the
@@ -81,7 +81,27 @@ offered load.
   −33.6, R6 −24.0 pp. On the roundabouts R4+C and R6 lose 6–20 pp, R3 only 2–7 pp, from a much lower start
   (18–34 %): its worst member is limited by blockage, not by the load.
 - R4+C keeps most of R6's worst-member level with periodic traffic (40.4 vs 42.4 % at 60 vehicles, W) but not with
-  aperiodic traffic (23.9 vs 30.9 %, E: 39.2 vs 49.6 %)."""))
+  aperiodic traffic (23.9 vs 30.9 %, E: 39.2 vs 49.6 %).
+
+**R4 + C + fallback** (campaign `v3_fb`; paired analysis in `R4C_FALLBACK.ipynb`).
+- It lies between R4+C and R6 everywhere and removes most of R4+C's load sensitivity. At CBR 0.70 with aperiodic
+  traffic its group PRR is 78.9 % on the highway, 65.2 % on W and 71.1 % on E, against 68.3 / 59.1 / 65.1 % for
+  R4+C and 85.6 / 69.8 / 77.4 % for R6.
+- It stays below R3 on the highway with aperiodic traffic (78.9 vs 85.5 %) and above R3 on both roundabouts.
+- **Worst member:** it gains on the highway (64.3 vs 56.4 % at 60 vehicles, aperiodic) but stays at R4+C's level on
+  the roundabouts (25.6 vs 23.9 % W, 40.1 vs 39.2 % E), well below R6.
+
+**R4 + C + fallback, spaced** (`R4_bsc_fbs`, campaign `v3_fbs`, commit a54a785; the handed slots keep the PSFCH
+minimum gap so the leader can always take the second one back). Paired over the same 10 seeds:
+- **Highway, aperiodic:** the spacing gain grows with the load, from +0.2 pp at 0 vehicles to +4.3 ± 2.2 pp at CBR 0.70
+  (83.2 vs 78.9 %), which closes about two thirds of the gap to R6 (85.6 %, still −2.4 ± 1.3 pp). With periodic traffic
+  the arms are within 1 pp of each other.
+- **Roundabouts:** spacing is worth 0 to +2 pp, never significant (largest +2.0 ± 2.0 pp, E aperiodic at 60 vehicles).
+  R6 stays 2–4 pp ahead with aperiodic traffic at every load (W 60 vehicles: 66.2 vs 69.8 %, −3.6 ± 1.8 pp).
+- **Worst member:** spacing does not move it on the roundabouts; R6 keeps a 4–9 pp lead with aperiodic traffic
+  (E at 60 vehicles: 40.6 vs 49.6 %, −9.0 ± 2.6 pp).
+- So the slot spacing explains the R6 gap when the helper is silent (helper-miss sweep), and part of it under load
+  on the highway, but not the remaining gap on the roundabouts without forced helper misses."""))
     C.append(code(r"""if 'R4_bsc_fb' in M.arm.values:
     print('R4 + C + fallback is included above; see the fallback notebook for the paired takeover gain.')
 else:

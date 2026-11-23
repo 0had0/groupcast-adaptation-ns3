@@ -1,0 +1,405 @@
+% =====================================================================================================
+% Conference paper skeleton: cooperative HARQ for NR sidelink platoon groupcast
+% IEEE conference format (IEEEtran), 6 pages + references is the usual budget (VTC / ICC / Globecom).
+%
+% How to use:
+%   - Every \todo{...} is a gap to fill. Every % NOTE: line is guidance; delete it when done.
+%   - Numbers in [brackets] inside comments are results from the current campaigns that you may use;
+%     re-check each one against its notebook before it goes into the text.
+%   - Figures point to harq_helper_study/figures/ (see \graphicspath); the figure files exist already.
+%   - Build: latexmk -pdf main.tex
+% =====================================================================================================
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{../scratch_overlay/platoon_harq_robustness_eval/harq_helper_study/figures/}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+% Scheme names: \scheme{<key>} prints the full name in running text, \Scheme{<key>} the capitalised
+% form (sentence start, table rows). Keys are the simulator arm names; an unknown key prints a red TODO.
+% Change a name in one place here.
+\makeatletter
+\newcommand{\defscheme}[3]{\@namedef{scheme@#1}{#2}\@namedef{Scheme@#1}{#3}}
+\newcommand{\scheme}[1]{\@ifundefined{scheme@#1}{\todo{unknown scheme #1}}{\@nameuse{scheme@#1}}}
+\newcommand{\Scheme}[1]{\@ifundefined{Scheme@#1}{\todo{unknown scheme #1}}{\@nameuse{Scheme@#1}}}
+\makeatother
+\defscheme{R3}{source Option~2 HARQ}{Source Option~2 HARQ}
+\defscheme{R4+C}{blind helper relaying}{Blind helper relaying}
+\defscheme{R4+C+fb}{blind helper relaying with fallback}{Blind helper relaying with fallback}
+\defscheme{R4+C+fbs}{blind helper relaying with fallback and spaced reservations}%
+          {Blind helper relaying with fallback and spaced reservations}
+\defscheme{R6}{cooperative HARQ}{Cooperative HARQ}
+
+\begin{document}
+
+% -----------------------------------------------------------------------------------------------------
+\title{\todo{Title}\\
+% NOTE: name the problem and the answer, e.g. "Cooperative HARQ Relaying for NR Sidelink Platoon
+% Groupcast: When Does a Helper Pay Off?"
+}
+
+\author{
+\IEEEauthorblockN{\todo{Author 1}, \todo{Author 2}}
+\IEEEauthorblockA{\todo{Affiliation, city, country}\\
+\todo{email}}
+}
+
+\maketitle
+
+% -----------------------------------------------------------------------------------------------------
+\begin{abstract}
+% NOTE: 150-200 words. Numbers checked on 2026-11-23 against campaign v3 and the helper-miss sweep:
+%   - vs Option 2 (R3) under blockage: up to 18.7 pp (Roundabout E, aperiodic, no background;
+%     17.8 pp on Roundabout W periodic). "up to 18 pp" is fine, "up to 19 pp" is more exact.
+%   - fewer resources than Option 2: R6 uses 2.4-11.5 % fewer transmissions per packet in every cell
+%     (max 11.5 %, Roundabout E periodic, no background): "up to 12 %" OK, or "up to 11.5 %".
+%   - vs blind helper when the helper misses its first copy (p = 0.7, periodic, no background):
+%     helper drops the payload: +17.3 pp highway, +24.6 pp Roundabout W, +25.5 pp Roundabout E;
+%     helper drops the SCI: +13.0 / +14.3 / +14.4 pp. The draft's "17 pp" matches only the highway
+%     payload case (or the 60-vehicle highway aperiodic load case without forced miss: +17.3 pp).
+%   - resources vs blind helper: R6 uses FEWER at p = 0 (e.g. 1.75 vs 2.86 tx/pkt highway periodic) and
+%     MORE only when takeovers fire often (helper drops the payload at high p on the roundabouts: 2.79 vs
+%     1.58 at p = 0.7) or at high load with aperiodic traffic (2.68 vs 2.39, Roundabout W, 60 veh).
+3GPP sidelink (SL) groupcast hybrid automatic repeat request (HARQ) provides feedback-controlled
+temporal diversity by triggering retransmissions from the source. However, these retransmissions remain
+vulnerable to persistent blockage. Blind helper relaying adds spatial diversity without group feedback,
+but suffers when the helper misses the first transmission. We propose a cooperative groupcast HARQ that
+delegates selected retransmission reservations to a helper, while receivers combine source and helper
+copies in one HARQ process. A helper negative acknowledgment (NACK) triggers a source takeover, and a
+helper that fails to retransmit triggers a fallback to source transmission. Using ns-3 simulations, we
+show a gain of up to \todo{17\,pp (highway) / 25\,pp (roundabouts): choose, see NOTE} percentage
+points (pp) against blind helper relaying when the helper misses the first transmission, and up to
+\todo{18}\,pp against HARQ Option~2 in blockage scenarios. The proposed method uses up to \todo{12}\,\% fewer transmissions than Option~2, and
+\todo{fewer than the blind helper without helper failures, equal or more when takeover and fallback
+are triggered often}.
+\end{abstract}
+
+\begin{IEEEkeywords}
+NR V2X, sidelink, groupcast, HARQ, cooperative retransmissions, Mode~2.
+\end{IEEEkeywords}
+
+% =====================================================================================================
+\section{Introduction}\label{sec:intro}
+% NOTE: about 1 column. Paragraph plan:
+%   P1  Platooning and why reliability of groupcast matters (control loop, PDB = 100 ms periodic).
+%   P2  NR sidelink groupcast HARQ: Option 1 (NACK-only) and Option 2 (ACK/NACK) and their limits:
+%       a member that is blocked from the leader stays blocked for every retransmission.
+%   P3  Relaying by a platoon member (helper): blind relaying is simple but adds load and collisions;
+%       feedback-driven relaying is efficient but depends on PSFCH and on the helper itself.
+%   P4  Gap: \todo{what prior work does not cover (system-level, standard-compliant, under load,
+%       helper failure)}.
+%   P5  Contributions (bullet list below).
+%   P6  Paper organisation (one sentence).
+\todo{Introduction}
+
+\noindent Our contributions are:
+\begin{itemize}
+  \item \todo{A \scheme{R6} protocol for NR sidelink groupcast compatible with Rel-16/17
+        signalling: helper named in SCI-2, relaying on NACK, leader takeover and fallback.}
+  \item \todo{A system-level evaluation in ns-3 across three road scenarios, two traffic types and five
+        channel-busy-ratio (CBR) levels, against leader-only HARQ and blind helper relaying.}
+  \item \todo{A robustness study: forced helper failures (payload vs.\ SCI loss) and PSFCH errors.}
+  \item \todo{A design lesson on resource selection: the PSFCH minimum time gap is what lets the leader
+        recover from a silent helper, also without feedback (spaced blind arm).}
+  % NOTE: keep 3-4 bullets; drop the last one if space is short.
+\end{itemize}
+
+% =====================================================================================================
+\section{Background and Related Work}\label{sec:related}
+\subsection{NR Sidelink Groupcast HARQ}
+% NOTE: still missing from this paragraph: the PSFCH minimum time gap between a PSSCH and its feedback,
+% and that it constrains how close the reserved retransmission slots can be when feedback is enabled
+% (TS 38.214 8.1.4) -- Sec. VI uses this.
+In Mode~2, the transmitting MAC selects SL resources from physical-layer (PHY) sensing results, as
+specified in TS~38.214 and TS~38.321~\cite{3gpp_ts38214,3gpp_ts38321}. The selected set can contain the
+initial transmission and later retransmission opportunities (up to three per transport block (TB),
+depending on the pool configuration). First-stage sidelink control information (SCI) format~1-A
+announces the reservation to nearby UEs. Second-stage SCI carries the source and destination identifiers
+(IDs), HARQ process ID, new data indicator (NDI), and redundancy version (RV)~\cite{3gpp_ts38212}. These
+fields let a receiver associate successive copies with one TB. The physical sidelink feedback channel
+(PSFCH) carries HARQ feedback: groupcast Option~1 uses NACK-only feedback, whereas Option~2 assigns
+receiver-specific ACK/NACK resources~\cite{3gpp_ts38213}.
+
+\subsection{Cooperative Relaying for V2X}
+% NOTE: every citation below must be checked (authors, year, venue, and that the paper says what we
+% claim). kuo2021reliable checked in Zotero (2026-11-23): the source "reserves the retransmission
+% resources and assigns the UEs in the same group to retransmit the TB"; at most two retransmission
+% resources per initial transmission; helper selected from CAM positions; blind retransmission.
+% leibel2020harq checked in Zotero (2026-11-23): Sec. IV, the transmitter selects the forwarding UE from the
+%   HARQ feedback (decoded it, furthest toward the out-of-range members); multi-hop forwarding as in their [13];
+%   no combining with the source's copies is described. Mainly a mixed NACK-only / ACK-NACK feedback paper.
+% aoki2026enhancing (not in Zotero; read on mdpi.com 2026-11-23): Takahashi, Aoki, Tang, Sensors 2026.
+%   BROADCAST at NLOS intersections (not platoon groupcast), Scenargie. The relay uses the source's reserved
+%   retransmission resources; an explicit ACK confirms the relay decoded it (ideal error-free ACK assumed);
+%   "timeout-based fallback" is named as possible but "not evaluated". Delivery modelled as independent
+%   per-link trials (their Eq. 2). Extends their APCC 2024 paper.
+% kim2019efficient (not in Zotero; read on IEEE Xplore 2026-11-23): MDP + heuristic joint relay (R-VE)
+%   selection and time allocation in OFDM symbols per slot; R-VE dynamically chosen each slot among the
+%   source and members that decoded; success per slot is an independent outage event (Eq. 33-34, no
+%   combining); error-free HARQ feedback.
+With Option~2, the source retransmits on its selected resources when feedback triggers it, and the HARQ
+process context remains between the source and the receivers. Kuo's blind helper
+scheme~\cite{kuo2021reliable} lets the source reserve up to two retransmission resources with its initial
+transmission and assign them to a group member selected from the members' positions, which retransmits
+the TB blindly if it decoded it, without group feedback. We assume
+that the receivers combine the copies (feedback-less HARQ), but the source does not recover the
+retransmission resources if the helper misses the packet. Leibel \emph{et al.}~\cite{leibel2020harq}
+let the source use the HARQ feedback to select a member that decoded the packet and forward it to
+out-of-range members, as a separate multi-hop forwarding step that is not combined with the source's
+transmissions. Takahashi \emph{et al.}~\cite{aoki2026enhancing} let a relay retransmit a broadcast packet
+on the source's reserved retransmission resources once an explicit ACK confirms that the relay decoded it,
+assuming error-free ACKs; a fallback after relay failure is mentioned but not evaluated. Kim
+\emph{et al.}~\cite{kim2019efficient} established the benefits of dynamically selecting the retransmitting
+vehicle among the source and the members that decoded the packet, but model each retransmission as an
+independent decoding trial without combining, with error-free feedback and an abstract OFDM-symbol-level
+allocation. In contrast, our approach operates at
+the 3GPP slot and TB level and preserves the sidelink HARQ process across the relay, so that the
+destination members can soft-combine at the PHY.
+
+Unlike standard 3GPP Rel-17/18 sidelink relaying, which operates above RLC via the sidelink relay
+adaptation protocol (SRAP), our scheme works at the PHY and MAC layers. This preserves HARQ process
+continuity across the relay and enables helper-agnostic, source-associated soft combining, early
+termination on receiver feedback, and source recovery through fallback or takeover.
+% NOTE: add 1-2 sentences on system-level NR V2X evaluations (5G-LENA) if a reviewer would expect them.
+
+% =====================================================================================================
+\section{System Model}\label{sec:model}
+% NOTE: about 0.75 column + Fig. 1 (scenario sketch).
+\subsection{Scenarios}
+% NOTE: checked against the code: 9 vehicles (numPlatoon = 9), 35 m between members (5 m car + 30 m gap),
+% highway KPI window 3-52.7 s (about 50 s). \todo{verify the platoon speed (~110 km/h) from the SUMO
+% trace, and the 1 km background area on the highway (the code shows 500 m: mcr = 500)}
+We use ns-3 with the 5G-LENA sidelink module~\cite{ali20213gpp} and SUMO~\cite{sumo} mobility traces. A
+platoon of nine vehicles, each 5\,m long with 30\,m gaps, groupcasts from its leader; apart from the
+helper, when one is used, the leader is the only platoon member that transmits. We define three
+scenarios. On the \emph{highway}, with three lanes per direction, the platoon drives in the middle lane at
+about \todo{110}\,km/h. In the two other scenarios (Fig.~\ref{fig:scenario}) the platoon crosses an urban
+roundabout surrounded by buildings: it enters from the north and leaves to the west after a quarter of
+the ring (\emph{Roundabout~W}) or to the east after three quarters (\emph{Roundabout~E}), so on
+Roundabout~E the platoon stays bent around the buildings longer. On the roundabouts we measure from when
+the first platoon member enters the curve until the last member leaves it; on the highway over a 50\,s
+window.
+
+\begin{figure}[t]
+  \centering
+  \fbox{\parbox[c][3.5cm]{0.9\columnwidth}{\centering \todo{scenario figure: highway and roundabout W/E
+  with the platoon, buildings and background vehicles}}}
+  \caption{Scenarios. \todo{caption}}
+  \label{fig:scenario}
+\end{figure}
+
+\subsection{Traffic}
+% NOTE: checked against the code: PDB 100 ms periodic, 50 ms aperiodic; 60 % of the background vehicles
+% periodic (bgPeriodicFrac = 0.6); loads 0/15/30/45/60 vehicles; pool occupancy up to 0.69 (cbr_occupied).
+% \todo{verify the background placement radius per scenario (code default mcr = 500 m)}
+The leader's traffic follows TR~37.885~\cite{3gpp_tr37885}:
+\begin{enumerate}
+  \item \emph{Periodic}: a packet every 100\,ms (a 300-byte packet, then four of 190 bytes), with a
+        100\,ms packet delay budget (PDB);
+  \item \emph{Aperiodic}: a packet every 50\,ms plus an exponential time of mean 50\,ms, of 200 to
+        1200 bytes in 200-byte steps, with a 50\,ms PDB.
+\end{enumerate}
+Every packet fits in one TB (about \todo{2} of the 5 subchannels on average for periodic traffic, almost
+all 5 for aperiodic traffic), and RLC runs in unacknowledged mode (no segmentation, no ARQ), so a packet
+is received exactly when its TB is decoded and the per-packet PRR equals the TB delivery ratio. The leader
+uses semi-persistent reservations for periodic traffic and dynamic grants for aperiodic traffic; when a
+packet does not fit the current reservation, the leader selects new resources. The pool is shared with
+0, 15, 30, 45 or 60 background vehicles placed at random for each seed within \todo{1\,km} of the platoon
+on the highway and \todo{500}\,m of the roundabout centre. Of these vehicles, 60\,\% send periodic traffic
+on semi-persistent reservations and 40\,\% aperiodic traffic on dynamic grants. The share of
+slot--subchannel cells they occupy (pool CBR) grows with their number, up to 69\,\% at 60 vehicles.
+
+\subsection{Channel and Radio Configuration}
+% NOTE: checked against the code (nr_sl_stack.cc, run.csv): 5.89 GHz, 20 MHz dedicated SL carrier,
+% mu = 1, 5 subchannels of 10 PRBs, MCS 14, 23 dBm, 1x2 isotropic antenna at 1.5 m, sensing window
+% 100 ms, T2 = 33 slots, sl-MaxNumTx = 3, PSFCH period 1 slot. The 5-slot minimum spacing of feedback
+% retransmissions measured in the traces is consistent with a 3-slot PSFCH gap + 2-slot processing.
+% \todo{verify: RSRP threshold -128 dBm, PSSCH-to-PSFCH gap 3 slots, processing gap 2 slots}
+Path loss, shadowing and fast fading follow TR~37.885, with vehicles and buildings as
+blockers~\cite{3gpp_tr37885}. The carrier is 5.89\,GHz with 20\,MHz, a 30\,kHz subcarrier spacing
+(0.5\,ms slots) and 23\,dBm transmit power. We use a fixed modulation and coding scheme (MCS)~14, five
+subchannels of ten resource blocks, HARQ incremental redundancy, and a selection window of 2 to 33
+slots. The PSFCH period is one slot, with a three-slot PSSCH-to-PSFCH gap and a two-slot processing gap.
+Table~\ref{tab:params} lists the settings.
+
+\subsection{Performance Metrics}
+% NOTE: define precisely, the reviewers will check:
+%   group PRR      = mean over members of the share of packets received within the PDB;
+%   worst-member PRR = PRR of the worst member in the run;
+%   transmissions per packet = leader + helper PSSCH transmissions / packets;
+%   pool CBR = share of (slot, subchannel) cells of the pool used by any UE in the KPI window
+%              (each cell counted once; NOT the offered load, which can exceed 1).
+\todo{Metric definitions}
+\begin{equation}
+  \mathrm{PRR}_{\text{group}} = \frac{1}{N}\sum_{m=1}^{N}\frac{|\{k : d_{m,k}\le T_{\text{PDB}}\}|}{K}
+  \label{eq:prr}
+\end{equation}
+
+% =====================================================================================================
+\section{Schemes Compared}\label{sec:schemes}
+% NOTE: one subsection per scheme, or one paragraph each + Table I and a timing figure (Fig. 2) that shows
+% the slots of one TB: leader copy, handed slots, PSFCH occasions, takeover / fallback.
+\subsection{Source Option 2 HARQ}\label{sec:r3}
+\todo{Baseline: the leader retransmits on any NACK; stops on all-ACK.}
+
+\subsection{Blind Helper Relaying}\label{sec:r4c}
+\todo{Helper selected per TB (Kuo's rule), named in SCI-2A; every reserved slot after the leader's
+first copy is handed to the helper, which relays a decoded TB blindly; receivers soft-combine.}
+
+\subsection{Blind Helper Relaying with Fallback}\label{sec:r4cfb}
+\todo{After its own copy the leader listens in the helper's next handed slot; no helper SCI there means the
+helper missed the TB, and the leader takes back the following handed slot. Spaced variant: slots selected
+with the PSFCH minimum time gap so the takeover is always feasible.}
+% NOTE: decide whether this is a full scheme in the paper or an ablation in Sec. VI-D.
+
+\subsection{Proposed Cooperative HARQ}\label{sec:r6}
+\todo{Feedback-driven helper relaying: helper relays on a member NACK; a helper NACK makes the leader take
+the next handed slot back; a silent helper triggers the fallback; transmission stops on all-ACK.}
+% NOTE: add pseudo-code (Algorithm 1) for the leader and helper decisions if space allows.
+
+\begin{table}[t]
+\centering
+\caption{Schemes compared}\label{tab:schemes}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.5cm}cccc@{}}
+\toprule
+Scheme & Helper relays & Feedback & Takeover & Fallback \\
+\midrule
+\Scheme{R3}      & --      & Opt.~2 & --          & --         \\
+\Scheme{R4+C}    & always  & --     & --          & --         \\
+\Scheme{R4+C+fb} & always  & --     & --          & \checkmark \\
+\Scheme{R6}      & on NACK & Opt.~2 & helper NACK & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================================================
+\section{Simulation Setup}\label{sec:setup}
+% NOTE: ns-3 version, 5G-LENA NR module version + what you changed (list the model extensions:
+% helper naming in SCI-2A, slot handover, soft combining of relayed copies, PSFCH error modes, forced
+% helper miss); SUMO scenarios (highway, roundabout W, roundabout E); seeds (10), run length, KPI window,
+% confidence intervals (95 % Student-t over seeds; paired by seed where the schemes share the trace).
+\todo{Simulator, scenarios, seeds, statistics}
+
+\begin{table}[t]
+\centering
+\caption{Simulation parameters}\label{tab:params}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}ll@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Carrier, bandwidth & 5.89\,GHz, 20\,MHz (dedicated) \\
+Numerology & 30\,kHz subcarriers, 0.5\,ms slots \\
+Subchannels & 5 (10 PRBs each) \\
+Transmit power, antenna & 23\,dBm; $1\times2$ isotropic, 1.5\,m high \\
+MCS & 14, fixed \\
+Sensing window, RSRP threshold & 100\,ms, $-128$\,dBm \todo{verify} \\
+Selection window $[T_1,T_2]$ & [2, 33] slots \\
+Transmissions per TB & up to 3 (1 + 2 retransmissions) \\
+PSFCH period, min.\ gap & 1 slot, 3 slots \todo{verify} \\
+HARQ & incremental redundancy \\
+Platoon & 9 vehicles, 5\,m long, 30\,m gaps \\
+Background vehicles & 0, 15, 30, 45, 60 (60\,\% periodic) \\
+Pool CBR (measured) & 0.01--0.69 \\
+Traffic, PDB & periodic 100\,ms; aperiodic 50\,ms \\
+Seeds & 10 per point \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+% =====================================================================================================
+\section{Results}\label{sec:results}
+% NOTE: about 2.5 columns. Lead every subsection with the claim, then the figure, then the number.
+
+\subsection{Reliability Against the Channel Load}
+% NOTE: Fig. prr_vs_cbr (group PRR vs pool CBR, 3 routes x 2 traffic). Claims to consider:
+%  - R4+C is the most load-sensitive scheme: its blind copies add collisions [aperiodic, highway,
+%    0 -> 60 vehicles: 96.7 -> 68.3 %; on the roundabouts it falls to R3's level at CBR 0.70].
+%  - R6 stays on top at every CBR [10-13 pp above R3 and R4+C on the roundabouts at CBR 0.70, aperiodic].
+%  - periodic traffic suffers far less (announced reservations).
+\todo{Group PRR vs CBR}
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.9\textwidth]{prr_vs_cbr/prr_vs_cbr.pdf}
+  \caption{Group PRR against the measured pool CBR. \todo{caption: what to look at}}
+  \label{fig:prr_cbr}
+\end{figure*}
+
+\subsection{The Worst Member}
+% NOTE: Fig. worst_vs_cbr. Claims to consider:
+%  - R6 has the highest worst member everywhere [e.g. 30.9 / 49.6 % at 60 vehicles, aperiodic, W / E,
+%    vs 23.9 / 39.2 % for R4+C and 15.1 / 22.3 % for R3].
+%  - R3's worst member is limited by blockage, not by load, on the roundabouts.
+\todo{Worst-member PRR}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{prr_vs_cbr/worst_vs_cbr.pdf}
+  \caption{Worst-member PRR against pool CBR. \todo{caption}}
+  \label{fig:worst_cbr}
+\end{figure}
+
+\subsection{Cost: Transmissions per Packet}
+% NOTE: table or bar plot of tx/pkt per scheme at 0 and 60 vehicles; R6 cheaper than the blind arms
+% [R4+C+fb 2.6-2.9 tx/pkt vs R6 1.7-2.7]. Reliability per transmission is a good single number.
+\todo{Resource cost}
+
+\subsection{Where the Gain Comes From: the Leader Fallback}
+% NOTE: ablation with R4+C+fb (paired by seed). Claims to consider:
+%  - the fallback alone gives 61-93 % of R6's gain on the highway, 14-76 % on the roundabouts;
+%  - the gain grows with the load [highway aperiodic +2.3 pp at 0 veh -> +10.6 pp at CBR 0.70];
+%  - what is left to R6 on the roundabouts is the feedback-driven reach to blocked members.
+% Figure: r4c_fallback/fallback_gain_vs_cbr.pdf (or a table if space is short).
+\todo{Fallback ablation}
+
+\subsection{Robustness to Helper Failure}
+% NOTE: Fig. helper_miss_fb/prr_vs_p.pdf. The key distinction: payload loss (the helper NACKs) vs SCI
+% loss (the helper is silent). Claims to consider:
+%  - without feedback the two failure types are identical; R6 reacts to a NACK at once and barely
+%    loses PRR [highway 99.8 -> 99.6 % at p = 0.7];
+%  - with a silent helper, R6 and the fallback arm recover the same way (timeout-based takeover);
+%  - resource selection matters: blind selection can place the handed slots back to back, leaving no
+%    time to take one back [~10 % of fallbacks]; selecting with the PSFCH minimum time gap removes it,
+%    after which the spaced blind arm matches R6 with a silent helper.
+\todo{Helper failure}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{helper_miss_fb/prr_vs_p.pdf}
+  \caption{Group PRR against the forced helper miss probability $p$; solid: the helper fails the
+  payload and NACKs, dashed: the helper misses the SCI and stays silent. \todo{caption}}
+  \label{fig:helper_miss}
+\end{figure}
+
+\subsection{Robustness to PSFCH Errors}
+% NOTE: optional if space allows: R6 reliability robust to lost / flipped feedback; cost rises
+% [helper relays after all-ACK: 0.29 / 0.54 per packet at 10 / 30 % loss].
+\todo{PSFCH errors (or move to a sentence in VI-E)}
+
+% =====================================================================================================
+\section{Discussion}\label{sec:discussion}
+% NOTE: 3-4 short paragraphs: (1) when a helper pays off (blockage, load); (2) when it does not
+% (open highway at low load: leader-only Option 2 is enough); (3) standardisation impact (fields in
+% SCI-2, slot handover, min-gap rule); (4) limitations: one platoon, fixed helper rule, 3GPP CBR
+% definition differs from the occupancy measure, simulated rather than measured channel.
+\todo{Discussion and limitations}
+
+% =====================================================================================================
+\section{Conclusion}\label{sec:conclusion}
+% NOTE: 1 paragraph: restate the problem, the protocol, the three headline numbers, one line of
+% future work (analytical model, multiple platoons, helper's own resources).
+\todo{Conclusion}
+
+% -----------------------------------------------------------------------------------------------------
+\section*{Acknowledgment}
+\todo{Funding / acknowledgment, or delete}
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

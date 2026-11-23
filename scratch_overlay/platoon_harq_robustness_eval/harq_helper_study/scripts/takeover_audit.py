@@ -44,7 +44,7 @@ B_DESC = 2000
 RNG_SEED = 20261112
 HF_EDGES = [0, .1, .2, .3, .4, .5, .6, .8, 1.0001]
 KEY = ['sc', 'tr', 'nbg', 'seed']
-PAIRS = [('R6', 'R4.2'), ('R5', 'R4.1')]     # (proposed, baseline): takeover on vs off, same HARQ option
+PAIRS = [('R6', 'R4.2'), ('R5', 'R4.1')]     # (proposed, baseline): takeover package on vs off, same HARQ option (R6 also: helper ACK suppressed, listens)
 
 SCS = ['hwy', 'rbt', 'rbtE']
 TRS = ['periodic1tb', 'aperiodic1tb']

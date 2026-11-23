@@ -88,6 +88,11 @@ def reserved_subch_slots(gr, k0, k1):
             tot += per
     return tot
 
+# subchannel-slot and PSFCH-resource cost (definitions: paper_v2/analysis/paper_data.py, cost_metrics)
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(OUT)), '..', 'paper_v2', 'analysis'))
+import paper_data as PD
+
 runs, members, rec = [], [], []
 for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
     arm = os.path.basename(armdir.rstrip('/'))
@@ -129,6 +134,7 @@ for armdir in sorted(glob.glob(os.path.join(OUT, '*', ''))):
                     rec2 += o == 2
         row['recovered_nack'] = rec1 / (r['pkts'] * NMEM)
         row['recovered_fallback'] = rec2 / (r['pkts'] * NMEM)
+        row.update({k: v for k, v in PD.cost_metrics(pre, arm).items() if k != 'ss_check'})
         runs.append(row)
 R = pd.DataFrame(runs); M = pd.DataFrame(members)
 CELLS = ['scenario', 'traffic', 'bg']
@@ -597,6 +603,30 @@ def build(out, path, profile='local1'):
         "p.plot.bar(yerr=e, capsize=2, figsize=(12, 4), color=[STYLE[a][0] for a in arms], error_kw=dict(lw=.8),\n"
         "           title='Platoon CBR saving vs blind counterpart (%), 95 % CI over seeds (paired)')\n"
         "hatch_bars(plt.gca(), arms); plt.grid(alpha=.3); plt.show()"))
+    c.append(nbf.v4.new_markdown_cell(
+        "## Cost in 3GPP units: subchannel-slots and PSFCH resources\n"
+        "Subchannel-slot = 10 PRB over the whole slot (AGC, PSCCH, PSSCH, DMRS, PSFCH symbols, guard); a PSSCH on L "
+        "subchannels costs L. `ss_pkt` transmitted per packet, `ss_kB` per kB of TB payload (packet + 37 B), "
+        "`ss_resv_kB` reserved in SCI 1-A per kB. PSFCH resource (TS 38.213 sec. 16.3) = 1 PRB x 1 cyclic-shift pair "
+        "(`sl-NumMuxCS-Pair` per PRB): `psfch_alloc_pkt` tied to the HARQ PSSCHs (Option 1: 1 per PSSCH, + R5 helper; "
+        "Option 2: 8 per PSSCH), `psfch_tx_pkt` transmitted on (Option 1: PSSCHs with >= 1 NACK; Option 2: every ACK / NACK). "
+        "Definitions: `paper_v2/analysis/paper_data.py`."))
+    c.append(nbf.v4.new_code_cell(
+        "COSTM = ['ss_pkt', 'ss_kB', 'ss_resv_pkt', 'ss_resv_kB', 'psfch_alloc_pkt', 'psfch_tx_pkt']\n"
+        "Ck = mean_ci(R, COSTM, CELLS + ['arm'])\n"
+        "Ck.pivot_table(index=CELLS, columns='arm', values='ss_kB').round(2)"))
+    c.append(nbf.v4.new_code_cell(
+        "fig, axes = plt.subplots(1, 3, figsize=(17, 4))\n"
+        "for ax, (m, lab) in zip(axes, [('ss_kB', 'subchannel-slots per kB (transmitted)'),\n"
+        "                               ('psfch_alloc_pkt', 'PSFCH resources per packet (allocated)'),\n"
+        "                               ('psfch_tx_pkt', 'PSFCH resources per packet (transmitted)')]):\n"
+        "    arms = [a for a in ORDER if a in set(Ck.arm)]\n"
+        "    p = Ck.pivot_table(index=CELLS, columns='arm', values=m).reindex(columns=arms)\n"
+        "    e = Ck.pivot_table(index=CELLS, columns='arm', values=m + '_ci', dropna=False).reindex(columns=arms).fillna(0)\n"
+        "    p.plot.bar(ax=ax, yerr=e, capsize=1.5, color=[STYLE[a][0] for a in arms], error_kw=dict(lw=.6), legend=False)\n"
+        "    hatch_bars(ax, arms); ax.set_title(lab); ax.grid(alpha=.3)\n"
+        "plt.tight_layout(); plt.show()\n"
+        "Ck.set_index(CELLS + ['arm'])[COSTM].round(2)"))
     c.append(nbf.v4.new_markdown_cell(MD['spectrum']))
     c.append(nbf.v4.new_code_cell(SPECTRUM))
     c.append(nbf.v4.new_code_cell("spectrum_plot(COMP, 'Spectrum use per packet by component (all)', 'PRB x symbols per packet')"))

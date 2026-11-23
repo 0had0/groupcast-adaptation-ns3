@@ -14,6 +14,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--full-dir', default='out/full')
 ap.add_argument('--density-dir', default='out/density')
 ap.add_argument('--no-exec', action='store_true')
+ap.add_argument('--output', default='DENSITY_RESULTS.ipynb', help='notebook file name (in notebooks/)')
 a = ap.parse_args()
 full = os.path.abspath(os.path.join(HERE, a.full_dir) if not os.path.isabs(a.full_dir) else a.full_dir)
 dens = os.path.abspath(os.path.join(HERE, a.density_dir) if not os.path.isabs(a.density_dir) else a.density_dir)
@@ -51,7 +52,7 @@ def rd(p):
     return pd.read_csv(p) if os.path.exists(p) else None
 
 rows, pk = [], []
-for base in (FULL, DENS):
+for base in dict.fromkeys((FULL, DENS)):   # one folder can hold every load (campaign v3)
     for arm in ARMS:
         for f in sorted(glob.glob(f'{{base}}/{{arm}}/*_run.csv*')):
             tag = os.path.basename(f).split('_run.csv')[0]
@@ -178,7 +179,7 @@ display(T['prr'].unstack('nbg')); display(T['worst'].unstack('nbg')); T['res'].u
 
 nb = nbf.v4.new_notebook(cells=C, metadata={'kernelspec': {'name': 'python3', 'display_name': 'Python 3',
                                                            'language': 'python'}})
-out = nb_layout.notebook_path('DENSITY_RESULTS.ipynb')
+out = nb_layout.notebook_path(a.output)
 nbf.write(nb_layout.add_preamble(nb), out)
 print(out)
 if not a.no_exec:

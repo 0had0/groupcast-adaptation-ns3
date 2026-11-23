@@ -119,7 +119,41 @@ axs[0, 0].legend(fontsize=7)
 fig.tight_layout(); fig.savefig(f'{FIG}/fallback_gain_vs_cbr.pdf'); plt.show()"""))
     C.append(md(r"""## 5. Findings
 
-*To be written once the campaign is copied (run the notebook first).*"""))
+Campaign `v3_fb` (commit 3d66267): 300 / 300 runs, 10 seeds per cell, `leader_fallback` = 1 in every run.
+
+**The takeover gain (R4 + C + fallback − R4+C).**
+- The fallback never hurts the group PRR, and the gain grows with the load. **Highway:** +2.3 pp (aperiodic) and
+  +1.2 pp (periodic) at 0 vehicles, rising to +10.6 / +5.2 pp at CBR 0.70. **Roundabouts, aperiodic:** +0.6 to
+  +0.9 pp (not significant) at 0 vehicles, +6.0 / +6.1 pp at CBR 0.70. **Roundabouts, periodic:** at most +3.6 pp,
+  and on W it is significant only at 30 vehicles.
+- The load makes the helper miss more TBs, so the leader takes over more often. On the highway, aperiodic,
+  takeovers per packet rise from 0.10 at 0 vehicles to 0.42 at 60, and the share of checks in which the helper is
+  heard falls from 90 % to 54 %. The fallback mends exactly the losses that make R4+C the most load-sensitive scheme.
+- **Worst member:** clear gains on the highway (+4.7 to +10.8 pp, every load significant). On the roundabouts the
+  change is within ±3.3 pp and never significant. A likely reason: the blocked member does not hear the leader's
+  own copy either, so taking the slot back does not help it.
+- **Cost:** +0.03 to +0.39 transmissions per packet, growing with the load (largest on the highway, aperiodic).
+  R4 + C + fallback uses 2.6–2.9 transmissions per packet against R6's 1.7–2.7. R6 is cheaper everywhere, except
+  with aperiodic traffic on roundabout W at 45–60 vehicles and on E at 60, where the two are equal within the
+  interval.
+
+**How much of R6's gain over R4+C the fallback alone gives.**
+- **Highway:** most of it, 61–93 %. At CBR 0.70 the fallback closes 10.6 of R6's 17.3 pp (aperiodic) and 5.2 of
+  6.6 pp (periodic). With periodic traffic and up to 30 vehicles, what is left to R6 is not significant.
+- **Roundabouts:** less, 14–76 %, and only 14–53 % at 0 vehicles. R6 stays significantly ahead with aperiodic
+  traffic at every load (+2.4 to +6.3 pp in group PRR, +4.3 to +9.5 pp in the worst member).
+- What the fallback does not give is the feedback. R6 retransmits only on a NACK and stops on an all-ACK, which
+  saves transmissions where the channel is good; the remaining worst-member gap suggests it also serves the
+  blocked members better.
+
+**Against R3.**
+- On the roundabouts R4 + C + fallback beats R3 at every CBR (65.2 vs 59.1 % W, 71.1 vs 64.8 % E at CBR 0.70,
+  aperiodic).
+- On the highway with aperiodic traffic it still falls below R3 under load (78.9 vs 85.5 % at CBR 0.70). Its blind
+  relays still add collisions that R3's Option 2 avoids; R6 matches R3 there (85.6 %).
+
+Fallback checks per packet rise from about 1.7 to 2.0–2.2 on the roundabouts at 45–60 vehicles, and not on the
+highway. This is not explained here."""))
     return C
 
 

@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "out/local_helperrx"
+OUT = Path(os.environ.get("HRX_OUT", Path(__file__).resolve().parent.parent / "out/local_helperrx"))
 SESSION = os.environ.get("SESSION", "helperrx")
 
 

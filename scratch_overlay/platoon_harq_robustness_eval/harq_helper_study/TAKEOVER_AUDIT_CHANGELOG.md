@@ -84,3 +84,15 @@ FutureWarnings only), and inspected the figures.
 Latent issue, not fixed: `binned_points` counts every seed with a window in a bin, including seeds with a zero
 denominator. It changes no plotted point now (checked for Fig. 2b, 3w and 4: 0 points pass the rule only because of
 such seeds). Counting the seeds with a positive denominator, as the takeover table now does, would make it robust.
+
+## Round 3 (2026-11-12): R6 − R4.2 is a protocol-package contrast
+
+Prompted by the ADTMC report (external, `adtmc_rewrite/MODEL_AND_VALIDATION.md` §4), verified here against the code
+and the logs.
+
+| finding | verdict | evidence | correction |
+|---|---|---|---|
+| R6 and R4.2 were described as differing "only in the takeover" (cells 1 and 12; `takeover_audit.PAIRS` comment; `NOBG_DECOMPOSITION_v3` sections 0, 2, 5b) | **verified error** | `platoon_harq_robustness_eval.cc:2111` installs `InstallOption2HelperSilence` only when `harqMode == "opt2" && helperTakeover`, i.e. for R6 only. In R4.2 the named helper ACKs like any member and, being half duplex, cannot hear the others in that PSFCH occasion. Run CSVs: `helper_ack_suppressed` per packet R6 1.32–1.52, R4.2 0. Helper copies per packet at 0 cars: R4.2 1.25, R6 1.11. Redundant helper copies at 0 cars: R4.2 3–18 %, R6 ≈ 0. | Text now calls R6 − R4.2 the takeover **package**: takeover + fallback + helper ACK suppression and listening. The transmitted-resource difference mixes extra leader copies with relay cancellation. R5 − R4.1 (Option 1) has no ACK difference; R5 adds the helper's dedicated NACK resource. |
+| does the listening difference change delivery? | **no (at 0 cars)** | `NOBG_DECOMPOSITION_v3` section 5b: in TBs whose helper received the first copy, R4.2 and R6 deliver alike, and the received-group part of the paired gain has a 95 % interval including 0 in all 6 cells. | PRR gains attributed to the takeover stand; the cost comparison must not be attributed to the takeover alone. Not checked under load. |
+
+Numbers are unchanged; both notebooks were rebuilt and re-run with no errors.
