@@ -128,6 +128,8 @@ def main():
     ap.add_argument('action', choices=('list', 'run', 'collect', 'check'))
     ap.add_argument('--stage', default='A', choices=sorted(STAGES))
     ap.add_argument('--jobs', type=int, default=6)
+    ap.add_argument('--shard', default='', help='i/n: run only every n-th run starting at the i-th (1-based), so '
+                                                 'n jobs on n nodes split the sweep without overlap')
     ap.add_argument('--genie', action='store_true',
                     help='R6_genie only (genie helper: schedule replay, scripts/genie.py) into out/<sweep>_genie; '
                          'the R3 reference has no helper and is not re-run')
@@ -150,6 +152,10 @@ def main():
             print(os.path.relpath(r['out'], OUT))
         print(len(runs), 'runs', file=sys.stderr)
         return
+    if a.shard:
+        i, n = (int(x) for x in a.shard.split('/'))
+        runs = runs[i - 1::n]
+        print(f'shard {i}/{n}: {len(runs)} runs', flush=True)
     with ThreadPoolExecutor(a.jobs) as ex:
         rcs = list(ex.map(run_one, runs))
     print('done', sum(rc == 0 for rc in rcs), 'ok,', sum(rc != 0 for rc in rcs), 'failed')

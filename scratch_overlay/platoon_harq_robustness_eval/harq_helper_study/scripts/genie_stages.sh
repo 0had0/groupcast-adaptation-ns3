@@ -1,5 +1,6 @@
 #!/bin/bash
-# Stage runner of launch_genie.sh (run it through launch_genie.sh): genie_stages.sh JOBS "STAGES"
+# Stage runner of launch_genie.sh and of the Grid'5000 jobs (scripts/g5k/stage.sh): genie_stages.sh JOBS "STAGES"
+# STAGES: load hmiss timing period psfch, or psfchIofN (shard I of N of the psfch stage, e.g. psfch1of2)
 # One stage after the other; each stage's own log is out/genie_<stage>.log, its start / end lines go to stdout
 # (out/genie_campaign.log). Every stage is resumable: finished runs are skipped.
 set -u
@@ -24,6 +25,9 @@ for s in $STAGES; do
                 --out out/psfch_genie && python3 scripts/study.py check --profile psfch_genie --seeds 1-10 \
                 --out out/psfch_genie";;
     psfch)  stage psfch python3 scripts/psfch_err_sweep.py run --genie --jobs "$JOBS";;
+    psfch[0-9]*of[0-9]*)   # psfchIofN: shard I of N (one per node), log out/genie_psfchIofN.log
+            sh="${s#psfch}"; stage "$s" python3 scripts/psfch_err_sweep.py run --genie --jobs "$JOBS" \
+                --shard "${sh%of*}/${sh#*of}";;
     *) echo "unknown stage $s";;
   esac
 done

@@ -9,10 +9,20 @@
 # Usage:
 #   ./setup.sh          # normal run
 #   ./setup.sh --force  # skip safeguard and overwrite any local edits
+#   ./setup.sh --minimal  # build machines (e.g. Grid'5000): ns-3-dev + nr only (no netanim, no sumo), and only
+#                         # the scratch_overlay projects in MINIMAL_SCRATCH linked into ns-3-dev/scratch/
 set -euo pipefail
 
 FORCE=0
-[[ "${1:-}" == "--force" ]] && FORCE=1
+MINIMAL=0
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+        --minimal) MINIMAL=1 ;;
+        *) echo "[setup] unknown option $arg"; exit 2 ;;
+    esac
+done
+MINIMAL_SCRATCH="common platoon_harq_robustness_eval"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -118,8 +128,13 @@ log "Safeguard passed."
 # ---------------------------------------------------------------------------
 # 2. Initialize outer submodules (not recursive — nr is handled separately)
 # ---------------------------------------------------------------------------
-log "Initializing outer submodules (netanim, sumo, ns-3-dev)..."
-git submodule update --init -- netanim sumo ns-3-dev
+if [[ $MINIMAL -eq 1 ]]; then
+    log "Initializing ns-3-dev only (--minimal)..."
+    git submodule update --init -- ns-3-dev
+else
+    log "Initializing outer submodules (netanim, sumo, ns-3-dev)..."
+    git submodule update --init -- netanim sumo ns-3-dev
+fi
 ok "Outer submodules checked out."
 
 # ---------------------------------------------------------------------------
@@ -181,6 +196,7 @@ apply_patch() {
     ok "Applied patch to $sub"
 }
 
+if [[ $MINIMAL -eq 0 ]]; then
 log "Pinning netanim at $SHA_NETANIM..."
 git -C "$ROOT/netanim" reset --hard "$SHA_NETANIM"
 apply_patch "netanim" "patches/netanim/local.patch"
@@ -188,6 +204,7 @@ apply_patch "netanim" "patches/netanim/local.patch"
 log "Pinning sumo at $SHA_SUMO..."
 git -C "$ROOT/sumo" reset --hard "$SHA_SUMO"
 apply_patch "sumo" "patches/sumo/local.patch"
+fi
 
 log "Applying ns-3-dev tracked-file patch (if any)..."
 apply_patch "ns-3-dev" "patches/ns-3-dev/local.patch"
@@ -211,6 +228,9 @@ done
 log "Linking scratch_overlay into ns-3-dev/scratch/..."
 for src in "$ROOT/scratch_overlay"/*/; do
     name="$(basename "$src")"
+    if [[ $MINIMAL -eq 1 && " $MINIMAL_SCRATCH " != *" $name "* ]]; then
+        continue
+    fi
     target="$ROOT/ns-3-dev/scratch/$name"
     rel="../../scratch_overlay/$name"  # relative from ns-3-dev/scratch/
 
@@ -258,8 +278,10 @@ check_sha() {
     fi
 }
 
+if [[ $MINIMAL -eq 0 ]]; then
 check_sha "netanim"              "$SHA_NETANIM"
 check_sha "sumo"                 "$SHA_SUMO"
+fi
 check_sha "ns-3-dev"             "$SHA_NS3"
 check_sha "ns-3-dev/contrib/nr"  "$SHA_NR"
 
@@ -268,7 +290,9 @@ echo "  ns-3-dev branch: $(git -C "$ROOT/ns-3-dev" rev-parse --abbrev-ref HEAD)"
 echo "  nr branch:       $(git -C "$ROOT/ns-3-dev/contrib/nr" rev-parse --abbrev-ref HEAD)"
 echo ""
 
-for name in groupcast_eval adaptive-phy-eval; do
+LINKS="groupcast_eval adaptive-phy-eval"
+[[ $MINIMAL -eq 1 ]] && LINKS="$MINIMAL_SCRATCH"
+for name in $LINKS; do
     lnk="$ROOT/ns-3-dev/scratch/$name"
     if [[ -L "$lnk" ]]; then
         echo "  PASS  ns-3-dev/scratch/$name → $(readlink "$lnk")"
