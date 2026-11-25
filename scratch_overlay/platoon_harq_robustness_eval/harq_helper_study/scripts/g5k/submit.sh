@@ -11,10 +11,14 @@
 #        walltime must then end before 19:00 on a weekday (usage policy); give --walltime.
 #        A job cut by its walltime loses nothing: submit the campaign again, finished runs are skipped.
 #   scripts/g5k/submit.sh stages "STAGES" [--now] [--walltime H]   # one job for the given stages (e.g. "psfch2of2")
-# Cluster: $CLUSTER (default paradoxe: 52 cores / node, default queue).
+# Cluster: $CLUSTER (default paradoxe: 52 cores / node), queue: $QUEUE (default: default).
 set -u
 source "$(dirname "$0")/env.sh"
 CLUSTER="${CLUSTER:-paradoxe}"
+# OAR queue, always named: at Rennes jobs without -q land in the production (Abaca) queue (p1..p4), where the
+# default-queue clusters (paradoxe, parasilo) do not exist. QUEUE=abaca with an Abaca cluster: no night / day rules,
+# jobs up to the user's priority limit (p2: 96 h); the build must then be redone on that cluster (setup).
+QUEUE="${QUEUE:-default}"
 cd "$G5K_STUDY" || exit 2
 mkdir -p out/oar
 what="${1:-}"; shift || true
@@ -29,9 +33,9 @@ while [ $# -gt 0 ]; do
 done
 sub() {   # name, walltime, command...
   local name="$1" wall="$2"; shift 2
-  local t=(); [ "$NOW" = 0 ] && t=(-t night)
-  oarsub -n "$name" -p "$CLUSTER" -l "host=1,walltime=$wall" "${t[@]}" \
-    -O "out/oar/%jobid%_$name.out" -E "out/oar/%jobid%_$name.err" "$@" | grep -E 'OAR_JOB_ID|ERROR|error'
+  local t=(); [ "$NOW" = 0 ] && [ "$QUEUE" = default ] && t=(-t night)
+  oarsub -q "$QUEUE" -n "$name" -p "cluster='$CLUSTER'" -l "host=1,walltime=$wall" "${t[@]}" \
+    -O "out/oar/%jobid%_$name.out" -E "out/oar/%jobid%_$name.err" "$@" 2>&1 | grep -v '^\[ADMISSION RULE\]'
 }
 case "$what" in
   setup)
