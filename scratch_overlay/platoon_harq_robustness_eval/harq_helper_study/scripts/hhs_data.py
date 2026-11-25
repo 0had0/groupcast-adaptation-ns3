@@ -112,10 +112,12 @@ def _keys_from_name(pre):
 def _arm_variant(dirname, kind):
     """Folder name -> (arm, variant columns) for each campaign kind."""
     if kind == 'psfch_err':                          # R6_miss0.1, R3_n2a0.01, R6_snr_p23
-        arm, setting = dirname.split('_', 1)
-        m = re.match(r'(miss|n2a|snr_p)([0-9.]+)$', setting)
-        issue = {'miss': 'psfch_miss', 'n2a': 'psfch_n2a', 'snr_p': 'psfch_power'}[m.group(1)]
-        return arm, dict(fb_issue=issue, fb_val=float(m.group(2)))
+        m = re.match(r'(.+?)_(miss|n2a|snr_p)([0-9.]+)$', dirname)   # arm may hold '_' (R6_genie)
+        issue = {'miss': 'psfch_miss', 'n2a': 'psfch_n2a', 'snr_p': 'psfch_power'}[m.group(2)]
+        return m.group(1), dict(fb_issue=issue, fb_val=float(m.group(3)))
+    if kind == 'timing':                             # R6_d100_g2: PSFCH processing delay (us), processing gap (slots)
+        m = re.match(r'(.+)_d(\d+)_g(\d+)$', dirname)
+        return m.group(1), dict(fb_issue='timing', tm_delay=float(m.group(2)), tm_gap=float(m.group(3)))
     if kind == 'psfch_period':                       # R6_p2, R4.2_p4
         arm, p = dirname.rsplit('_p', 1)
         return arm, dict(fb_issue='psfch_period', fb_val=float(p))
@@ -135,6 +137,7 @@ def campaign_runs(name, spec):
             continue
         if spec.get('arms') and arm not in spec['arms']:
             continue
+        arm = spec.get('rename', {}).get(arm, arm)   # e.g. R6_map -> R6 (map notebook: same styles and tables)
         for p in sorted(glob.glob(os.path.join(d, '*_run.csv*'))):
             pre = p.split('_run.csv')[0]
             kk = _keys_from_name(pre)
@@ -228,12 +231,16 @@ def summarize(runs, win, by, p5_from='runs'):
     return out.reset_index()
 
 
-def time_series(win, by):
-    """PRR vs time per group `by` + window centre t: group = mean over runs of the window PRR,
-    worst = mean over runs of the window worst-member PRR."""
-    w = win.assign(prr=win.d / win.n)
-    return w.groupby(by + ['t']).agg(prr_group=('prr', 'mean'), prr_worst=('worst', 'mean'),
-                                     n_runs=('seed', 'nunique')).reset_index()
+def time_series(win, by, min_frac=0.5):
+    """PRR vs time since the start of the run's KPI window (window index w, centre (w + 0.5) * WIN_S), so runs whose
+    window starts at different simulation times (roundabouts: per seed) line up. group = mean over runs of the window
+    PRR, worst = mean over runs of the window worst-member PRR. Windows covered by fewer than min_frac of the group's
+    runs (the tail of the longer runs) are dropped."""
+    w = win.assign(prr=win.d / win.n, t_rel=(win.w + 0.5) * WIN_S)
+    out = w.groupby(by + ['t_rel']).agg(prr_group=('prr', 'mean'), prr_worst=('worst', 'mean'),
+                                        n_runs=('seed', 'size')).reset_index()
+    n_max = out.groupby(by).n_runs.transform('max')
+    return out[out.n_runs >= min_frac * n_max]
 
 
 def dist_series(dist, by, min_pairs=5):

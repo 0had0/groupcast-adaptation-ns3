@@ -10,6 +10,12 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
            R4_bsc: leader and helper copies, HARQ owner = SCI-2A relayedFromRnti)
   *_map    R4, R4.1, R4.2, R5, R6 with --helperSelect=map (Kuo's objective + building map and CAM positions,
            H3); only in the map / map_smoke profiles
+  *_probe  R3, R6 with --linkProbeMs=10 (genie probe: window-mean large-scale loss of every platoon link,
+           <tag>_links.csv); profiles v3_genie_probe / v3_genie_probe_smoke. A measurement run: the probe's channel
+           queries consume channel draws, so it is not a reference run of its arm
+  *_genie  R4, R4.1, R4.2, R5, R6, R4_bsc, R4_bsc_fbs with --helperSelect=schedule: the genie oracle helper per
+           1 s window (scripts/genie_schedule.py on the R3_probe run of the same cell and seed: best leader ->
+           helper -> worst-receiver path by its weaker hop); profiles v3_genie / v3_genie_smoke
   *_p<N>   --psfchPeriod=N (sl-PSFCH-Period, slots; the other profiles use 1): R2, R3, R4.2, R6 at 2 and 4, R1 at 0
            (pool without PSFCH: 12 PSSCH symbols in every slot); only in the psfch / psfch_smoke profiles
 Cells: {highway, roundabout (N->W, 1/4 ring), roundaboutE (N->E, 3/4 ring; full profile)} ivd 30 x bg {none, moderate} x {periodic1tb, aperiodic1tb}.
@@ -33,6 +39,7 @@ BIN = os.environ.get('STUDY_BIN') or next(
     os.path.join(_BDIR, 'ns3.42-platoon_harq_robustness_eval-default'))
 sys.path.insert(0, EVAL)
 import run_retx  # noqa: E402  (BASE_FLAGS and background levels of the campaign)
+import genie  # noqa: E402  (genie arms: schedule replay of the per-window best helper)
 
 KUO = ['--helperSched=S1', '--helperSelect=kuo', '--helper=4']
 ARMS = {
@@ -57,11 +64,30 @@ ARMS = {
     # minimum time gap as R6's, so the fallback always has time to take back the next handed slot
     'R4_bsc_fbs': ['--retx=R4'] + KUO + ['--blindSoftCombining=true', '--blindHelperFallback=true',
                                          '--blindPsfchGap=true'],
+    # profile v3_gap: the two arms that separate spacing from fallback.
+    # "R4 + C, spaced": R4_bsc with the PSFCH-gap slot selection and no fallback (spacing alone)
+    'R4_bsc_s': ['--retx=R4'] + KUO + ['--blindSoftCombining=true', '--blindPsfchGap=true'],
+    # "R4 + C + fallback, 2-slot gap": the least spacing the fallback needs (sense slot k, act from k + 2)
+    'R4_bsc_fb2': ['--retx=R4'] + KUO + ['--blindSoftCombining=true', '--blindHelperFallback=true',
+                                         '--blindMinGap=2'],
 }
 # the helper arms with the map selector: same flags as the Kuo arm, only --helperSelect differs
 MAP_ARMS = [a + '_map' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6')]
 for _a in MAP_ARMS:
     ARMS[_a] = [f if f != '--helperSelect=kuo' else '--helperSelect=map' for f in ARMS[_a[:-len('_map')]]]
+# genie oracle: probe arms (link losses) and replay arms (helper schedule from the R3 probe of the same run)
+PROBE_ARMS = ['R3_probe', 'R6_probe']
+for _a in PROBE_ARMS:
+    ARMS[_a] = ARMS[_a[:-len('_probe')]] + ['--linkProbeMs=10']
+GENIE_ARMS = [a + '_genie' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6', 'R4_bsc', 'R4_bsc_fbs')]
+for _a in GENIE_ARMS:
+    ARMS[_a] = list(ARMS[_a[:-len('_genie')]])     # the Kuo arm; plan() swaps the selector (genie.to_genie)
+# PSFCH period sensitivity with the genie helper (profile psfch_genie): R6_genie at sl-PSFCH-Period 2 and 4
+PSFCH_GENIE_ARMS = ['R6_genie_p2', 'R6_genie_p4']
+for _a in PSFCH_GENIE_ARMS:
+    _b, _p = _a.rsplit('_p', 1)
+    ARMS[_a] = ARMS[_b] + [f'--psfchPeriod={_p}']
+GENIE_SCHED = None   # --genie-schedules: folder of <tag>_genie.csv (default genie.SCHED; *_smoke: the smoke probe's)
 # PSFCH period sensitivity (profile psfch): the HARQ arms at sl-PSFCH-Period 2 and 4, the blind leader without PSFCH.
 # Period 1 is campaign v3 itself (same commands without --psfchPeriod, same seeds): not re-run.
 PSFCH_ARMS = [f'{a}_p{p}' for a in ('R2', 'R3', 'R4.2', 'R6') for p in (2, 4)] + ['R1_p0']
@@ -69,7 +95,7 @@ for _a in PSFCH_ARMS:
     _b, _p = _a.rsplit('_p', 1)
     ARMS[_a] = ARMS[_b] + [f'--psfchPeriod={_p}']
 FAMILY = {'R1': 'leader', 'R2': 'leader', 'R3': 'leader', 'R4': 'kuo', 'R4.1': 'kuo', 'R4.2': 'kuo',
-          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo', 'R4_bsc_fb': 'kuo+fallback', 'R4_bsc_fbs': 'kuo+fallback',
+          'R5': 'kuo+takeover', 'R6': 'kuo+takeover', 'R1_bsc': 'leader', 'R4_bsc': 'kuo', 'R4_bsc_fb': 'kuo+fallback', 'R4_bsc_fbs': 'kuo+fallback', 'R4_bsc_s': 'kuo', 'R4_bsc_fb2': 'kuo+fallback',
           'R4_map': 'map', 'R4.1_map': 'map', 'R4.2_map': 'map', 'R5_map': 'map+takeover',
           'R6_map': 'map+takeover'}
 DIAG = ['--writeAtt=true', '--writeAllTx=true', '--writeGrants=true']
@@ -130,19 +156,26 @@ def profile_spec(profile, seeds_arg=None):
                     trafs=['periodic1tb', 'aperiodic1tb'], seeds=parse_seeds(seeds_arg or '1-10'),
                     tmax=lambda sc, bg: 53.0 if sc == 'highway' else 0.0, rbt_curve=True,
                     arms=['R2', 'R4.1', 'R5'] if fill else MAP_ARMS, bglevels=bgl)
-    if profile in ('v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke'):
+    if profile in ('v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke',
+                   'v3_gap', 'v3_gap_smoke', 'v3_genie_probe', 'v3_genie_probe_smoke', 'v3_genie', 'v3_genie_smoke'):
         # v3: the campaign re-run with SCI 1-A on every PSSCH (--sciOnEveryTx=true, every UE) and the leader's
         # aperiodic traffic on dynamic grants (no --aperiodicRri: the simulator keeps SB-SPS for periodic traffic
         # only). Every Kuo arm incl. R1_bsc / R4_bsc, periodic1tb + aperiodic1tb, 0 / 15 / 30 / 45 / 60 cars at
         # the moderate per-car load, 10 seeds (3000 runs). v3_map: the five map-selection arms, same cells (1500).
         # v3_fb: "R4 + C + fallback" (R4_bsc_fb), same cells and seeds (300 runs); its reference is R4_bsc in out/v3.
         # v3_fbs: "R4 + C + fallback, spaced" (R4_bsc_fbs), same cells and seeds (300 runs).
+        # v3_gap: R4_bsc_s (spacing, no fallback) and R4_bsc_fb2 (fallback, 2-slot gap), same cells (600 runs).
+        # v3_genie_probe: R3_probe (genie schedule source) and R6_probe (carry-over check), same cells (600 runs).
+        # v3_genie: the seven genie replay arms (GENIE_ARMS), same cells and seeds (2100 runs); they need the
+        # schedules of v3_genie_probe (scripts/genie_schedule.py) and pair by seed with out/v3, out/v3_fbs, out/v3_map.
         # *_smoke: launcher check, every arm x scenario x traffic at 15 cars, seed 1, short runs.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]
         bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
         smoke = profile.endswith('_smoke')
-        arms = MAP_ARMS if profile.startswith('v3_map') else ['R4_bsc_fbs'] if profile.startswith('v3_fbs') else \
+        arms = MAP_ARMS if profile.startswith('v3_map') else PROBE_ARMS if profile.startswith('v3_genie_probe') else \
+            GENIE_ARMS if profile.startswith('v3_genie') else ['R4_bsc_fbs'] if profile.startswith('v3_fbs') else \
+            ['R4_bsc_s', 'R4_bsc_fb2'] if profile.startswith('v3_gap') else \
             ['R4_bsc_fb'] if profile.startswith('v3_fb') else \
             ['R1', 'R1_bsc', 'R2', 'R3', 'R4', 'R4_bsc', 'R4.1', 'R4.2', 'R5', 'R6']
         return dict(scen=['highway', 'roundabout', 'roundaboutE'],
@@ -153,17 +186,19 @@ def profile_spec(profile, seeds_arg=None):
                          (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
                     rbt_curve=True, rbt_smoke=SMOKE_RBT_S if smoke else None, bglevels=bgl, dyn=True,
                     flags=['--sciOnEveryTx=true'])
-    if profile in ('psfch', 'psfch_smoke'):
+    if profile in ('psfch', 'psfch_smoke', 'psfch_genie', 'psfch_genie_smoke'):
         # psfch: sl-PSFCH-Period sensitivity on the v3 configuration (--sciOnEveryTx=true, aperiodic on dynamic
         # grants): PSFCH_ARMS, every route x traffic at 0 and 60 cars, 10 seeds (1080 runs). The period-1 reference
         # is out/v3 (R1, R2, R3, R4.2, R6, same seeds). psfch_smoke: every arm x route x traffic at 15 cars, seed 1.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]
         bgl = {'none': lv['none'], 'moderate': lv['moderate']} | {k: (n, flows) for k, n in DENSITY.items()}
-        smoke = profile == 'psfch_smoke'
+        # psfch_genie: the same with R6_genie (240 runs); its period-1 reference is the v3_genie R6_genie run.
+        smoke = profile.endswith('_smoke')
         return dict(scen=['highway', 'roundabout', 'roundaboutE'],
                     bgs=['n15'] if smoke else ['none', 'moderate'],
-                    trafs=['periodic1tb', 'aperiodic1tb'], arms=PSFCH_ARMS,
+                    trafs=['periodic1tb', 'aperiodic1tb'],
+                    arms=PSFCH_GENIE_ARMS if 'genie' in profile else PSFCH_ARMS,
                     seeds=[1] if smoke else parse_seeds(seeds_arg or '1-10'),
                     tmax=(lambda sc, bg: 8.0 if sc == 'highway' else 0.0) if smoke else
                          (lambda sc, bg: 53.0 if sc == 'highway' else 0.0),
@@ -232,7 +267,8 @@ def plan(profile, seeds_arg=None, only=None):
     # a profile is one block of arms x bgs x trafs, or several ('parts', each with its own arms, bgs, trafs)
     blocks = spec.get('parts') or [dict(arms=spec.get('arms'), bgs=spec['bgs'], trafs=spec['trafs'])]
     for part, (arm, aflags) in ((p, a) for p in blocks for a in ARMS.items()):
-        if arm not in part['arms'] if part['arms'] is not None else arm in MAP_ARMS + PSFCH_ARMS:
+        if arm not in part['arms'] if part['arms'] is not None else \
+                arm in MAP_ARMS + PSFCH_ARMS + PROBE_ARMS + GENIE_ARMS + PSFCH_GENIE_ARMS:
             continue
         for sc in spec['scen']:
             for bg in part['bgs']:
@@ -257,6 +293,10 @@ def plan(profile, seeds_arg=None, only=None):
                             cmd.append(f'--kpiStart={k0}')
                         if t > 0:
                             cmd.append(f'--maxTime={t}')
+                        if genie.is_genie(arm):
+                            sd = GENIE_SCHED or (os.path.join(HERE, 'out', 'v3_genie_probe_smoke', 'R3_probe')
+                                                 if profile.endswith('_smoke') else genie.SCHED)
+                            cmd = genie.to_genie(cmd, tag, sd)
                         runs.append(dict(arm=arm, scenario=sc, bg=bg, traffic=tr, seed=seed, tag=tag,
                                          trace=trace, cmd=cmd))
     if only:
@@ -282,6 +322,9 @@ def run_one(r, outdir):
         return r, 0, 0.0, 'skip'
     if not os.path.exists(r['trace']):
         return r, -1, 0.0, 'missing trace'
+    sched = [f.split('=', 1)[1] for f in r['cmd'] if f.startswith('--helperSchedule=')]
+    if sched and not os.path.exists(sched[0]):
+        return r, -1, 0.0, 'missing schedule'
     env = {k: v for k, v in os.environ.items() if k not in ('MAGIC_HELPER_ID', 'NUM_MEMBERS')}
     t0 = time.time()
     with open(prefix + '.log', 'w') as lg:
@@ -354,8 +397,16 @@ def cmd_check(a):
             continue
         x = read_csv(pre + '_run.csv')[0]
         arm = r['arm']
-        fb = arm.endswith('_fb') or arm.endswith('_fbs')
-        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '').replace('_fbs', '').replace('_fb', '') \
+        probe, is_genie = arm.endswith('_probe'), genie.is_genie(arm)
+        if probe:                                    # flags of the arm it copies, probe / selector aside
+            arm = arm.rsplit('_', 1)[0]
+        if is_genie:
+            arm = genie.base_arm(arm)
+        if probe:
+            chk(os.path.exists(pre + '_links.csv'), name + ': no _links.csv')
+        fb = arm.endswith('_fb') or arm.endswith('_fbs') or arm.endswith('_fb2')
+        base = arm.replace('_noIR', '').replace('_bsc', '').replace('_map', '').replace('_fbs', '').replace('_fb2', '') \
+            .replace('_fb', '').replace('_s', '') \
             .split('_p')[0]
         f = lambda k: float(x[k])
         chk(0.0 <= f('prr_mean') <= 1.0 and 0.0 <= f('prr_min') <= f('prr_mean') + 1e-9, name + ': PRR range')
@@ -363,9 +414,15 @@ def cmd_check(a):
         chk(x['soft_combining'] == ('0' if arm.endswith('_noIR') else '1'), name + ': soft_combining flag')
         chk(x['psfch_exact_attr'] == '1', name + ': exact PSFCH attribution')
         if 'blind_psfch_gap' in x:
-            chk(x['blind_psfch_gap'] == ('1' if arm.endswith('_fbs') else '0'), name + ': blind_psfch_gap flag')
-        elif arm.endswith('_fbs'):
+            chk(x['blind_psfch_gap'] == ('1' if arm.endswith(('_fbs', '_bsc_s')) else '0'), name + ': blind_psfch_gap flag')
+        elif arm.endswith(('_fbs', '_bsc_s')):
             chk(False, name + ': no blind_psfch_gap column')
+        if 'blind_min_gap' in x:
+            chk(x['blind_min_gap'] == ('2' if arm.endswith('_fb2') else '0'), name + ': blind_min_gap flag')
+        elif arm.endswith('_fb2'):
+            chk(False, name + ': no blind_min_gap column')
+        if arm.endswith(('_fbs', '_fb2')):
+            chk(f('fallback_no_slot') == 0, name + ': fallback found no slot despite the spacing')
         if '_p' in arm:
             chk(x['psfch_period'] == arm.rsplit('_p', 1)[1], name + ': psfch_period')
         if a.profile.startswith('v3') or a.profile.startswith('psfch'):
@@ -385,7 +442,8 @@ def cmd_check(a):
             chk(f('fallback_heard') + f('fallback_tx') + f('fallback_no_slot') <= f('fallback_check'),
                 name + ': fallback accounting')
         if base in ('R4', 'R4.1', 'R4.2', 'R5', 'R6'):
-            chk(x['helper_select'] == ('map' if arm.endswith('_map') else 'kuo'), name + ': helper_select')
+            chk(x['helper_select'] == ('schedule' if is_genie else 'map' if arm.endswith('_map') else 'kuo'),
+                name + ': helper_select')
             chk(f('relay_by_unchosen') == 0, name + ': relay by a non-selected member')
             chk(f('relay_without_decode') == 0, name + ': relay without decode')
         if base in ('R2', 'R4.1', 'R5'):
@@ -418,7 +476,9 @@ def main():
     ap.add_argument('action', choices=['run', 'check', 'list'])
     ap.add_argument('--profile', default='smoke',
                     choices=['smoke', 'local1', 'full', 'density', 'density_smoke', 'map', 'map_fill', 'map_smoke',
-                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke', 'psfch',
+                             'v3', 'v3_smoke', 'v3_map', 'v3_map_smoke', 'v3_fb', 'v3_fb_smoke', 'v3_fbs', 'v3_fbs_smoke', 'v3_gap', 'v3_gap_smoke',
+                             'v3_genie_probe', 'v3_genie_probe_smoke', 'v3_genie', 'v3_genie_smoke',
+                             'psfch_genie', 'psfch_genie_smoke', 'psfch',
                              'psfch_smoke'])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--seeds', default=None, help='full / density profile seeds, e.g. 1-5 or 1,2,3')
@@ -426,6 +486,9 @@ def main():
     ap.add_argument('--only', default=None,
                     help='regex on "arm/tag", e.g. "^R6/hwy_ivd30_periodic1tb_moderate_s1$"')
     ap.add_argument('--bin', default=None, help='simulator binary (default: optimized build if present)')
+    ap.add_argument('--genie-schedules', default=None,
+                    help='genie arms: folder of <tag>_genie.csv (default out/genie_probe_all/R3_probe or $GENIE_SCHED; '
+                         '*_smoke profiles: out/v3_genie_probe_smoke/R3_probe)')
     ap.add_argument('--extra', action='append', default=[],
                     help='simulator flag appended to every command (repeatable), e.g. --extra=--writeHarqTrace=true; '
                          'the commands differ from the plain profile, so use a separate --out')
@@ -436,6 +499,9 @@ def main():
     if a.extra:
         global EXTRA
         EXTRA = list(a.extra)
+    if a.genie_schedules:
+        global GENIE_SCHED
+        GENIE_SCHED = os.path.abspath(a.genie_schedules)
     if a.action == 'list':
         for r in plan(a.profile, a.seeds, a.only):
             print(r['arm'], r['tag'])

@@ -10,6 +10,7 @@
 // caller via SlStackParams::scenario — this is the primary way to move
 // away from the LOS V2V_Highway model used by groupcast_eval.
 
+#include "ns3/three-gpp-propagation-loss-model.h"
 #include "common/channel/geometric_channel.h"
 
 #include "ns3/channel-condition-model.h"
@@ -174,6 +175,9 @@ struct SlStackCtx
     // MOVES the BandwidthPartInfoPtrs into a local vector inside BuildSlStack,
     // so anything cached here must not be a BandwidthPartInfo pointer.
     Ptr<ChannelConditionModel> channelConditionModel;
+    // Propagation loss model of the same BWP (read-only uses: the genie helper
+    // selection reads the shadowing it drew).
+    Ptr<ThreeGppPropagationLossModel> propagationLoss;
 };
 
 SlStackCtx BuildSlStack(const SlStackParams& p,

@@ -22,17 +22,18 @@ OUT   = STUDY / 'out'
 CACHE = OUT / 'cache_schemes'                 # parquet cache, one set per campaign; delete to re-read
 FIGS  = STUDY / 'figures' / 'schemes_comparison'
 SAVE_FIGS = False                             # True: every figure also written to FIGS as .png
+FIGS_PAPER = STUDY / 'figures' / 'paper_schemes'   # section 10 writes the paper figures (.pdf + .png) here
 JOBS = 6
 
 # campaign key -> folder, kind (how folder / file names are parsed), arms to load
 CAMPAIGNS = {
     'load':         dict(path=OUT / 'remote_v3',                    arms=['R3', 'R4_bsc', 'R6']),
-    'load_fb':      dict(path=OUT / 'remote_v3_fb',                 arms=['R4_bsc_fb']),
     'load_fbs':     dict(path=OUT / 'remote_v3_fbs',                arms=['R4_bsc_fbs']),
     'hmiss':        dict(path=OUT / 'local_helperrx' / 'controlled',    kind='helper_miss'),
-    'hmiss_fb':     dict(path=OUT / 'local_helperrx_fb' / 'controlled', kind='helper_miss'),
+    'hmiss_fb':     dict(path=OUT / 'local_helperrx_fb' / 'controlled', kind='helper_miss', arms=['R4_bsc', 'R4_bsc_fbs']),
     'psfch_err':    dict(path=OUT / 'psfch_err',                    kind='psfch_err'),
     'psfch_period': dict(path=OUT / 'remote_psfch',                 kind='psfch_period', arms=['R3', 'R6']),
+    'timing':       dict(path=OUT / 'timing',                       kind='timing'),
 }
 ''')
 
@@ -46,11 +47,11 @@ Builder: `scripts/build_schemes_notebook.py`.
 | key | folder | arms loaded | grid | command | run on | commit |
 |---|---|---|---|---|---|---|
 | `load` | `out/remote_v3` | R3, R4_bsc, R6 (folder also has R1, R1_bsc, R2, R4, R4.1, R4.2, R5) | 3 routes x 2 traffic x 5 loads (0/15/30/45/60 cars) x 10 seeds | `scripts/launch_v3.sh` -> `study.py run --profile v3 --jobs 32 --out out/v3` | ease-rtx, 32 cores; rsync to laptop | `32e29dd` |
-| `load_fb` | `out/remote_v3_fb` | R4_bsc_fb | as `load` | `scripts/launch_v3.sh --fb` (profile `v3_fb`) | ease-rtx | `3d66267` |
-| `load_fbs` | `out/remote_v3_fbs` | R4_bsc_fbs | as `load` | `scripts/launch_v3.sh --fbs` (profile `v3_fbs`) | ease-rtx | `a54a785` |
+| `load_fbs` | `out/remote_v3_fbs` | R4_bsc_fbs (= R4+C+fb) | as `load` | `scripts/launch_v3.sh --fbs` (profile `v3_fbs`) | ease-rtx | `a54a785` |
 | `hmiss` | `out/local_helperrx/controlled` | R4_bsc (data), R6 (data, sci) | 3 routes x periodic x 0 cars x p = 0.1/0.2/0.3/0.5/0.7 x 10 seeds | `helper_rx_campaign/launch.sh` (`campaign.py`: v3 command + `--helperMissProb=p --helperMissMode=data\|sci`) | laptop, debug build | not recorded |
-| `hmiss_fb` | `out/local_helperrx_fb/controlled` | R4_bsc (sci), R4_bsc_fb, R4_bsc_fbs (data, sci) | as `hmiss` | `HRX_OUT=out/local_helperrx_fb helper_rx_campaign/launch.sh --set fb\|fbs` | laptop | not recorded |
+| `hmiss_fb` | `out/local_helperrx_fb/controlled` | R4_bsc (sci), R4_bsc_fbs (data, sci) | as `hmiss` | `HRX_OUT=out/local_helperrx_fb helper_rx_campaign/launch.sh --set fb\|fbs` | laptop | not recorded |
 | `psfch_err` | `out/psfch_err` | R6: miss 0.01-0.3, n2a 0.001-0.05, power 23/10/0 dBm; R3: miss 0.1, n2a 0.01, 23 dBm | 3 routes x 2 traffic x 0 / 60 cars x 10 seeds | `python3 scripts/psfch_err_sweep.py run --jobs N` (v3 command + `NrSpectrumPhy::SlPsfch*`), then `collect` | laptop, NR `local.patch` | not recorded |
+| `timing` | `out/timing` | R3, R6 at PSFCH processing delay 100 / 250 / 500 µs x processing gap 2 / 3 / 4 slots (+50 µs cooperative activation delay in every setting; (100 or 250 µs, 2) = load campaign, 500 µs = +1 slot) | stage A: 3 routes x 2 traffic x 0 cars x 10 seeds; stage B: 3 routes x aperiodic x 60 cars x 10 seeds | `python3 scripts/timing_sweep.py run --stage A\|B --jobs N` (v3 command + `NrUePhy::SlPsfchProcessingDelay`, `NrSlUeMac::CoopActivationDelay`, `NrSlUeMac::MinTimeGapProcessing`), then `collect` | laptop; stage B seeds 4-10 on ease-rtx (`--seeds 4-10`) | not recorded |
 | `psfch_period` | `out/remote_psfch` | R3_p2/p4, R6_p2/p4 (folder also has R1_p0, R2, R4.2) | 3 routes x 2 traffic x 0 / 60 cars x 10 seeds | `scripts/launch_v3.sh --psfch --no-smoke --jobs 32` | ease-rtx | `a515e14` |
 
 p = 0 of the helper-drop sweep and the error-free / period-1 reference of the feedback sweeps are the `load*` runs
@@ -62,7 +63,7 @@ p = 0 of the helper-drop sweep and the error-free / period-1 reference of the fe
 
 | file | rows | columns used here |
 |---|---|---|
-| `_run.csv` | 1 per run | `kpi_start/end` (3 / 52.7 s), `pkts`, `prr_mean`, `prr_min` (no deadline), `cbr_occupied` (pool CBR), `res_used_leader/helper` (subch.-slots), `subch_prb` |
+| `_run.csv` | 1 per run | `kpi_start/end` (3 / 52.7 s), `pkts`, `prr_mean`, `prr_min` (no deadline), `cbr_occupied` (SL-RP occupancy), `res_used_leader/helper` (subch.-slots), `subch_prb` |
 | `_pkt.csv` | packet x member | `seq, t_tx, size, member, rx, delay_ms, dist_m` |
 | `_ltx.csv` / `_htx.csv` | leader / helper transmission | `t, rb_len, tx_in_tb, origin` (0 own slot, 1 takeover after helper NACK, 2 fallback, helper silent) |
 | `.cmd.json` | command | full ns-3 command line |
@@ -76,8 +77,8 @@ import sys, json, importlib, warnings
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
 from IPython.display import display, Markdown
 sys.path.insert(0, str(CODE))
-import hhs_data as H, hhs_plot as P
-importlib.reload(H); importlib.reload(P)
+import hhs_data as H, hhs_plot as P, hhs_paper as PP
+importlib.reload(H); importlib.reload(P); importlib.reload(PP)
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 pd.set_option('display.width', 200, 'display.max_columns', 40)
 FIGS.mkdir(parents=True, exist_ok=True)
@@ -107,13 +108,13 @@ md(r'''
 | **R3** | **Option 2 HARQ** | ACK/NACK per member | none | per-member feedback, leader retransmits on any NACK |
 | R4 | blind helper | blind | Kuo's helper relays blindly in slots the leader hands over | second transmitter, no feedback |
 | **R4_bsc (R4+C)** | **blind helper relaying** | blind | as R4 | receivers soft-combine leader + helper copies |
-| **R4_bsc_fb (R4+C+fb)** | **+ fallback** | blind | as R4+C | leader listens to the helper's first handed slot; reclaims the next one if the helper is silent |
-| R4_bsc_fbs (R4+C+fb+sp) | + spaced reservations | blind | as R4+C+fb | handed slots keep the PSFCH minimum gap (3 + 2 slots), so the leader can always reclaim |
+| **R4_bsc_fbs (R4+C+fb)** | **+ fallback** | blind | as R4+C | leader listens to the helper's first handed slot and reclaims the next one if the helper is silent; handed slots keep the PSFCH minimum gap (3 + 2 slots), so the reclaim is always possible |
 | R4.1 / R4.2 | helper relay on NACK | Option 1 / Option 2 | relays on NACK | no takeover |
 | R5 | cooperative, Option 1 | Option 1 | relay on NACK | takeover, Option 1 feedback |
 | **R6** | **cooperative HARQ** | Option 2 | relays on NACK | takeover on helper NACK, fallback when the helper is silent, stop on all-ACK |
 
-Plots use R3, R4+C, R4+C+fb, R4+C+fb+sp, R6. Gain tables use R6 against R3, R4+C, R4+C+fb.
+Plots use R3, R4+C, R4+C+fb, R6. Gain tables use R6 against R3, R4+C, R4+C+fb.
+The fallback arm without the PSFCH gap (`R4_bsc_fb`, `out/remote_v3_fb`) is not used.
 R4 arms send no HARQ feedback: PSFCH errors do not reach them.
 ''')
 
@@ -150,7 +151,8 @@ R.pivot_table(index=['campaign', 'arm'], columns='tr', values='seed', aggfunc='s
 # ================================================================================================ metrics
 md(r'''
 ## 4. Metrics
-Pair = (packet, member). Delivered = received within the PDB (100 ms periodic, 50 ms aperiodic). KPI window 3-52.7 s.
+Pair = (packet, member). Delivered = received within the PDB (100 ms periodic, 50 ms aperiodic). KPI window: highway 3-52.7 s; roundabouts
+from the first member entering the curve to the last one leaving it (about 20-40 s long, start and length differ per seed).
 
 **Reliability**
 - **Group PRR**: delivered pairs / pairs, per run; mean over seeds (95 % t-CI).
@@ -172,20 +174,24 @@ a helper NACK, `T2` leader fallback (helper silent). Normalised by generated dat
 application payload generated in the window (`ss_kB`).
 
 Untraced runs (`psfch_err`): PRR = `prr_mean` / `prr_min` of `_run.csv` (no deadline), P5 over seeds, classes leader /
-helper only, kB taken from the same command in `load`. Feedback sections 8.1-8.3 compare everything on these
+helper only, kB taken from the same command in `load`. Feedback sections 9.1-9.3 and the processing-time section 8 compare everything on these
 run-level metrics, the references included.
 ''')
 
 code(r'''
-ALL   = ['R3', 'R4_bsc', 'R4_bsc_fb', 'R4_bsc_fbs', 'R6']
+ALL   = ['R3', 'R4_bsc', 'R4_bsc_fbs', 'R6']
 SET_A = ['R3', 'R4_bsc', 'R6']
-SET_B = ['R3', 'R4_bsc_fb', 'R6']
+SET_B = ['R3', 'R4_bsc_fbs', 'R6']
 PRR = ['prr_group', 'prr_worst', 'prr_p5']
 PIR = ['pir_mean', 'pir_worst', 'pir_p95']
 KEYC = ['campaign', 'arm', 'sc', 'tr', 'nbg', 'seed', 'hm_p', 'hm_mode', 'fb_issue', 'fb_val']
 
 LOAD = R[R.campaign.str.startswith('load')].copy()
-LOAD['cbr_lvl'] = LOAD.groupby(['scg', 'tr', 'nbg']).cbr.transform('mean').round(2)
+# background vehicle density in the KPI area: highway 2 km stretch (veh/km), roundabout 500 m disc (veh/km^2)
+KPI_AREA = {'hwy': 2.0, 'rbt': np.pi * 0.5 ** 2, 'rbtE': np.pi * 0.5 ** 2}
+DENS_LABEL = {'hwy': 'background density (veh/km)', 'rbt': 'background density (veh/km$^2$)',
+              'rbtE': 'background density (veh/km$^2$)', 'Highway': 'veh/km', 'Roundabouts': 'veh/km$^2$'}
+LOAD['dens'] = (LOAD.nbg / LOAD.sc.map(KPI_AREA)).round(1)
 WL = W.merge(LOAD[KEYC], on=KEYC)
 DL = DI.merge(LOAD[KEYC], on=KEYC)
 
@@ -200,9 +206,11 @@ def runlevel(runs):
 
 # ================================================================================================ 5 time / distance
 md(r'''
-## 5. Reliability vs simulation time and vs distance
-Load campaigns, 0 cars (no background) and 60 cars (pool CBR ~0.70). Time: 2 s windows, mean over 10 seeds; rows
-group PRR and worst-receiver PRR. Distance: leader-member distance, 30 m bins; rows group PRR (pooled pairs),
+## 5. Reliability vs time and vs distance
+Load campaigns, no background and the highest density (60 cars: 30 veh/km highway, 76 veh/km² roundabouts). Time: 2 s
+windows counted from the start of each run's KPI window (the roundabout window starts at a different time per seed), mean
+over the runs that cover the window (windows covered by fewer than half the runs are dropped); rows group PRR and
+worst-receiver PRR. Distance: leader-member distance, 30 m bins; rows group PRR (pooled pairs),
 worst seed, P5 over (seed x 2 s window).
 ''')
 
@@ -211,8 +219,8 @@ for title, arms, tag in [('all schemes', 'ALL', 'all'), ('R3, R4+C, R6', 'SET_A'
     code(f'''
 for nbg in (0, 60):
     w = WL[WL.nbg == nbg]
-    show(P.plot_series(H.time_series(w, ['arm', 'sc', 'tr']), 't', ['prr_group', 'prr_worst'], {arms},
-                       'simulation time (s)', f'PRR vs time, {{nbg}} background cars ({title})'), f'time_{tag}_n{{nbg}}')
+    show(P.plot_series(H.time_series(w, ['arm', 'sc', 'tr']), 't_rel', ['prr_group', 'prr_worst'], {arms},
+                       'time since KPI window start (s)', f'PRR vs time, {{nbg}} background cars ({title})'), f'time_{tag}_n{{nbg}}')
 for nbg in (0, 60):
     d = DL[DL.nbg == nbg]
     show(P.plot_series(H.dist_series(d, ['arm', 'sc', 'tr']), 'dbin', PRR, {arms},
@@ -221,28 +229,29 @@ for nbg in (0, 60):
 
 # ================================================================================================ 6 load
 md(r'''
-## 6. Reliability vs background load (pool CBR)
-x = pool CBR (`cbr_occupied`) of each arm at 0 / 15 / 30 / 45 / 60 background cars.
+## 6. Reliability vs background vehicle density
+x = background vehicles per km of the 2 km highway KPI stretch (0 / 7.5 / 15 / 22.5 / 30 veh/km), per km² of the
+500 m roundabout KPI disc (0 / 19 / 38 / 57 / 76 veh/km²). The table below gives the SL-RP occupancy each density produces.
 ''')
 code(r'''
 S_LOAD = H.summarize(LOAD, WL, ['arm', 'sc', 'tr', 'nbg'])
-S_LOAD_G = H.summarize(LOAD, WL, ['arm', 'scg', 'tr', 'cbr_lvl'])
-S_LOAD.pivot_table(index=['sc', 'tr', 'nbg'], columns='arm', values='cbr').round(2)
+S_LOAD = S_LOAD.merge(LOAD[['sc', 'nbg', 'dens']].drop_duplicates(), on=['sc', 'nbg'])
+S_LOAD_G = H.summarize(LOAD, WL, ['arm', 'scg', 'tr', 'dens'])
+S_LOAD.pivot_table(index=['sc', 'tr', 'dens'], columns='arm', values='cbr').round(2)   # SL-RP occupancy
 ''')
 md('### 6.1 All schemes')
 code(r'''
-show(P.plot_x(S_LOAD, 'cbr', PRR, ALL, 'pool CBR', 'Reliability vs load, all schemes'), 'cbr_prr_all')
-show(P.plot_x(S_LOAD, 'cbr', PIR, ALL, 'pool CBR', 'PIR vs load, all schemes', pct=False), 'cbr_pir_all')
+show(P.plot_x(S_LOAD, 'dens', PRR, ALL, DENS_LABEL, 'Reliability vs density, all schemes'), 'dens_prr_all')
+show(P.plot_x(S_LOAD, 'dens', PIR, ALL, DENS_LABEL, 'PIR vs density, all schemes', pct=False), 'dens_pir_all')
 ''')
 md('### 6.2 R3, R4+C, R6')
-code(r'''show(P.plot_x(S_LOAD, 'cbr', PRR, SET_A, 'pool CBR', 'Reliability vs load: R3, R4+C, R6'), 'cbr_prr_A')''')
+code(r'''show(P.plot_x(S_LOAD, 'dens', PRR, SET_A, DENS_LABEL, 'Reliability vs density: R3, R4+C, R6'), 'dens_prr_A')''')
 md('### 6.3 R3, R4+C+fb, R6')
-code(r'''show(P.plot_x(S_LOAD, 'cbr', PRR, SET_B, 'pool CBR', 'Reliability vs load: R3, R4+C+fb, R6'), 'cbr_prr_B')''')
-md('### 6.4 Resources vs load (data + control, no PSFCH)')
+code(r'''show(P.plot_x(S_LOAD, 'dens', PRR, SET_B, DENS_LABEL, 'Reliability vs density: R3, R4+C+fb, R6'), 'dens_prr_B')''')
+md('### 6.4 Resources vs density (data + control, no PSFCH)')
 code(r'''
-show(P.plot_resources(S_LOAD, 'nbg', ALL, 'background cars', 'Subchannel-slots vs load', xcat=True,
-                      xticklabels=['0', '15', '30', '45', '60']), 'cbr_res_all')
-S_LOAD.pivot_table(index=['sc', 'tr', 'nbg'], columns='arm', values='ss_kB').round(1)
+show(P.plot_resources(S_LOAD, 'dens', ALL, DENS_LABEL, 'Subchannel-slots vs density', xcat=True), 'dens_res_all')
+S_LOAD.pivot_table(index=['sc', 'tr', 'dens'], columns='arm', values='ss_kB').round(1)
 ''')
 
 # ================================================================================================ 7 helper drop
@@ -260,7 +269,7 @@ def hm_frame(mode):
     ref = LOAD[(LOAD.tr == 'periodic1tb') & (LOAD.nbg == 0)]
     rw = WL.merge(ref[KEYC], on=KEYC)
     parts = [(hm, hw)]
-    for arm in ['R4_bsc', 'R4_bsc_fb', 'R4_bsc_fbs', 'R6']:
+    for arm in ['R4_bsc', 'R4_bsc_fbs', 'R6']:
         a = ref[ref.arm == arm]
         parts.append(setcols(a, rw.merge(a[KEYC], on=KEYC), hm_mode=mode, hm_p=0.0))
     r3 = ref[ref.arm == 'R3']
@@ -283,8 +292,67 @@ show(P.plot_resources(S_HM['{m}'], 'hm_p', ALL, 'p', 'Subchannel-slots vs helper
 ''')
 
 # ================================================================================================ 8 feedback
+md(r"""
+## 8. Reliability vs processing time
+Feedback timing at the receiving MAC (campaign `timing`, R3 and R6 only):
+- **PSFCH processing delay**: end of the PSFCH to the feedback at the MAC, 100 / 250 / 500 µs. With the 50 µs
+  cooperative activation delay of the sweep, 100 and 250 µs keep the feedback in the same slot; 500 µs crosses the 0.5 ms
+  slot boundary and delays every feedback-driven decision by one slot. The axis is therefore 0 / 0 / +1 slot of latency.
+- **Processing gap** (`MinTimeGapProcessing`): slots the MAC needs between the feedback and a retransmission it
+  triggers, 2 / 3 / 4 slots (main campaigns: 2). With the 3-slot PSFCH gap it sets the minimum spacing of feedback-driven
+  retransmissions (5 / 6 / 7 slots).
+
+Reference: (100 µs, 2 slots) and (250 µs, 2 slots) reproduce the load campaign (180 / 180 runs each: same packet counts, group and worst PRR equal to 1e-6);
+(500 µs, 2 slots) does not. So the load campaign has no extra feedback slot, and 500 µs is the "+1 slot" case. Runs are untraced: run-level PRR, P5 over runs, no PIR, resources
+leader / helper. 0 cars: all routes and traffic types, 10 seeds; 60 cars: aperiodic traffic, 10 seeds per route.
+R4+C and R4+C+fb were not run in this sweep: horizontal lines at their load-campaign values.
+""")
+code(r'''
+TM = R[R.fb_issue == 'timing'].copy()
+print(TM.pivot_table(index=['arm', 'tm_delay'], columns=['nbg', 'tm_gap'], values='seed', aggfunc='size'))
+
+def tm_frame(x, fixed):
+    """Runs of the sweep along x ('tm_delay' or 'tm_gap') with the other knob at `fixed`."""
+    other = 'tm_gap' if x == 'tm_delay' else 'tm_delay'
+    return TM[TM[other] == fixed]
+
+def tm_section(x, fixed, xlabel, xt=None):
+    r = tm_frame(x, fixed)
+    for nbg in (0, 60):
+        rn = r[r.nbg == nbg]
+        s = H.summarize(rn, None, ['arm', 'sc', 'tr', x], p5_from='runs')
+        r4 = runlevel(LOAD[(LOAD.nbg == nbg) & LOAD.arm.isin(['R4_bsc', 'R4_bsc_fbs'])])
+        ref = H.summarize(r4, None, ['arm', 'sc', 'tr'], p5_from='runs')
+        kw = dict(xcat=True, xticklabels=xt, ref=ref, ref_label='load campaign, not in this sweep')
+        show(P.plot_x(s, x, PRR, ALL, xlabel, f'Reliability vs {xlabel}, {nbg} background cars, all schemes', **kw),
+             f'tm_{x}_prr_all_n{nbg}')
+        for nm, arms in (('A', SET_A), ('B', SET_B)):
+            names = ', '.join(P.STYLE[a]['label'].split(' ')[0] for a in arms)
+            show(P.plot_x(s, x, PRR, arms, xlabel, f'{nbg} background cars: {names}', **kw), f'tm_{x}_prr_{nm}_n{nbg}')
+        show(P.plot_resources(s, x, ['R3', 'R6'], xlabel, f'Subchannel-slots vs {xlabel}, {nbg} background cars',
+                              xcat=True, xticklabels=xt, classes=['L', 'H']), f'tm_{x}_res_n{nbg}')
+
+def tm_group(x, fixed):
+    """Gain-table input: sweep runs + R4 arms (load campaign, run-level) repeated on every x, same cells."""
+    r = tm_frame(x, fixed)
+    r4 = runlevel(LOAD[LOAD.arm.isin(['R4_bsc', 'R4_bsc_fbs'])]).merge(r[['sc', 'tr', 'nbg']].drop_duplicates())
+    rr = pd.concat([r] + [r4.assign(**{x: v}) for v in sorted(r[x].unique())])
+    rr['x'] = rr.nbg.astype(int).astype(str) + ' cars · ' + rr[x].map('{:g}'.format)
+    return H.summarize(rr, None, ['arm', 'scg', 'tr', 'x'], p5_from='runs')
+''')
+md('### 8.1 PSFCH processing delay: +1 slot at 500 µs (processing gap 2 slots)')
+code(r'''tm_section('tm_delay', 2, 'PSFCH processing delay (µs)', xt=['100', '250', '500 (+1 slot)'])''')
+md('### 8.2 Processing gap (PSFCH processing delay 100 µs = load campaign timing)')
+code(r'''tm_section('tm_gap', 100, 'processing gap (slots)')''')
+md('### 8.3 R6 - R3 group PRR over the whole grid (pp)')
+code(r'''
+g = H.summarize(TM, None, ['arm', 'scg', 'tr', 'nbg', 'tm_delay', 'tm_gap'], p5_from='runs')
+g = g.pivot_table(index=['scg', 'tr', 'nbg', 'tm_delay'], columns=['tm_gap', 'arm'], values='prr_group')
+(100 * (g.xs('R6', axis=1, level='arm') - g.xs('R3', axis=1, level='arm'))).round(1)
+''')
+
 md(r'''
-## 8. Reliability vs feedback (PSFCH) issues
+## 9. Reliability vs feedback (PSFCH) issues
 | issue | model | values | arms |
 |---|---|---|---|
 | PSFCH miss (DTX) | each received ACK/NACK lost, per receiver | 0.01, 0.05, 0.1, 0.2, 0.3 | R6; R3 at 0.1 |
@@ -293,7 +361,7 @@ md(r'''
 | PSFCH period | PSFCH every N slots | 2, 4 | R3, R6 |
 
 Error-free / period 1 = load campaign. R4 arms (no feedback) are drawn as horizontal lines at their error-free value.
-8.1-8.3 use run-level PRR (untraced runs); 8.4 is traced.
+9.1-9.3 use run-level PRR (untraced runs); 9.4 is traced.
 ''')
 code(r'''
 FB_REF = LOAD[LOAD.nbg.isin([0, 60])]
@@ -328,26 +396,26 @@ def fb_section(issue, xlabel, xcat=False, xt=None, traced=False, ref_label='erro
                               xcat=True, xticklabels=xt, classes=cls), f'fb_{issue}_res_n{nbg}')
     return r, w
 ''')
-md('### 8.1 PSFCH miss (DTX) probability')
+md('### 9.1 PSFCH miss (DTX) probability')
 code(r'''FB = {}; FB['psfch_miss'] = fb_section('psfch_miss', 'PSFCH miss probability')''')
-md('### 8.2 NACK-to-ACK error probability')
+md('### 9.2 NACK-to-ACK error probability')
 code(r'''FB['psfch_n2a'] = fb_section('psfch_n2a', 'NACK->ACK probability', xcat=True)''')
-md('### 8.3 PSFCH transmit power (SNR-based decoding)')
+md('### 9.3 PSFCH transmit power (SNR-based decoding)')
 code(r'''FB['psfch_power'] = fb_section('psfch_power', 'PSFCH power', xcat=True, xt=['0 dBm', '10 dBm', '23 dBm', 'error-free'])''')
-md('### 8.4 PSFCH period')
+md('### 9.4 PSFCH period')
 code(r'''FB['psfch_period'] = fb_section('psfch_period', 'PSFCH period (slots)', xcat=True, traced=True,
                                   ref_label='period 1, not simulated at 2 / 4')''')
 
 # ================================================================================================ 9 gains
 md(r'''
-## 9. R6 gain tables
+## 10. R6 gain tables
 Cell = R6 - X. PRR in percentage points; resources = (R6 - X) / X of subch.-slots per kB generated, in %.
 Green = R6 better (higher PRR, fewer resources). One colour scale per metric column. Rows: Highway, then both
 roundabouts pooled; traffic; sweep value. Feedback tables: R4+C and R4+C+fb at their error-free value
 (no feedback); R3 only where simulated.
 ''')
 code(r'''
-OTH = ['R3', 'R4_bsc', 'R4_bsc_fb']
+OTH = ['R3', 'R4_bsc', 'R4_bsc_fbs']
 def table(summ, x, title, xlabel, xfmt='{:g}'):
     g = P.gains(summ, x, OTH)
     show(P.gain_heatmap(g, title, xlabel, xfmt=xfmt), 'gain_' + title.split(':')[0].replace(' ', '_'))
@@ -356,7 +424,7 @@ def table(summ, x, title, xlabel, xfmt='{:g}'):
 def fb_group(issue):
     r, w = FB[issue]
     traced = w is not None
-    r4 = FB_REF[FB_REF.arm.isin(['R4_bsc', 'R4_bsc_fb'])]
+    r4 = FB_REF[FB_REF.arm.isin(['R4_bsc', 'R4_bsc_fbs'])]
     r4 = r4 if traced else runlevel(r4)
     parts, wparts = [r], [w] if traced else []
     for v in sorted(r.fb_val.unique()):
@@ -371,21 +439,47 @@ def fb_group(issue):
         ww = ww.merge(rr[KEYC + ['x']].drop_duplicates(KEYC), on=KEYC)
     return H.summarize(rr, ww, ['arm', 'scg', 'tr', 'x'], p5_from='runs')
 ''')
-md('### 9.1 Background load (pool CBR)')
-code(r'''G = {}; G['cbr'] = table(S_LOAD_G, 'cbr_lvl', 'Load: R6 - X vs pool CBR', 'CBR=', '{:.2f}')''')
-md('### 9.2 Helper SCI drop')
+md('### 10.1 Background vehicle density')
+code(r'''G = {}; G['dens'] = table(S_LOAD_G, 'dens', 'Density: R6 - X (veh/km highway, veh/km² roundabouts)', '', '{:g}')''')
+md('### 10.2 Helper SCI drop')
 code(r'''G['hm_sci'] = table(S_HM_G['sci'], 'hm_p', 'Helper SCI drop: R6 - X', 'p=')''')
-md('### 9.3 Helper payload drop')
+md('### 10.3 Helper payload drop')
 code(r'''G['hm_data'] = table(S_HM_G['data'], 'hm_p', 'Helper payload drop: R6 - X', 'p=')''')
+md('### 10.4 PSFCH processing delay\nRow label: background cars · delay (µs; 500 = one extra slot), processing gap 2 slots. 60 cars: aperiodic, 10 seeds per route.')
+code(r'''G['tm_delay'] = table(tm_group('tm_delay', 2), 'x', 'PSFCH processing delay: R6 - X', '', '{}')''')
+md('### 10.5 Processing gap\nRow label: background cars · gap (slots), processing delay 100 µs (load-campaign timing).')
+code(r'''G['tm_gap'] = table(tm_group('tm_gap', 100), 'x', 'Processing gap: R6 - X', '', '{}')''')
 for i, (iss, lab) in enumerate([('psfch_miss', 'PSFCH miss'), ('psfch_n2a', 'NACK->ACK'),
                                 ('psfch_power', 'PSFCH power'), ('psfch_period', 'PSFCH period')]):
-    md(f'### 9.{i + 4} {lab.split(" (")[0]}')
+    md(f'### 10.{i + 6} {lab.split(" (")[0]}')
     code(f'''G['{iss}'] = table(fb_group('{iss}'), 'x', '{lab.split(" (")[0]}: R6 - X', '', '{{}}')''')
 
-md('### 9.8 All gain tables as data')
+md('### 10.10 All gain tables as data')
 code(r'''
 GT = pd.concat({k: v for k, v in G.items()}, names=['table'])
 GT.round(2)
+''')
+
+md(r"""
+## 11. Paper figures
+Written to `FIGS_PAPER` as PDF and PNG; `paper_skeleton/main.tex` includes them from there. Schemes: R3, R4+C,
+R4+C+fb, R6. Error bars: 95 % t-CI over seeds (paired by seed for the fallback gain).
+""")
+code(r'''
+FIGS_PAPER.mkdir(parents=True, exist_ok=True)
+PAPER_ARMS = ['R3', 'R4_bsc', 'R4_bsc_fbs', 'R6']
+def save_paper(fig, name):
+    for ext in ('pdf', 'png'):
+        fig.savefig(FIGS_PAPER / f'{name}.{ext}', dpi=300, bbox_inches='tight', pad_inches=0.02)
+    plt.show()
+
+save_paper(PP.fig_load(S_LOAD, 'prr_group', PAPER_ARMS, ylabel='group PRR (%)'), 'prr_vs_density')
+save_paper(PP.fig_load(S_LOAD, 'prr_worst', PAPER_ARMS, width=PP.COL_W, height=4.6, ylabel='worst-member PRR (%)'),
+           'worst_vs_density')
+save_paper(PP.fig_fallback_gain(LOAD), 'fallback_gain_vs_density')
+r3 = LOAD[(LOAD.arm == 'R3') & (LOAD.tr == 'periodic1tb') & (LOAD.nbg == 0)].groupby('sc').prr_group.mean()
+save_paper(PP.fig_helper_miss(S_HM, r3), 'prr_vs_p')
+sorted(p.name for p in FIGS_PAPER.iterdir())
 ''')
 
 nb = nbf.v4.new_notebook()

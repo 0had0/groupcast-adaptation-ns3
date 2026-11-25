@@ -26,6 +26,7 @@ Cells: 3 routes x 2 traffic types x 0 / 60 background vehicles, seeds 1-10 (as c
 The error-free reference is campaign v3 itself (same commands); `check` proves the new build reproduces it.
 """
 import argparse
+import re
 import glob
 import json
 import os
@@ -34,6 +35,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import genie  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
@@ -53,6 +57,8 @@ CHECK = [('R6', 'hwy_ivd30_aperiodic1tb_none', 1), ('R6', 'rbt_ivd30_periodic1tb
 
 
 def template(arm, cell, s):
+    if genie.is_genie(arm):     # R6_genie: the R6 (Kuo) v3 command, selector replaced by the case's schedule
+        return genie.to_genie(template(genie.base_arm(arm), cell, s), f'{cell}_s{s}')
     cmd = [x.replace(REMOTE_REPO, REPO) for x in json.load(open(os.path.join(V3, arm, f'{cell}_s{s}.cmd.json')))]
     for suffix in ('-optimized', '-default'):
         b = cmd[0].rsplit('-', 1)[0] + suffix
@@ -108,7 +114,7 @@ def collect():
         key = os.path.basename(os.path.dirname(f))
         if key.startswith('check_'):
             continue
-        arm, lab = key.split('_', 1)
+        arm, lab = re.match(r'(.+?)_((?:miss|n2a|snr_p)[0-9.]+)$', key).groups()
         r = pd.read_csv(f).iloc[0].to_dict()
         rows.append(dict(arm=arm, setting=lab, cell=os.path.basename(f)[:-len('_run.csv')]) | r)
     df = pd.DataFrame(rows)
@@ -120,7 +126,7 @@ def status():
     import time
     runs = plan()
     done = [r for r in runs if os.path.exists(r['out'] + '_run.csv')]
-    log = os.path.join(HERE, 'out', 'psfch_err_run.log')   # nohup log of `run`: one ok / FAIL(rc) line per run
+    log = OUT + '_run.log'   # nohup log of `run` (out/psfch_err[_genie]_run.log): one ok / FAIL(rc) line per run
     failed = set()
     if os.path.exists(log):
         failed = {l.split(' ', 1)[1].strip() for l in open(log, errors='replace') if l.startswith('FAIL')}
@@ -146,7 +152,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('action', choices=('list', 'run', 'collect', 'check', 'status'))
     ap.add_argument('--jobs', type=int, default=6)
+    ap.add_argument('--genie', action='store_true',
+                    help='R6_genie only (genie helper: schedule replay, scripts/genie.py) into out/<sweep>_genie; '
+                         'the R3 reference has no helper and is not re-run')
     a = ap.parse_args()
+    if a.genie:
+        global OUT, ARM_SETTINGS
+        OUT, ARM_SETTINGS = OUT + '_genie', {'R6_genie': list(SETTINGS)}
     if a.action == 'collect':
         return collect()
     if a.action == 'status':

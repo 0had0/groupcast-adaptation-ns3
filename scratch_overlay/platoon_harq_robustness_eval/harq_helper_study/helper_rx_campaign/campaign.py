@@ -15,6 +15,8 @@ itself: the local build reproduces those runs bit for bit (checked on R6, highwa
   python3 campaign.py --set fb   # controlled phase only, for R4_bsc_fb (data, sci) and R4_bsc sci, into
                                  # out/local_helperrx_fb, no analysis (see build_hrx_fb_notebook.py)
   python3 campaign.py --set fbs  # the same for R4 + C + fallback with spaced slots (R4_bsc_fbs), with p = 0
+  python3 campaign.py --set gap  # R4_bsc_s (spaced, no fallback) and R4_bsc_fb2 (fallback, 2-slot gap), with p = 0,
+                                 # into out/local_helperrx_gap
 
 Resumable: a job whose <out>_run.csv.gz exists is skipped. A finished run's CSV files are gzipped (about 0.15 MB per
 run instead of 0.75). Progress: out/local_helperrx/status.json (monitor.py), log: out/local_helperrx/campaign.log,
@@ -42,8 +44,10 @@ STUDY = HERE.parent
 ROOT = STUDY.parents[2]  # groupcast-adaptation-ns3
 NS3 = ROOT / "ns-3-dev"
 BIN = NS3 / "build/scratch/platoon_harq_robustness_eval/ns3.42-platoon_harq_robustness_eval-default"
-V3 = STUDY / "out/remote_v3"
-V3_OF = {"R4_bsc_fb": STUDY / "out/remote_v3_fb"}  # arms of other campaigns (v3 command + one flag)
+# campaign-v3 commands: out/v3* on ease-rtx, out/remote_v3* on the laptop
+V3 = next((p for p in (STUDY / "out/v3", STUDY / "out/remote_v3") if p.is_dir()), STUDY / "out/remote_v3")
+V3_OF = {"R4_bsc_fb": next((p for p in (STUDY / "out/v3_fb", STUDY / "out/remote_v3_fb") if p.is_dir()),
+                           STUDY / "out/remote_v3_fb")}  # arms of other campaigns (v3 command + one flag)
 OUT = STUDY / "out/local_helperrx"
 OUT_FB = STUDY / "out/local_helperrx_fb"  # --set fb: R4 + C + fallback against the R6 sweep
 ANALYTICAL = Path(os.environ.get("COOPHARQ_ANALYTICAL", "/Users/hadih/Documents/coop-harq-analytical"))
@@ -59,11 +63,23 @@ FB_ARMS = (("R4_bsc_fb", "data"), ("R4_bsc_fb", "sci"), ("R4_bsc", "sci"))
 # --set fbs (2026-11-23): R4 + C + fallback with spaced slots (--blindPsfchGap=true: the TB's reserved slots keep
 # the PSFCH minimum time gap, as R6's), both miss modes, plus its own p = 0 runs (not in campaign v3)
 FBS_ARMS = (("R4_bsc_fbs", "data"), ("R4_bsc_fbs", "sci"))
-EXTRA_FLAGS = {"R4_bsc_fbs": dict(blindPsfchGap="true")}  # arm = base arm's v3 command + these flags
-BASE_ARM = {"R4_bsc_fbs": "R4_bsc_fb"}
+# --set gap (2026-11-25): R4 + C with spaced slots and no fallback (spacing alone), and R4 + C + fallback with the
+# least gap the fallback needs (--blindMinGap=2), both miss modes, plus their own p = 0 runs
+GAP_ARMS = (("R4_bsc_s", "data"), ("R4_bsc_s", "sci"), ("R4_bsc_fb2", "data"), ("R4_bsc_fb2", "sci"))
+EXTRA_FLAGS = {"R4_bsc_fbs": dict(blindPsfchGap="true"),  # arm = base arm's v3 command + these flags
+               "R4_bsc_s": dict(blindPsfchGap="true"), "R4_bsc_fb2": dict(blindMinGap="2")}
+BASE_ARM = {"R4_bsc_fbs": "R4_bsc_fb", "R4_bsc_s": "R4_bsc", "R4_bsc_fb2": "R4_bsc_fb"}
+# --set genie (2026-11-25): the three schemes with the genie helper (per-window best-helper schedule replay,
+# scripts/genie.py) in place of Kuo's selection, both miss modes; p = 0 is the v3_genie load campaign
+GENIE_ARMS = tuple((f"{a}_genie", m) for a in ("R4_bsc", "R4_bsc_fbs", "R6") for m in ("data", "sci"))
+OUT_GENIE = STUDY / "out/helperrx_genie"
+sys.path.insert(0, str(STUDY / "scripts"))
+import genie  # noqa: E402
 
 
 def base_cmd(arm: str, cell: str, seed: int) -> list[str]:
+    if genie.is_genie(arm):  # the Kuo arm's command, selector replaced by the case's schedule
+        return genie.to_genie(base_cmd(genie.base_arm(arm), cell, seed), f"{cell}_s{seed}")
     base = BASE_ARM.get(arm, arm)
     cmd = json.load(open(V3_OF.get(base, V3) / base / f"{cell}_s{seed}.cmd.json"))
     cmd = [c.replace(SERVER_ROOT, str(ROOT)) for c in cmd]
@@ -192,7 +208,7 @@ def main():
     ap.add_argument("--phase", default="all", choices=("fixed", "controlled", "all"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-analysis", action="store_true")
-    ap.add_argument("--set", default="main", choices=("main", "fb", "fbs"),
+    ap.add_argument("--set", default="main", choices=("main", "fb", "fbs", "gap", "genie"),
                     help="fb: controlled phase of R4_bsc_fb (data, sci) and R4_bsc sci into out/local_helperrx_fb")
     a = ap.parse_args()
     global OUT
@@ -202,6 +218,10 @@ def main():
         OUT, arms, a.phase, a.no_analysis = OUT_FB, FB_ARMS, "controlled", True
     if a.set == "fbs":
         OUT, arms, a.phase, a.no_analysis, p0 = OUT_FB, FBS_ARMS, "controlled", True, True
+    if a.set == "genie":
+        OUT, arms, a.phase, a.no_analysis = OUT_GENIE, GENIE_ARMS, "controlled", True
+    if a.set == "gap":
+        OUT, arms, a.phase, a.no_analysis, p0 = STUDY / "out/local_helperrx_gap", GAP_ARMS, "controlled", True, True
     OUT.mkdir(parents=True, exist_ok=True)
     if not BIN.exists():
         sys.exit(f"binary missing: {BIN}")

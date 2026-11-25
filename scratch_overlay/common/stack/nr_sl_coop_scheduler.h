@@ -78,6 +78,7 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
     bool m_chainedResActive{false};
     uint32_t m_helperMinGap{2}; //!< min slots between the leader's last tx and the helper's first
     bool m_blindPsfchGap{false}; //!< blind chained reservations keep the PSFCH minimum time gap
+    uint32_t m_blindMinGap{0}; //!< blind chained reservations: min slots between any two selected (0 = off)
     bool m_helperOwnResources{false}; //!< helper-picks-resource arm
     uint32_t m_additiveRelays{0}; //!< additive arm: helper copies on its own resources (0 = off)
     SfnSf m_pendingDeadline;          //!< deadline of the TB being allocated
@@ -495,6 +496,8 @@ class NrSlCoopScheduler : public NrSlUeMacScheduler
         std::list<SlResourceInfo> txOpps);
     /// one uniformly random blind selection (stock behaviour)
     std::list<SlResourceInfo> SelectBlindOnce(std::list<SlResourceInfo> txOpps);
+    /// SelectBlindOnce with at least m_blindMinGap slots between any two selected slots
+    std::list<SlResourceInfo> SelectBlindMinGap(std::list<SlResourceInfo> txOpps);
 
     /**
      * \brief Randomly select resources for a grant from the candidate resources,

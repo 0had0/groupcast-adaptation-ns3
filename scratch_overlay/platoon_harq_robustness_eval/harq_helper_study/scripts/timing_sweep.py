@@ -8,12 +8,12 @@ paths and build), plus three attributes:
   --ns3::NrSlUeMac::MinTimeGapProcessing   processing gap of the selection (slots; v3: 2, i.e. 5-slot spacing)
 
   python3 scripts/timing_sweep.py list  [--stage A|B]
-  python3 scripts/timing_sweep.py run   [--stage A|B] [--jobs N]      # resumable: skips runs with a _run.csv
+  python3 scripts/timing_sweep.py run   [--stage A|B] [--jobs N] [--seeds 4-10]   # resumable: skips runs with a _run.csv
   python3 scripts/timing_sweep.py collect                             # -> out/timing/summary.csv
   python3 scripts/timing_sweep.py check [--jobs N]   # new build, no timing flags: must reproduce campaign v3 exactly
 
 Stage A: 0 background vehicles, 3 routes x 2 traffic types, seeds 1-10 (as v3).
-Stage B: 60 background vehicles, 3 routes, aperiodic traffic, seeds 1-3.
+Stage B: 60 background vehicles, 3 routes, aperiodic traffic, seeds 1-3 (laptop); 4-10 added on ease-rtx (--seeds 4-10).
 Templates: out/v3 (remote) or out/remote_v3 (laptop copy); the build suffix found on this machine is used.
 """
 import argparse
@@ -25,6 +25,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import genie  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # harq_helper_study/ (this file: scripts/)
 REPO = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
@@ -43,6 +46,8 @@ CHECK = [('R6', 'hwy_ivd30_aperiodic1tb_none', 1), ('R6', 'rbt_ivd30_periodic1tb
 
 
 def template(arm, cell, s):
+    if genie.is_genie(arm):     # R6_genie: the R6 (Kuo) v3 command, selector replaced by the case's schedule
+        return genie.to_genie(template(genie.base_arm(arm), cell, s), f'{cell}_s{s}')
     cmd = [x.replace(REMOTE_REPO, REPO) for x in json.load(open(os.path.join(V3, arm, f'{cell}_s{s}.cmd.json')))]
     for suffix in ('-optimized', '-default'):
         b = cmd[0].rsplit('-', 1)[0] + suffix
@@ -56,8 +61,9 @@ def setting(d, g):
     return f'd{d}_g{g}'
 
 
-def plan(stage):
-    cells, seeds = STAGES[stage]
+def plan(stage, seeds=None):
+    cells, seeds0 = STAGES[stage]
+    seeds = seeds or seeds0
     runs = []
     for arm in ARMS:
         for d in DELAYS_US:
@@ -122,12 +128,23 @@ def main():
     ap.add_argument('action', choices=('list', 'run', 'collect', 'check'))
     ap.add_argument('--stage', default='A', choices=sorted(STAGES))
     ap.add_argument('--jobs', type=int, default=6)
+    ap.add_argument('--genie', action='store_true',
+                    help='R6_genie only (genie helper: schedule replay, scripts/genie.py) into out/<sweep>_genie; '
+                         'the R3 reference has no helper and is not re-run')
+    ap.add_argument('--seeds', default='', help='e.g. 4-10 (default: the stage seeds)')
     a = ap.parse_args()
+    if a.genie:
+        global OUT, ARMS
+        OUT, ARMS = OUT + '_genie', ('R6_genie',)
     if a.action == 'collect':
         return collect()
     if a.action == 'check':
         sys.exit(check(a.jobs))
-    runs = plan(a.stage)
+    seeds = None
+    if a.seeds:
+        lo, _, hi = a.seeds.partition('-')
+        seeds = tuple(range(int(lo), int(hi or lo) + 1))
+    runs = plan(a.stage, seeds)
     if a.action == 'list':
         for r in runs:
             print(os.path.relpath(r['out'], OUT))

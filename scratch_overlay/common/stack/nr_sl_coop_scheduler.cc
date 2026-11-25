@@ -14,6 +14,7 @@
 #include <ns3/pointer.h>
 #include <ns3/uinteger.h>
 
+#include <cstdlib>
 #include <optional>
 #include <queue>
 
@@ -72,6 +73,14 @@ NrSlCoopScheduler::GetTypeId(void)
                       BooleanValue(false),
                       MakeBooleanAccessor(&NrSlCoopScheduler::m_blindPsfchGap),
                       MakeBooleanChecker())
+        .AddAttribute("BlindMinGap",
+                      "Blind retransmissions with chained reservations: minimum gap (slots) between "
+                      "any two of the TB's selected slots (0 = off). 2 is the least the leader "
+                      "fallback needs: it senses the helper in slot k and can act from slot k + 2. "
+                      "Ignored when BlindPsfchGap is true",
+                      UintegerValue(0),
+                      MakeUintegerAccessor(&NrSlCoopScheduler::m_blindMinGap),
+                      MakeUintegerChecker<uint32_t>())
         .AddAttribute("HelperOwnResources",
                       "Helper-picks-resource arm: the leader reserves only its own "
                       "LeaderTxCount transmission(s); the helper selects its own resources "
@@ -2090,7 +2099,9 @@ NrSlCoopScheduler::SelectResourcesForBlindRetransmissions(std::list<SlResourceIn
     std::list<SlResourceInfo> sel;
     for (int attempt = 0; attempt < 50; ++attempt)
     {
-        sel = m_blindPsfchGap ? SelectResourcesWithConstraint(txOpps, true) : SelectBlindOnce(txOpps);
+        sel = m_blindPsfchGap      ? SelectResourcesWithConstraint(txOpps, true)
+              : m_blindMinGap > 0 ? SelectBlindMinGap(txOpps)
+                                  : SelectBlindOnce(txOpps);
         if (sel.size() <= m_leaderTxCount)
         {
             return sel; // no slot for the helper
@@ -2105,6 +2116,43 @@ NrSlCoopScheduler::SelectResourcesForBlindRetransmissions(std::list<SlResourceIn
     NS_LOG_DEBUG("No selection with HelperMinGap " << m_helperMinGap
                                                    << "; the helper will skip this TB");
     return sel;
+}
+
+std::list<SlResourceInfo>
+NrSlCoopScheduler::SelectBlindMinGap(std::list<SlResourceInfo> txOpps)
+{
+    NS_LOG_FUNCTION(this << txOpps.size());
+    uint8_t totalTx = GetSlMaxTxTransNumPssch();
+    if (m_chainedResActive && m_helperId != 0 && m_helperOwnResources)
+    {
+        totalTx = std::min<uint8_t>(totalTx, static_cast<uint8_t>(m_leaderTxCount));
+    }
+    // random draw as SelectBlindOnce; a candidate closer than m_blindMinGap slots to an
+    // already selected slot is discarded (this also excludes same-slot overlaps)
+    std::list<SlResourceInfo> newTxOpps;
+    while (newTxOpps.size() < totalTx && !txOpps.empty())
+    {
+        auto it = txOpps.begin();
+        std::advance(it, m_grantSelectionUniformVariable->GetInteger(0, txOpps.size() - 1));
+        const int64_t s = static_cast<int64_t>(it->sfn.Normalize());
+        bool ok = true;
+        for (const auto& sel : newTxOpps)
+        {
+            if (std::llabs(s - static_cast<int64_t>(sel.sfn.Normalize())) <
+                static_cast<int64_t>(m_blindMinGap))
+            {
+                ok = false;
+                break;
+            }
+        }
+        if (ok)
+        {
+            newTxOpps.emplace_back(*it);
+        }
+        txOpps.erase(it);
+    }
+    newTxOpps.sort();
+    return newTxOpps;
 }
 
 std::list<SlResourceInfo>

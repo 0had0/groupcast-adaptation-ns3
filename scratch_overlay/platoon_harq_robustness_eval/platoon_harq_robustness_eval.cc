@@ -73,6 +73,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -848,6 +849,54 @@ ReservedUnits(const std::vector<SensRec>& v,
     }
 }
 
+/// Link probe (--linkProbeMs, genie oracle input): every probe period, the large-scale loss of
+/// every platoon link (leader + members, both directions are one link) as the channel computes
+/// it for a reception: path loss of the link's condition + shadowing + NLOSv blockage, no fast
+/// fading, no interference. Aggregated per window of --linkProbeWindowS (absolute time).
+/// The queries are ordinary channel queries: they consume channel draws, so a probe run is a
+/// measurement run, not a reference run of its arm.
+struct LinkProbeAgg
+{
+    uint32_t n{0};
+    double sum{0.0};
+    double sum2{0.0};
+    double dist{0.0};
+    uint32_t cond[3]{0, 0, 0}; // NLOS, NLOSv, LOS
+};
+struct LinkProbe
+{
+    Ptr<PropagationLossModel> pl;
+    double periodS{0.0};
+    double windowS{1.0};
+    std::map<std::tuple<int64_t, uint32_t, uint32_t>, LinkProbeAgg> agg;
+} g_probe;
+
+void
+ProbeLinks()
+{
+    const int64_t w = static_cast<int64_t>(std::floor(Simulator::Now().GetSeconds() / g_probe.windowS + 1e-9));
+    for (uint32_t a = 0; a <= g.numMembers; ++a)
+    {
+        Ptr<MobilityModel> ma = g.nodes.Get(a)->GetObject<MobilityModel>();
+        for (uint32_t b = a + 1; b <= g.numMembers; ++b)
+        {
+            Ptr<MobilityModel> mb = g.nodes.Get(b)->GetObject<MobilityModel>();
+            const double loss = 23.0 - g_probe.pl->CalcRxPower(23.0, ma, mb);
+            LinkProbeAgg& x = g_probe.agg[{w, a, b}];
+            ++x.n;
+            x.sum += loss;
+            x.sum2 += loss * loss;
+            x.dist += ma->GetDistanceFrom(mb);
+            if (g.ccm) // cached by the query above: no new draw
+            {
+                const auto lc = g.ccm->GetChannelCondition(ma, mb)->GetLosCondition();
+                ++x.cond[lc == ChannelCondition::LOS ? 2 : (lc == ChannelCondition::NLOS ? 0 : 1)];
+            }
+        }
+    }
+    Simulator::Schedule(Seconds(g_probe.periodS), &ProbeLinks);
+}
+
 /// collCond: link condition leader / helper -> every other transmitter of this slot
 void
 RecordCollCond(int64_t slotAbs)
@@ -1505,11 +1554,15 @@ main(int argc, char* argv[])
     bool leaderFallback = true;      // R5 / R6: leader retransmits if the helper stays silent
     bool blindHelperFallback = false; // R4: the leader fallback with the blind helper (arm R4 + C + fallback)
     bool blindPsfchGap = false; // R4: blind slots selected with the PSFCH minimum time gap (spaced arm)
+    uint32_t blindMinGap = 0;   // R4: min slots between any two blind slots (0 = off; 2 = fallback minimum)
     bool softCombining = true;       // HARQ-IR at the receivers (false: ablation)
     bool sciOnEveryTx = false;       // SCI 1-A with every PSSCH (3GPP); false: CTTC default
     double camPeriodMs = 100.0;     // CAM period: positions known to the leader
     double helperDecisionMs = 0.0;  // positions usable only this long after sampling
     bool helperSelectShadow = false;// compute + log the choice, signal --helper instead
+    double linkProbeMs = 0.0;           // genie probe: link loss sample period (ms), 0 = off
+    double linkProbeWindowS = 1.0;      // genie probe: aggregation window (s)
+    std::string helperSchedule;         // --helperSelect=schedule: per-window helper file
     double kuoPlMaxDb = 0.0;        // link budget override (0 = from power, noise, SINR)
     double kuoSinrReqDb = 8.0;      // MCS 14 decoding threshold of the link budget
     // Standard Mode-2 options (all off = stock 5G-LENA behaviour):
@@ -1590,7 +1643,9 @@ main(int argc, char* argv[])
                  helperMode);
     cmd.AddValue("helper", "member acting as helper (also the sensing observer)", helper);
     cmd.AddValue("relayBudget", "additive arm: helper copies per TB", relayBudget);
-    cmd.AddValue("helperSelect", "per-TB helper selection: off | static | kuo | map",
+    cmd.AddValue("helperSelect",
+                 "per-TB helper selection: off | static | kuo | map | harq | harqKuo | harqMap | "
+                 "schedule (genie oracle replay of --helperSchedule)",
                  helperSelect);
     cmd.AddValue("helperBlind", "the helper relays in every handed-over slot (no NACK needed)",
                  helperBlind);
@@ -1630,6 +1685,11 @@ main(int argc, char* argv[])
                  "HARQ feedback (as R6 does), so the leader fallback always has time to take back "
                  "the next handed slot (NrSlCoopScheduler::BlindPsfchGap)",
                  blindPsfchGap);
+    cmd.AddValue("blindMinGap",
+                 "R4 (blind helper): at least this many slots between any two of the TB's reserved "
+                 "slots (0 = off; 2 = the least the leader fallback needs). Excludes --blindPsfchGap "
+                 "(NrSlCoopScheduler::BlindMinGap)",
+                 blindMinGap);
     cmd.AddValue("softCombining",
                  "receivers soft-combine (HARQ-IR) retransmissions; false: every copy is an "
                  "independent attempt (ablation of the HARQ-IR gain)",
@@ -1647,6 +1707,14 @@ main(int argc, char* argv[])
     cmd.AddValue("helperSelectShadow",
                  "compute and log the per-TB choice but signal --helper (non-interference test)",
                  helperSelectShadow);
+    cmd.AddValue("linkProbeMs",
+                 "genie probe: sample the large-scale loss of every platoon link every this many ms "
+                 "and write <out>_links.csv (window means); 0 = off",
+                 linkProbeMs);
+    cmd.AddValue("linkProbeWindowS", "genie probe: window of <out>_links.csv (s)", linkProbeWindowS);
+    cmd.AddValue("helperSchedule",
+                 "--helperSelect=schedule: CSV t0,window_s,helper (scripts/genie_schedule.py)",
+                 helperSchedule);
     cmd.AddValue("kuoPlMaxDb", "selection link budget (dB); 0 = from power, noise and SINR",
                  kuoPlMaxDb);
     cmd.AddValue("kuoSinrReqDb", "selection link budget: SINR needed at MCS 14 (dB)",
@@ -1804,6 +1872,7 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::NrSlUeMacSchedulerFixedMcs::SciOnEveryTx", BooleanValue(sciOnEveryTx));
     Config::SetDefault("ns3::NrSlCoopScheduler::SciOnEveryTx", BooleanValue(sciOnEveryTx));
     Config::SetDefault("ns3::NrSlCoopScheduler::BlindPsfchGap", BooleanValue(blindPsfchGap));
+    Config::SetDefault("ns3::NrSlCoopScheduler::BlindMinGap", UintegerValue(blindMinGap));
     if (!testFixedSinr.empty())
     {
         Config::SetDefault("ns3::NrSpectrumPhy::SlTestFixedSinr", StringValue(testFixedSinr));
@@ -1980,12 +2049,16 @@ main(int argc, char* argv[])
     g.writeGrants = writeGrants;
     NS_ABORT_MSG_IF(helperSelect != "off" && helperSelect != "static" && helperSelect != "kuo" &&
                         helperSelect != "map" && helperSelect != "harq" && helperSelect != "harqKuo" &&
-                        helperSelect != "harqMap",
+                        helperSelect != "harqMap" && helperSelect != "schedule",
                     "bad --helperSelect " << helperSelect);
     NS_ABORT_MSG_IF(helperSelect != "off" && !coop, "--helperSelect needs a cooperative arm");
+    NS_ABORT_MSG_IF((helperSelect == "schedule") != !helperSchedule.empty(),
+                    "--helperSchedule goes with --helperSelect=schedule (and only with it)");
     NS_ABORT_MSG_IF(helperBlind && !coop, "--helperBlind needs a cooperative arm");
     NS_ABORT_MSG_IF(blindHelperFallback && !helperBlind, "--blindHelperFallback needs the blind helper (R4)");
     NS_ABORT_MSG_IF(blindPsfchGap && !helperBlind, "--blindPsfchGap needs the blind helper (R4)");
+    NS_ABORT_MSG_IF(blindMinGap > 0 && !helperBlind, "--blindMinGap needs the blind helper (R4)");
+    NS_ABORT_MSG_IF(blindMinGap > 0 && blindPsfchGap, "--blindMinGap and --blindPsfchGap exclude each other");
     g.hselOn = (helperSelect != "off");
 
     // Option 1 at the receivers: NACK only, inside the MCR (disabled for Option 2 and blind)
@@ -2300,6 +2373,7 @@ main(int argc, char* argv[])
         hc.hstatCandMaxFail = hstatCandMaxFail;
         hc.kuoObjective = kuoObjective;
         hc.prngSeed = 104729u * seed + run;
+        hc.schedulePath = helperSchedule;
         hsel.Init(hc, nodes, numMembers, g.geom);
     }
 
@@ -2442,6 +2516,15 @@ main(int argc, char* argv[])
     if (silenceClog)
     {
         std::clog.setstate(std::ios_base::badbit);
+    }
+    if (linkProbeMs > 0.0)
+    {
+        NS_ABORT_MSG_IF(!stack.propagationLoss, "--linkProbeMs needs a 3GPP propagation loss model");
+        NS_ABORT_MSG_IF(!(linkProbeWindowS > 0.0), "--linkProbeWindowS must be > 0");
+        g_probe.pl = stack.propagationLoss;
+        g_probe.periodS = linkProbeMs / 1000.0;
+        g_probe.windowS = linkProbeWindowS;
+        Simulator::Schedule(Seconds(0), &ProbeLinks);
     }
     Simulator::Stop(Seconds(tEnd + 0.05));
     Simulator::Run();
@@ -3641,6 +3724,22 @@ main(int argc, char* argv[])
                << std::setprecision(1) << x.x << ',' << x.y << '\n';
         }
     }
+    if (linkProbeMs > 0.0)
+    {
+        std::ofstream lk(out + "_links.csv");
+        lk << "t0,window_s,a,b,n,loss_db,loss_sd_db,dist_m,p_los,p_nlosv,p_nlos\n";
+        for (const auto& [key, x] : g_probe.agg)
+        {
+            const auto [w, a, b] = key;
+            const double mean = x.sum / x.n;
+            const double sd = std::sqrt(std::max(0.0, x.sum2 / x.n - mean * mean));
+            const double nc = std::max<uint32_t>(1, x.cond[0] + x.cond[1] + x.cond[2]);
+            lk << std::fixed << std::setprecision(3) << w * linkProbeWindowS << ',' << linkProbeWindowS
+               << ',' << a << ',' << b << ',' << x.n << ',' << mean << ',' << sd << ','
+               << std::setprecision(1) << x.dist / x.n << ',' << std::setprecision(3)
+               << x.cond[2] / nc << ',' << x.cond[1] / nc << ',' << x.cond[0] / nc << '\n';
+        }
+    }
     if (g.hselOn)
     {
         std::ofstream hs(out + "_hsel.csv");
@@ -4085,7 +4184,7 @@ main(int argc, char* argv[])
               "psfch_delay_us,activation_us,min_gap_proc,takeover_late,takeover_late_no_slot,"
               "fallback_late,fallback_late_no_slot,cancel_late,helper_fb_late,psfch_err_mode,psfch_miss_prob,"
               "psfch_n2a_prob,psfch_fb_leader,psfch_lost_leader,psfch_n2a_leader,psfch_fb_members,"
-              "psfch_lost_members,psfch_n2a_members,psfch_tbler_leader_mean,psfch_tx_dbm,blind_psfch_gap\n";
+              "psfch_lost_members,psfch_n2a_members,psfch_tbler_leader_mean,psfch_tx_dbm,blind_psfch_gap,blind_min_gap\n";
         rc << idCols << ',' << numBg << ','
            << (tr.meta.count("bg_in_area_mean") ? tr.meta["bg_in_area_mean"] : "0") << ',' << mu
            << ',' << channelBwMHz << ',' << subchPrbs << ',' << totalSubch << ',' << mcs << ','
@@ -4360,7 +4459,7 @@ main(int argc, char* argv[])
                       o << ',' << pw.Get();
                       return o.str();
                   }()
-               << ',' << blindPsfchGap << '\n';
+               << ',' << blindPsfchGap << ',' << blindMinGap << '\n';
         }
     }
 

@@ -4,11 +4,15 @@
 # aperiodic traffic on dynamic grants (periodic traffic keeps SB-SPS). Every Kuo arm (R1, R1_bsc, R2, R3, R4,
 # R4_bsc, R4.1, R4.2, R5, R6), highway + roundabout (W and E exit, curve window), periodic1tb + aperiodic1tb,
 # 0 / 15 / 30 / 45 / 60 cars at the moderate per-car load, 10 seeds (3000 runs). --map: the five map-selection
-# arms instead (R4, R4.1, R4.2, R5, R6 with --helperSelect=map, 1500 runs). --psfch: the sl-PSFCH-Period
+# arms instead (R4, R4.1, R4.2, R5, R6 with --helperSelect=map, 1500 runs). Genie oracle, two stages:
+# --genie-probe: R3_probe + R6_probe (--linkProbeMs=10, 600 runs, out/v3_genie_probe), then the per-window helper
+# schedules (scripts/genie_schedule.py on R3_probe); --genie, after it: the seven genie replay arms
+# (--helperSelect=schedule, 2100 runs, out/v3_genie). --psfch: the sl-PSFCH-Period
 # sensitivity on the same configuration (R2, R3, R4.2, R6 at period 2 and 4, R1 without PSFCH; 0 and 60 cars,
 # 1080 runs; period 1 = out/v3). --fb: "R4 + C + fallback" (R4_bsc_fb: the blind helper with soft combining and
 # the leader fallback), same cells and seeds as v3 (300 runs; reference R4_bsc in out/v3). --fbs: "R4 + C + fallback,
-# spaced" (R4_bsc_fbs: the same with --blindPsfchGap=true), 300 runs in out/v3_fbs. Run it after v3 (or split the cores with --jobs): both use the same CPUs.
+# spaced" (R4_bsc_fbs: the same with --blindPsfchGap=true), 300 runs in out/v3_fbs. --gap: R4_bsc_s (spaced, no fallback) and R4_bsc_fb2
+# (fallback, --blindMinGap=2), 600 runs in out/v3_gap. Run it after v3 (or split the cores with --jobs): both use the same CPUs.
 # Needs the NR patch of this commit: run with --setup once after pulling (applies patches/nr/local.patch).
 #   1. (optional) update the checkout:   --pull BRANCH
 #   2. (optional) setup.sh --force; build the simulator (always, ninja is a no-op when up to date)
@@ -16,7 +20,7 @@
 #   4. smoke: short runs at 15 cars, seed 1 (profile v3_smoke: 60, v3_map_smoke: 30, psfch_smoke: 54) + checks,
 #      including "SCI 1-A on every PSSCH" and "leader on dynamic grants" for aperiodic; aborts on any failure
 #   5. study.py run in the background (nohup, resumable: re-run this script to continue)
-# Usage: launch_v3.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--map | --psfch | --fb | --fbs]
+# Usage: launch_v3.sh [--pull BRANCH] [--setup] [--jobs N] [--seeds 1-10] [--out DIR] [--only REGEX] [--map | --genie-probe | --genie | --psfch | --fb | --fbs | --gap]
 #                     [--no-smoke]
 #          --out DIR     output folder (default out/v3, out/v3_map with --map, out/psfch with --psfch),
 #                        log out/<basename DIR>_run.log;
@@ -29,7 +33,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
 NCPU=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; MAP=0; PSFCH=0; FB=0; FBS=0; OUT=""; ONLY=""
+JOBS=$NCPU; SEEDS=1-10; PULL=""; SETUP=0; STOP=0; SMOKE=1; MAP=0; GPROBE=0; GENIE=0; PSFCH=0; FB=0; FBS=0; GAP=0; OUT=""; ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pull) PULL="$2"; shift 2;;
@@ -39,16 +43,19 @@ while [ $# -gt 0 ]; do
     --out) OUT="$2"; shift 2;;
     --only) ONLY="$2"; shift 2;;
     --map) MAP=1; shift;;
+    --genie-probe) GPROBE=1; shift;;
+    --genie) GENIE=1; shift;;
     --fb) FB=1; shift;;
     --fbs) FBS=1; shift;;
+    --gap) GAP=1; shift;;
     --psfch) PSFCH=1; shift;;
     --no-smoke) SMOKE=0; shift;;
     --stop) STOP=1; shift;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
-[ $((MAP + PSFCH + FB + FBS)) -gt 1 ] && { echo "--map, --psfch, --fb and --fbs exclude each other"; exit 2; }
-PROFILE=v3; [ "$MAP" = 1 ] && PROFILE=v3_map; [ "$PSFCH" = 1 ] && PROFILE=psfch; [ "$FB" = 1 ] && PROFILE=v3_fb; [ "$FBS" = 1 ] && PROFILE=v3_fbs
+[ $((MAP + GPROBE + GENIE + PSFCH + FB + FBS + GAP)) -gt 1 ] && { echo "--map, --genie-probe, --genie, --psfch, --fb, --fbs and --gap exclude each other"; exit 2; }
+PROFILE=v3; [ "$MAP" = 1 ] && PROFILE=v3_map; [ "$GPROBE" = 1 ] && PROFILE=v3_genie_probe; [ "$GENIE" = 1 ] && PROFILE=v3_genie; [ "$PSFCH" = 1 ] && PROFILE=psfch; [ "$FB" = 1 ] && PROFILE=v3_fb; [ "$FBS" = 1 ] && PROFILE=v3_fbs; [ "$GAP" = 1 ] && PROFILE=v3_gap
 [ -z "$OUT" ] && OUT=out/${PROFILE}
 case "$OUT" in /*) OUTABS="$OUT";; *) OUTABS="$HERE/$OUT";; esac
 OUTABS="${OUTABS%/}"
@@ -89,6 +96,19 @@ print(*sorted({r['trace'] for r in study.plan('$PROFILE', '$SEEDS') if not os.pa
 if [ -n "$MISSING" ]; then
   echo "missing traces (generate them with launch_density.sh / launch_full.sh first):"; echo "$MISSING"; exit 8
 fi
+if [ "$GENIE" = 1 ]; then
+  # the replay needs the schedules of the full probe stage (launch_v3.sh --genie-probe)
+  NOSCHED=$(python3 scripts/study.py list --profile v3_genie --seeds "$SEEDS" | awk '{print $2}' | sort -u | \
+    while read -r t; do [ -f "out/v3_genie_probe/R3_probe/${t}_genie.csv" ] || echo "$t"; done | head -5)
+  [ -n "$NOSCHED" ] && { echo "missing genie schedules (run launch_v3.sh --genie-probe first), e.g.:"; echo "$NOSCHED"; exit 8; }
+fi
+if [ "$SMOKE" = 1 ] && [ "$GENIE" = 1 ]; then
+  # the replay smoke needs the smoke probe's schedules
+  python3 scripts/study.py run --profile v3_genie_probe_smoke --jobs "$JOBS" --out out/v3_genie_probe_smoke \
+    > out/v3_genie_probe_smoke_run.log 2>&1 && \
+    python3 scripts/genie_schedule.py out/v3_genie_probe_smoke/R3_probe >> out/v3_genie_probe_smoke_run.log 2>&1 || \
+    { echo "genie probe smoke FAILED: see $HERE/out/v3_genie_probe_smoke_run.log"; exit 6; }
+fi
 if [ "$SMOKE" = 1 ]; then
   python3 scripts/study.py run --profile ${PROFILE}_smoke --jobs "$JOBS" --out out/${PROFILE}_smoke > out/${PROFILE}_smoke_run.log 2>&1 && \
     python3 scripts/study.py check --profile ${PROFILE}_smoke --out out/${PROFILE}_smoke > out/${PROFILE}_smoke_check.log 2>&1
@@ -101,7 +121,8 @@ mkdir -p "$OUTABS"
 git -C "$REPO" rev-parse HEAD > "$OUTABS/COMMIT"
 echo "starting profile $PROFILE (seeds $SEEDS, $JOBS jobs) -> $OUTABS (commit $(cut -c1-12 "$OUTABS/COMMIT"))"
 ONLYQ=""; [ -n "$ONLY" ] && ONLYQ="--only $(printf '%q' "$ONLY")"
-nohup bash -c "python3 scripts/study.py run --profile $PROFILE --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ" \
+POST=""; [ "$GPROBE" = 1 ] && POST=" && python3 scripts/genie_schedule.py $OUTABS/R3_probe"
+nohup bash -c "python3 scripts/study.py run --profile $PROFILE --seeds $SEEDS --jobs $JOBS --out $OUTABS $ONLYQ$POST" \
   >> "$LOG" 2>&1 &
 echo "running in background (pid $!). Progress: scripts/monitor_study.sh $PROFILE --log $LOG --watch 300"
 echo "planned runs: $(python3 scripts/study.py list --profile "$PROFILE" --seeds "$SEEDS" ${ONLYARG[@]+"${ONLYARG[@]}"} | wc -l)"

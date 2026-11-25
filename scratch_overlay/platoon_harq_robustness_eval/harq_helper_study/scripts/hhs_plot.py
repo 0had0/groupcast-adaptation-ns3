@@ -8,8 +8,7 @@ import pandas as pd
 STYLE = {   # arm: label, colour, marker, line style, line width
     'R3':         dict(label='R3 (Opt. 2 HARQ)',  color='#4d4d4d', marker='s', ls='--',            lw=1.6),
     'R4_bsc':     dict(label='R4+C',              color='#1f78b4', marker='o', ls=':',             lw=1.8),
-    'R4_bsc_fb':  dict(label='R4+C+fb',           color='#ff7f00', marker='^', ls='-.',            lw=1.8),
-    'R4_bsc_fbs': dict(label='R4+C+fb+sp',        color='#6a3d9a', marker='v', ls=(0, (5, 1, 1, 1)), lw=1.6),
+    'R4_bsc_fbs': dict(label='R4+C+fb',           color='#ff7f00', marker='^', ls='-.',            lw=1.8),
     'R6':         dict(label='R6 (coop. HARQ)',   color='#e31a1c', marker='D', ls='-',             lw=2.4),
 }
 CLASS_STYLE = {   # resource class: label, colour, hatch
@@ -56,6 +55,11 @@ def _legend(fig, ax, ncol=6):
     fig.tight_layout(rect=(0, 0.05, 1, 1))
 
 
+def _xl(xlabel, s):
+    """x label: a string, or a dict scenario -> label (units that differ by scenario)."""
+    return xlabel.get(s, '') if isinstance(xlabel, dict) else xlabel
+
+
 def _xpos(vals, xcat):
     vals = sorted(set(vals))
     return (lambda v: vals.index(v)) if xcat else (lambda v: v), vals
@@ -92,7 +96,7 @@ def plot_x(summ, x, ys, arms, xlabel, title, sc_col='sc', xcat=False, xticklabel
             if j == 0:
                 a.set_ylabel(METRIC_LABEL.get(y, y) + (' (%)' if pct and y.startswith('prr') else ''))
             if i == len(ys) - 1:
-                a.set_xlabel(xlabel)
+                a.set_xlabel(_xl(xlabel, s))
     fig.suptitle(title, y=1.0)
     _legend(fig, ax)
     return fig
@@ -128,9 +132,9 @@ def plot_resources(summ, x, arms, xlabel, title, sc_col='sc', xcat=False, xtickl
     classes = [c for c in classes if f'ss_{c}_kB' in d and d[f'ss_{c}_kB'].fillna(0).abs().sum() > 0]
     cl = cells(d, sc_col)
     fig, ax = _grid(2, cl, h=2.6)
-    xv = sorted(d[x].unique())
     bw = 0.8 / len(arms)
     for j, (s, t) in enumerate(cl):
+        xv = sorted(d[(d[sc_col] == s) & (d.tr == t)][x].unique())     # per panel: x may differ by scenario
         a = ax[0, j]
         for arm in arms:
             g = d[(d.arm == arm) & (d[sc_col] == s) & (d.tr == t)].sort_values(x)
@@ -150,7 +154,7 @@ def plot_resources(summ, x, arms, xlabel, title, sc_col='sc', xcat=False, xtickl
                 bottom += v
         b.set_xticks(range(len(xv)))
         b.set_xticklabels(xticklabels or [f'{v:g}' for v in xv])
-        b.set_xlabel(xlabel)
+        b.set_xlabel(_xl(xlabel, s))
         if xcat:
             a.set_xticks(range(len(xv)))
             a.set_xticklabels(xticklabels or [f'{v:g}' for v in xv])

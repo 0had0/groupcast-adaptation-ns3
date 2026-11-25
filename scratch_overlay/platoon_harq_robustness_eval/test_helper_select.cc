@@ -11,6 +11,8 @@
 #include "ns3/node-container.h"
 
 #include <cassert>
+#include <cstdio>
+#include <fstream>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -798,6 +800,41 @@ TestKuoObjective()
     std::cout << "OK\n";
 }
 
+// ---------------------------------------------------------------------------
+// Test S1: schedule policy (genie oracle replay): window lookup and fallback
+// ---------------------------------------------------------------------------
+static void
+TestSchedulePolicy()
+{
+    std::cout << "[Test S1] Schedule policy (genie replay) ... ";
+    const std::string path = "test_helper_schedule.csv";
+    {
+        std::ofstream f(path);
+        f << "t0,window_s,worst,helper,bottleneck_db\n"
+          << "3.000,1.000,8,6,110.2\n"
+          << "4.000,1.000,7,2,108.0\n"
+          << "6.000,1.000,8,5,111.0\n"; // no window at [5, 6)
+    }
+    NodeContainer nodes = SetupPlatoonNodes(30.0);
+    HelperSelector sel;
+    HelperSelector::Config cfg;
+    cfg.policy = "schedule";
+    cfg.fallback = 4;
+    cfg.schedulePath = path;
+    sel.Init(cfg, nodes, 8, nullptr);
+    TEST_ASSERT(sel.Choose(3.0, 3.0005, 0, 5) == 6, "first window, at its start");
+    TEST_ASSERT(sel.Choose(3.9, 3.9995, 0, 5) == 6, "first window, near its end");
+    TEST_ASSERT(sel.Choose(3.999, 4.0, 0, 5) == 2, "window by the new transmission, not the decision");
+    TEST_ASSERT(sel.Choose(5.5, 5.5, 0, 5) == 4, "gap between windows: fallback");
+    TEST_ASSERT(sel.Choose(1.0, 1.0, 0, 5) == 4, "before every window: fallback");
+    TEST_ASSERT(sel.Choose(6.5, 6.5, 0, 5) == 5, "last window");
+    TEST_ASSERT(sel.Choose(7.0, 7.0, 0, 5) == 4, "after every window: fallback");
+    TEST_ASSERT(sel.Rows().size() == 7 && sel.Rows().back().applied == 4, "rows logged");
+    Simulator::Destroy();
+    std::remove(path.c_str());
+    std::cout << "OK\n";
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -829,6 +866,7 @@ main(int argc, char* argv[])
     TestScenarioAwarePathloss();
     TestHarqCandidateRules();
     TestKuoObjective();
+    TestSchedulePolicy();
 
     std::cout << "========================================\n";
     std::cout << "Results: " << g_passCount << " passed, " << g_failCount << " failed.\n";

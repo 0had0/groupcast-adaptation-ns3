@@ -12,6 +12,9 @@
 //   map  building map + positions: a building on the segment -> NLOS, another vehicle's box
 //        -> NLOSv, else LOS with probability P_LOS(d) (the simulator's own condition model)
 //   static  always the fallback member (tests the selector path)
+//   schedule  genie oracle replay: the helper of the TB's new-transmission window, read from a
+//        file made offline (scripts/genie_schedule.py) from a probe run's link losses; outside
+//        every window the fallback member
 // Inputs are what a leader can know: member positions from CAM messages sampled every
 // camPeriod, usable decisionDelay after they were sampled (processing), and the map. No
 // random draw, no channel-model query: the selection cannot change any resource allocation.
@@ -79,7 +82,7 @@ class HelperSelector
   public:
     struct Config
     {
-        std::string policy{"static"}; //!< static | kuo | map | harq | harqKuo | harqMap
+        std::string policy{"static"}; //!< static | kuo | map | harq | harqKuo | harqMap | schedule
         double camPeriodS{0.1};
         double decisionDelayS{0.0};
         uint32_t fallback{4};          //!< member used when no candidate is better / shadow
@@ -114,6 +117,7 @@ class HelperSelector
         double pResource{1.0};         //!< extra factor on the relay link (not in Kuo; 1 = eq. 12)
         std::string scenario{"urban"}; //!< urban | highway
         uint64_t prngSeed{1234567};    //!< seed for position error PRNG (deterministic)
+        std::string schedulePath;      //!< schedule: CSV with columns t0, window_s, helper
     };
 
     void Init(const Config& cfg,
@@ -163,6 +167,14 @@ class HelperSelector
     std::deque<Cam> m_cams;
     std::deque<FeedbackRecord> m_feedback;
     std::vector<HelperSelectRow> m_rows;
+    struct ScheduleWindow
+    {
+        double t0;
+        double t1;
+        uint32_t helper;
+    };
+    std::vector<ScheduleWindow> m_schedule; //!< sorted by t0
+    void LoadSchedule(const std::string& path);
     std::mt19937_64 m_posRng;
 };
 

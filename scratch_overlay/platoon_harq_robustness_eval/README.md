@@ -1599,6 +1599,61 @@ columns = older binary): R6 before the R6 fix; H4–H6 before the statistics fix
 without the position error; H2 on the highway before the P(LOS) fix. Nothing is deleted; each
 application moves to a new `pre_fix_<date-time>` folder.
 
+## Genie (oracle) helper: offline, per 1 s window (2026-11-25)
+
+An upper bound on helper selection, not an online method: the helper of every 1 s window is
+chosen in hindsight from the whole window's channel. `kuo` and `map` stay the online methods.
+
+**Criterion.** Interference and collisions left out, the quality of a link is a property of the
+channel, not of which member relays. Per window:
+
+- worst receiver w = the member with the highest mean loss from the leader (lowest SNR);
+- helper h = argmin over the members h ≠ w of max(loss(leader → h), loss(h → w)): the best
+  two-hop path leader → h → w, judged by its weaker hop (bottleneck). Ties: lower
+  leader → h loss, then lower index.
+
+**Three steps.**
+
+1. Probe run, `--linkProbeMs=10`: every 10 ms, the large-scale loss of every platoon link
+   (leader + members, one row per pair) as the channel computes it for a reception
+   (`ThreeGppPropagationLossModel::CalcRxPower`: path loss of the link's LOS / NLOSv / NLOS
+   condition + shadowing + NLOSv blockage; no fast fading, no interference). Window means in
+   `<out>_links.csv` (`--linkProbeWindowS`, default 1 s, absolute time): `t0, window_s, a, b,
+   n, loss_db, loss_sd_db, dist_m, p_los, p_nlosv, p_nlos`. The probe's queries consume
+   channel draws: a probe run is a measurement run, not a reference run of its arm. Arm
+   `R3_probe` (no helper, so the probe does not depend on a helper choice) is the source;
+   `R6_probe` is the carry-over check.
+2. `scripts/genie_schedule.py <probe folder>`: `<tag>_genie.csv` per run: `t0, window_s,
+   worst, helper, bottleneck_db, direct_db, gain_db, runner_up, margin_db`. Windows where a link
+   has fewer than half the window's samples are dropped.
+3. Replay, `--helperSelect=schedule --helperSchedule=<tag>_genie.csv`: every TB gets the
+   helper of the window that holds its new transmission (fallback `--helper` outside every
+   window). No model, no CAM.
+
+**Carry-over.** The channel's random draws come from shared streams, so the replay run does not
+see the probe's sample path. The deterministic part (distance, buildings, vehicle boxes) is the
+same, and the window mean averages ~25 independent draws (the condition is redrawn every
+10 ms, the shadowing restarts at every condition change). `genie_schedule.py A --compare B`
+measures it: per window, same worst receiver / helper, and the regret of A's helper on B's
+channel. Smoke (15 cars, seed 1, R3_probe vs R6_probe): highway same helper in 9 / 9 windows;
+roundabout 16 / 27, regret mean 0.23 dB, P95 0.84 dB, max 1.9 dB (the other choices are
+near-ties, runner-up margins 0.1–1 dB).
+
+**Smoke replay** (R6, periodic, 15 cars, seed 1): the applied helper equals the schedule on
+every TB. Highway: member 3 in every window, the map choice, identical PRR. Roundabout: members
+2 / 3 / 5 / 7 (map: 2), group PRR 0.989 vs 0.996 with map, worst member 0.965 both. One short
+seed, no conclusion; but the criterion serves the worst receiver's path only, not the group.
+
+Checks: `test_helper_select` S1 (window lookup by the new transmission, fallback in gaps and
+outside), `study.py check` on the probe and replay profiles, a `map` run byte-identical with
+the probe and schedule code built in (every file except `wall_s`, `sel_cpu_us_mean`).
+
+Profiles (`harq_helper_study/scripts/study.py`): `v3_genie_probe` (R3_probe, R6_probe, 600
+runs) and `v3_genie` (R4, R4.1, R4.2, R5, R6, R4_bsc, R4_bsc_fbs `_genie`, 2100 runs; schedules
+from `out/v3_genie_probe/R3_probe`, or `--genie-schedules DIR`), both with `_smoke`. Replay
+runs pair by seed with `out/remote_v3`, `out/remote_v3_fbs`, `out/remote_v3_map`. Launcher:
+`scripts/launch_v3.sh --genie-probe` (probe, then the schedules), then `--genie`.
+
 ## Running on another machine (e.g. a Linux server)
 
 ```bash

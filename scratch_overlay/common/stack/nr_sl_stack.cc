@@ -144,6 +144,7 @@ BuildSlStack(const SlStackParams& p,
             if (auto pl = DynamicCast<ThreeGppPropagationLossModel>(bwp->m_propagation))
             {
                 ctx.channelConditionModel = pl->GetChannelConditionModel();
+                ctx.propagationLoss = pl;
             }
         }
     }

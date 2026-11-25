@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <functional>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 
 namespace ns3
 {
@@ -54,6 +56,11 @@ HelperSelector::Init(const Config& cfg,
     m_numMembers = numMembers;
     m_geom = geom;
     m_posRng.seed(cfg.prngSeed);
+    if (m_cfg.policy == "schedule")
+    {
+        LoadSchedule(cfg.schedulePath);
+        return; // no CAMs needed
+    }
     if (m_cfg.policy != "static")
     {
         Simulator::Schedule(Seconds(0), &HelperSelector::Snapshot, this);
@@ -304,6 +311,57 @@ HelperSelector::PSuccess(const Cam& c, uint32_t ia, uint32_t ib, double plMax, u
     return ClampProbability(pLos * sLos + (1.0 - pLos) * sNlosv);
 }
 
+void
+HelperSelector::LoadSchedule(const std::string& path)
+{
+    std::ifstream f(path);
+    NS_ABORT_MSG_IF(!f, "HelperSelector: cannot read the helper schedule '" << path << "'");
+    std::string line;
+    std::getline(f, line);
+    std::vector<std::string> cols;
+    {
+        std::stringstream ss(line);
+        for (std::string c; std::getline(ss, c, ',');)
+        {
+            cols.push_back(c);
+        }
+    }
+    auto col = [&](const std::string& name) {
+        auto it = std::find(cols.begin(), cols.end(), name);
+        NS_ABORT_MSG_IF(it == cols.end(), "helper schedule '" << path << "': no column " << name);
+        return static_cast<size_t>(it - cols.begin());
+    };
+    const size_t iT0 = col("t0");
+    const size_t iW = col("window_s");
+    const size_t iH = col("helper");
+    while (std::getline(f, line))
+    {
+        if (line.empty())
+        {
+            continue;
+        }
+        std::vector<std::string> v;
+        std::stringstream ss(line);
+        for (std::string c; std::getline(ss, c, ',');)
+        {
+            v.push_back(c);
+        }
+        NS_ABORT_MSG_IF(v.size() <= std::max({iT0, iW, iH}), "helper schedule: short line " << line);
+        const double t0 = std::stod(v[iT0]);
+        const uint32_t h = static_cast<uint32_t>(std::stoul(v[iH]));
+        NS_ABORT_MSG_IF(h < 1 || h > m_numMembers, "helper schedule: helper " << h << " not a member");
+        m_schedule.push_back({t0, t0 + std::stod(v[iW]), h});
+    }
+    std::sort(m_schedule.begin(), m_schedule.end(),
+              [](const ScheduleWindow& a, const ScheduleWindow& b) { return a.t0 < b.t0; });
+    for (size_t k = 1; k < m_schedule.size(); ++k)
+    {
+        NS_ABORT_MSG_IF(m_schedule[k].t0 < m_schedule[k - 1].t1 - 1e-9,
+                        "helper schedule: overlapping windows at t0=" << m_schedule[k].t0);
+    }
+    NS_ABORT_MSG_IF(m_schedule.empty(), "helper schedule '" << path << "' is empty");
+}
+
 uint32_t
 HelperSelector::Choose(double now, double tNdi, uint8_t harqId, uint16_t nSubch)
 {
@@ -318,6 +376,19 @@ HelperSelector::Choose(double now, double tNdi, uint8_t harqId, uint16_t nSubch)
     row.nSubch = nSubch;
     row.chosen = m_cfg.fallback;
     row.score.assign(m_numMembers, -1.0f);
+    if (m_cfg.policy == "schedule")
+    {
+        // the window holding the TB's new transmission (all its copies follow within the PDB)
+        auto it = std::upper_bound(m_schedule.begin(), m_schedule.end(), tNdi,
+                                   [](double t, const ScheduleWindow& w) { return t < w.t0; });
+        if (it != m_schedule.begin() && tNdi < std::prev(it)->t1)
+        {
+            row.chosen = std::prev(it)->helper;
+        }
+        row.applied = m_cfg.shadow ? m_cfg.fallback : row.chosen;
+        m_rows.push_back(row);
+        return row.applied;
+    }
     if (m_cfg.policy == "static" || m_cams.empty())
     {
         row.applied = m_cfg.fallback;
