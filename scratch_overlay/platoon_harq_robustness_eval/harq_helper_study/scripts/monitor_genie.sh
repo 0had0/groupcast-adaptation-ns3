@@ -12,6 +12,7 @@ STAGES = [  # name, total, folders holding <run>_run.csv[.gz], stage log
     ('timing', 810, ['out/timing_genie/*'], 'out/genie_timing.log'),
     ('period', 240, ['out/psfch_genie/*'], 'out/genie_period.log'),
     ('psfch', 1320, ['out/psfch_err_genie/*'], 'out/genie_psfch*.log'),
+    ('gap', 600, ['out/v3_genie/R4_bsc_s_genie', 'out/v3_genie/R4_bsc_fb2_genie'], 'out/genie_gap.log'),
 ]
 now = time.time()
 print(time.strftime('%F %T'))

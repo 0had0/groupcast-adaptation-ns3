@@ -1,23 +1,24 @@
 #!/bin/bash
 # Genie (oracle) helper campaign: the SCHEMES_COMPARISON data with the per-window best helper (schedule replay,
 # scripts/genie.py) in place of Kuo's selection. R3 has no helper: its existing runs stay the reference.
-# Five stages, one after the other, in one background job (each is resumable: re-run this script to continue):
+# Six stages, one after the other, in one background job (each is resumable: re-run this script to continue):
 #   load    study.py --profile v3_genie, R4_bsc / R4_bsc_fbs / R6 _genie       900 runs   out/v3_genie
 #   hmiss   helper_rx_campaign/campaign.py --set genie                         900 runs   out/helperrx_genie
 #   timing  timing_sweep.py --genie, stage A then stage B (seeds 1-10)         810 runs   out/timing_genie
 #   period  study.py --profile psfch_genie (R6_genie at PSFCH period 2, 4)     240 runs   out/psfch_genie
 #   psfch   psfch_err_sweep.py --genie (miss / NACK->ACK / power)             1320 runs   out/psfch_err_genie
+#   gap     study.py --profile v3_genie, R4_bsc_s / R4_bsc_fb2 _genie (v3_gap)   600 runs   out/v3_genie
 # Needs: the 150 schedules in out/genie_probe_all/R3_probe and the preflight references in out/genie_preflight_ref
 # (both copied from the laptop), the campaign-v3 commands in out/v3 and out/v3_fb (templates of the sweeps).
 # Before the stages: build, input checks, and a preflight: R6_genie, 3 routes, 0 cars, seed 1, which must reproduce
 # the laptop's runs bit for bit (out/genie_preflight_ref) or the launch stops.
-# Usage: launch_genie.sh [--jobs N] [--stages "load hmiss timing period psfch"] [--no-build] [--no-preflight]
+# Usage: launch_genie.sh [--jobs N] [--stages "load hmiss timing period psfch gap"] [--no-build] [--no-preflight]
 #        launch_genie.sh --stop
 # Progress: scripts/monitor_genie.sh [--watch 300]
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # harq_helper_study/ (this script: scripts/)
 REPO="$(cd "$HERE/../../.." && pwd)"
-JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu); STAGES="load hmiss timing period psfch"; BUILD=1; PREFLIGHT=1; STOP=0
+JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu); STAGES="load hmiss timing period psfch gap"; BUILD=1; PREFLIGHT=1; STOP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --jobs) JOBS="$2"; shift 2;;

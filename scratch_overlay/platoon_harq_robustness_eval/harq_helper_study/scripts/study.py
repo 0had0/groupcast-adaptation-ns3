@@ -13,7 +13,7 @@ Arms (all --maxNumTx=3, helper arms --helperSched=S1 --helperSelect=kuo):
   *_probe  R3, R6 with --linkProbeMs=10 (genie probe: window-mean large-scale loss of every platoon link,
            <tag>_links.csv); profiles v3_genie_probe / v3_genie_probe_smoke. A measurement run: the probe's channel
            queries consume channel draws, so it is not a reference run of its arm
-  *_genie  R4, R4.1, R4.2, R5, R6, R4_bsc, R4_bsc_fbs with --helperSelect=schedule: the genie oracle helper per
+  *_genie  R4, R4.1, R4.2, R5, R6, R4_bsc, R4_bsc_fbs, R4_bsc_s, R4_bsc_fb2 with --helperSelect=schedule: the genie oracle helper per
            1 s window (scripts/genie_schedule.py on the R3_probe run of the same cell and seed: best leader ->
            helper -> worst-receiver path by its weaker hop); profiles v3_genie / v3_genie_smoke
   *_p<N>   --psfchPeriod=N (sl-PSFCH-Period, slots; the other profiles use 1): R2, R3, R4.2, R6 at 2 and 4, R1 at 0
@@ -79,7 +79,8 @@ for _a in MAP_ARMS:
 PROBE_ARMS = ['R3_probe', 'R6_probe']
 for _a in PROBE_ARMS:
     ARMS[_a] = ARMS[_a[:-len('_probe')]] + ['--linkProbeMs=10']
-GENIE_ARMS = [a + '_genie' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6', 'R4_bsc', 'R4_bsc_fbs')]
+GENIE_ARMS = [a + '_genie' for a in ('R4', 'R4.1', 'R4.2', 'R5', 'R6', 'R4_bsc', 'R4_bsc_fbs',
+                                         'R4_bsc_s', 'R4_bsc_fb2')]
 for _a in GENIE_ARMS:
     ARMS[_a] = list(ARMS[_a[:-len('_genie')]])     # the Kuo arm; plan() swaps the selector (genie.to_genie)
 # PSFCH period sensitivity with the genie helper (profile psfch_genie): R6_genie at sl-PSFCH-Period 2 and 4
@@ -166,8 +167,8 @@ def profile_spec(profile, seeds_arg=None):
         # v3_fbs: "R4 + C + fallback, spaced" (R4_bsc_fbs), same cells and seeds (300 runs).
         # v3_gap: R4_bsc_s (spacing, no fallback) and R4_bsc_fb2 (fallback, 2-slot gap), same cells (600 runs).
         # v3_genie_probe: R3_probe (genie schedule source) and R6_probe (carry-over check), same cells (600 runs).
-        # v3_genie: the seven genie replay arms (GENIE_ARMS), same cells and seeds (2100 runs); they need the
-        # schedules of v3_genie_probe (scripts/genie_schedule.py) and pair by seed with out/v3, out/v3_fbs, out/v3_map.
+        # v3_genie: the nine genie replay arms (GENIE_ARMS), same cells and seeds (2700 runs); they need the schedules
+        # of v3_genie_probe (scripts/genie_schedule.py) and pair by seed with out/v3, out/v3_fbs, out/v3_gap, out/v3_map.
         # *_smoke: launcher check, every arm x scenario x traffic at 15 cars, seed 1, short runs.
         lv = run_retx.get_bg_levels()
         flows = lv['moderate'][1]

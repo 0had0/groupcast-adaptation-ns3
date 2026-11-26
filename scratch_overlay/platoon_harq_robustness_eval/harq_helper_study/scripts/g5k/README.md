@@ -1,7 +1,8 @@
 # Genie campaign on Grid'5000 (Rennes, cluster paradoxe)
 
 The SCHEMES_COMPARISON data with the genie helper (per-window best-helper schedule replay, `scripts/genie.py`):
-5 stages, 4170 runs, about 1700 core-hours. Same stages as `launch_genie.sh` on ease-rtx, run as OAR jobs.
+5 stages, 4170 runs, about 1700 core-hours. Same stages as `launch_genie.sh` on ease-rtx, run as OAR jobs
+(its sixth stage, `gap`: 600 runs, about 260 core-hours, is not in the five campaign jobs: `submit.sh stages gap`).
 
 | step | where | what |
 |---|---|---|
